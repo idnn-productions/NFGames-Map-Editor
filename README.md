@@ -1,0 +1,586 @@
+# NFGames Map Editor
+
+A map editor that runs in your browser and edits a game map's plan, seen from above. A plan is one
+JSON file per map (`layout.json`), plus an optional planting plan (`plants.json`). In the editor you
+can move, turn, size, add and remove pieces, and move where the player arrives, people, things to
+use and walkers' rounds. You can also write the text on doors and things, and place plants. Save
+checks the plan against a JSON Schema, writes it atomically and keeps the old file as a backup. A fit
+check warns about pieces standing in each other, things outside the map, blocked doors and similar.
+
+The editor's core works for any game. Anything specific to one game lives in a **project config file**
+(`map-editor.config.mjs`): where its kinds of piece and their sizes come from, its own compile and
+checks, extra layers to draw, and **Apply** buttons that run the project's own build steps.
+
+It runs on your machine only: the server listens on `127.0.0.1` and refuses everything else (see
+[Security model](#security-model)).
+
+![The editor on the sample map](docs/editor.png)
+
+## Contents
+
+- [Requirements](#requirements)
+- [Install](#install)
+- [Quick start with the example](#quick-start-with-the-example)
+- [Running it against your own project](#running-it-against-your-own-project)
+- [The config file](#the-config-file)
+- [The map file format](#the-map-file-format)
+- [Using the editor](#using-the-editor)
+- [Save and backups](#save-and-backups)
+- [The fit check](#the-fit-check)
+- [Apply actions](#apply-actions)
+- [Security model](#security-model)
+- [Troubleshooting](#troubleshooting)
+- [Tests](#tests)
+- [Licence](#licence)
+
+## Requirements
+
+- **Node.js 20 or later.** The editor has no runtime dependencies.
+- **A desktop browser.** Chrome, Edge and Firefox all work; the page is plain HTML and a 2D canvas.
+- Windows, macOS and Linux are all supported. Only Node is needed, and no shell scripts are involved.
+
+## Install
+
+```sh
+git clone <this repository> NFGames-Map-Editor
+cd NFGames-Map-Editor
+npm install        # nothing to download: it only sets up the package
+```
+
+## Quick start with the example
+
+```sh
+npm start
+```
+
+Then open **http://127.0.0.1:8793/**. `npm start` serves `examples/sample/`, a small walled square.
+It has a tower, three houses, an open hall, a market stall, crates, two planters, a beacon, a person,
+a door, a walker's round, a well and three plants. The sample config uses each kind of option and
+hook once, including a **Report** Apply action and a status panel.
+
+If 8793 is already in use (another editor, say), pick another port:
+
+```sh
+npm start -- --port 8794
+```
+
+Everything the example writes goes into `examples/sample/maps/plaza/` and `examples/sample/out/`.
+`git checkout examples/sample` puts it back.
+
+## Running it against your own project
+
+A **project** is any folder that contains maps:
+
+```
+my-game/
+  map-editor.config.mjs     optional: what this project's maps need (see below)
+  kit.json                  optional: the kinds of piece and their footprints
+  maps/                     or data/maps/, or whatever `maps` in the config says
+    town/
+      layout.json           the plan (required)
+      plants.json           the planting plan (optional)
+    cave/
+      layout.json
+```
+
+Start the editor on it, from anywhere:
+
+```sh
+node <path to NFGames-Map-Editor>/bin/nfgames-map-editor.mjs --project my-game
+```
+
+You can also install it into the project and use the `nfgames-map-editor` command. The package is
+private (not on the npm registry), so install it from a folder or from git:
+
+```sh
+cd my-game
+npm install --save-dev ../NFGames-Map-Editor      # or a git URL
+npx nfgames-map-editor --project .
+```
+
+### Command line
+
+```
+nfgames-map-editor [map] [--project <dir>] [--config <file>] [--port <n>] [--dry-run]
+```
+
+| Option | Default | |
+|---|---|---|
+| `map` | the config's `defaultMap`, else the first map (by name) | the map the page opens first. The page can switch maps from a list (top right) when there are several |
+| `--project <dir>` | the current folder | the project whose maps to edit |
+| `--config <file>` | `<project>/map-editor.config.mjs`, when there is one | a config file kept somewhere else (relative paths in it still count from the project) |
+| `--port <n>` | the config's `port`, else `MAP_EDIT_PORT`, else 8793 | the port on 127.0.0.1. Use another port to run a second editor beside the first |
+| `--dry-run` | off | Apply actions' heavy steps only print what they would run |
+
+### With no config
+
+With no config file the editor still works:
+
+- maps are read from `<project>/maps/`, or `<project>/data/maps/` if only that exists;
+- plans are checked against the editor's built-in schema (`schemas/map.schema.json`), and
+  `plants.json` against `schemas/map-plants.schema.json`;
+- kinds of piece come from `<project>/kit.json` when there is one (see [Kinds](#kinds-and-kitjson)),
+  plus any `sizes` a plan lists itself. A kind with no known size is drawn as a 2 x 2 m mark;
+- the built-in fit check runs; there are no Apply buttons, extra layers or status panels.
+
+## The config file
+
+`map-editor.config.mjs` in the project root is an ES module. Its default export is either an object,
+or a function (which may be async) that receives `{ root, editorRoot }` and returns one. Use the
+function form when the config needs to import the game's own modules from the project
+(`examples/thoon-run.config.mjs` does this). Paths in the config are relative to the project root.
+
+A short example:
+
+```js
+// map-editor.config.mjs
+export default {
+  maps: 'data/maps',
+  defaultMap: 'town',
+  kit: 'art/kit.json',
+  schema: 'data/schemas/map.schema.json',
+  classes: { building: { tag: 'building', colour: '#e9dccb', legend: 'a building', note: 'Rebuild after moving it.' } },
+  plants: { kinds: { shrub: ['shrub', 1] }, labels: { shrub: 'shrub' } },
+  actions: {
+    build: { label: 'Build', steps: [{ label: 'compile the map', node: ['tools/compile-map.mjs', '{map}'] }] },
+  },
+};
+```
+
+`examples/sample/map-editor.config.mjs` is a complete working config.
+`examples/thoon-run.config.mjs` shows a large real setup: how Thoon Run's game-specific editor maps
+onto these options.
+
+### Options
+
+| Option | Default | What it does |
+|---|---|---|
+| `title` | `"map editor"` | the browser tab's title |
+| `maps` | `maps/`, else `data/maps/` | the folder holding one folder per map |
+| `defaultMap` | the first map | the map opened when none is named |
+| `port` | 8793 | the port (the command line's `--port` and `MAP_EDIT_PORT` win) |
+| `schema` | the built-in `schemas/map.schema.json` | the JSON Schema `layout.json` must pass. `$ref`s to other files are read from beside it |
+| `kit` | `"kit.json"` | a kit file listing the kinds of piece (ignored when `kinds` is given). `null` for none |
+| `kinds` | | hook: the kinds of piece, instead of a kit file (see [Hooks](#hooks)) |
+| `palette.groups` | | `[{ title, match }]`: palette headings, in order. `match` is a RegExp tested on the kind's name, or a function `(kind, info) => boolean`. A kind's own `group` wins over these |
+| `classes` | `piece`, `mark` | `{ <cls>: { tag, colour, legend, note } }`: how each class of kind (a kind's `cls`) is tagged and coloured in the palette, filled on the map, described in the legend, and noted when a piece is selected |
+| `presets` | | palette entries that add a piece of a series: `[{ id, label, group, kind, scale?, idPrefix, colour, note, when? }]`. The piece gets the next free id `<idPrefix>0`, `<idPrefix>1` ... and is drawn in `colour` with a dot. `when: { field, equals }` limits the preset to plans whose top-level `field` equals `equals` |
+| `reservedIds` | | a RegExp: piece ids kept for what the project's tools make. A plan that uses one does not save, unless the piece belongs to an active preset's series |
+| `display` | plan's metres | `{ planScale, kindScale, defaultKindScale, attach, wallThickness, snap, gameLabel }`, or a function `({ name }) => {...}` for per-map values. Use it when the game draws the plan larger: `planScale` scales positions about the map's centre, `kindScale` (by kind, else `defaultKindScale`) scales pieces, and `attach` (`{ pieceId: hostId }`) keeps a piece on its host at the host's scale. Footprints are then drawn at the game's size, and coordinates are shown in both frames, labelled `gameLabel`. `snap` is the snap step in metres (default 0.25). `wallThickness` is the ring wall's drawn thickness in metres |
+| `plants` | on, built-in schema | `false` turns the plants layer off. Otherwise an object: `schema` (for `plants.json`), `kinds` (`{ name: [builtAs, sizeFactor] }`: the kinds a hand-placed plant can be), `labels` (`{ name: text }`: when given, the palette lists these kinds in this order), `draw` (`{ builtAs: { r, fill, ring?, star? } }`: radius in metres, colour, a pot's rim colour, or the number of points of a star), `pointKindOf` (built kind to point kind, for rule-made plants), `excludeRadius` (0.6 m), `clearance` (0.6 m off a round), `tall` and `tallClearance` (1.0 m), `debris` and `follows` (rule-made kinds and rules drawn but not pickable), and the `ruleMade` hook |
+| `validate` | | hook: more errors that stop a save |
+| `compile` | | hook: the project's compile, run on every preview |
+| `compileLayers` | | `[{ id, label, on?, legend? }]`: names and legends for the layers the compile returns |
+| `builtInCheck` | `true` | `false` turns off the built-in fit check (use when `check` replaces it) |
+| `check` | | hook: the project's own warnings |
+| `status` | | hook: status panels ("is what the tools last built still the plan on screen?") |
+| `overlays` | | `{ <id>: { label, on?, lazy?, legend?, load } }`: read-only layers the project draws from its own files |
+| `beforeSave`, `afterSave` | | hooks around a save |
+| `actions` | | the Apply buttons (see [Apply actions](#apply-actions)) |
+| `help` | | `[[what, how], ...]`: the "Which edit needs what" table under Apply |
+| `hints` | | short texts the page shows: `afterSave: { plan, plants, both }` after a save that changed those files, `ring`, `person`, `thing`, `plant`, `round` in the matching Selected panels |
+
+### Hooks
+
+Every hook may be async. Its second argument, `ctx`, carries the project's paths and the editor's own
+helpers, so a config never needs to import the editor:
+
+```
+ctx = { root, editorRoot, mapsDir, mapDir(name), planFile(name), plantsFile(name), readPlan(name), readPlants(name),
+        readJson(file), rel(file), formatPlan(plan), formatPlants(plants), fileStamp(file), dryRun }
+```
+
+| Hook | Called with | Returns |
+|---|---|---|
+| `kinds({ name, plan }, ctx)` | when the page loads, and on every preview and save | `{ <kind>: kind }` (see [Kinds](#kinds-and-kitjson)) |
+| `validate({ plan, name }, ctx)` | after the schema passes, before every preview and save | `["error text", ...]`: errors that stop a save |
+| `compile({ plan, plants, name, kinds }, ctx)` | on every preview (each edit, about four times a second at most) | anything. The editor reads `overlays` (`{ <layerId>: { label?, shapes } }`), `seated` (`{ pieceId: y }`, shown as "seated at" for lifted pieces) and `log`. The whole result is passed to `check` as `built`. If it throws, the page shows "the compile failed" as an error |
+| `check({ plan, plants, built, name, kinds }, ctx)` | after `compile` | `[{ kind, text, sel, at }]` warnings (see [Problems](#problems)) |
+| `status({ plan, plants, built, name }, ctx)` | after `check` | `[{ title, state: 'fresh' \| 'stale' \| 'unknown', basis?, changes?: [{ id, what, sel }], action? }]` |
+| `beforeSave({ name, plan, plants }, ctx)` | after the checks pass, before writing | |
+| `afterSave({ name, plan, plants, changed }, ctx)` | after writing (with the plan as read back from disk) | |
+| `overlays.<id>.load({ name, plan }, ctx)` | when the page loads (lazy ones when first shown) and after every finished Apply action | `{ present, shapes?, note? }`. `note` is shown in the map's top-right corner |
+| `plants.ruleMade({ name, plan }, ctx)` | when the page loads and after every Apply action | `{ present, items: [{ kind, at, rule?, rotDeg?, scale?, source? }], file?, why? }`: plants made by the project's rules, in the plan's frame |
+| action hooks | see [Apply actions](#apply-actions) | |
+
+### Kinds and kit.json
+
+A **kind** is a kind of piece (`kit:house`, `hero:tower`, or a plain name), with its footprint:
+
+```json
+{
+  "kit:house": { "size": [4, 4, 3.5], "door": [0, 2.8], "cls": "building", "group": "Buildings" },
+  "kit:hall":  { "size": [10, 8, 5], "boxes": [[0, -3.7, 10, 0.6], [-4.7, 0, 0.6, 8], [4.7, 0, 0.6, 8]], "label": "open hall" },
+  "mark:beacon": { "cls": "mark" }
+}
+```
+
+| Field | | |
+|---|---|---|
+| `size` | `[w, d, h]` metres | the footprint's width (along its own x), depth (along its own z) and height. Without it the kind is "unknown", drawn as 2 x 2 m and treated as not solid |
+| `boxes` | `[[x, z, w, d], ...]` | where it is solid, in its own frame (front +Z). Default: the whole footprint. An open hall lists its walls, so you can place and walk things inside it |
+| `door` | `[x, z]` | the spot in the street just outside its door, in its own frame. Doors can hang on pieces of this kind, and the fit check keeps that spot clear |
+| `cls` | `"piece"` (`"mark"` when unknown) | its class: how the palette tags and colours it (config `classes`) |
+| `group` | | the palette heading it goes under |
+| `label` | | the palette's name for it (default: the part after the colon, with spaces for `_`) |
+| `hidden` | | not in the palette (pieces a compile lays out itself) |
+| `solid` | `true` | `false`: people and things may stand in it (a lantern, a palm) |
+| `across` | | the fit check allows it beyond the ring or bounds |
+| `mayOverlap` | `[kind, ...]` | kinds it may stand in (a ship in its hangar) |
+| `deck` | `size[2]` | the height a lifted piece stands at on top of it |
+
+Keys starting with `$` are ignored, so a kit file can carry a `$note`. A plan's own `sizes` add kinds,
+or override a kind's size.
+
+### Overlays: shapes a project draws
+
+`compile` results and `overlays` loaders return `shapes`, in the **plan's** metres (convert from your
+game's frame first). The page draws them under the pieces, except `grid` shapes and those marked
+`over: true`:
+
+| `type` | fields |
+|---|---|
+| `rect` | `at`, `w`, `d`, `rot` (degrees), `fill?`, `stroke?`, `lw?`, `dash?` |
+| `circle` | `at`, `r` (metres), `minPx?`, `fill?`, `stroke?`, `lw?`, `dash?` |
+| `line` | `pts: [[x, z], ...]`, `stroke`, `width` (metres) with `minPx?`, or `px`; `closed?`, `round?`, `dash?` |
+| `dot` | `at`, `px`, `fill` (a square of fixed size on screen) |
+| `label` | `at`, `text`, `colour?`, `size?` |
+| `grid` | `min: [x, z]`, `cell` (metres), `cols`, `rows`, `data` (base64 of one little-endian uint16 per cell, row by row), `none` (the value meaning no ground), `scale`, `offset` (height = value / scale - offset), `solidAbove` (0.3). Cells with no ground are drawn dark blue, raised cells paler |
+
+Colours are CSS colours. `dash: true` draws a 4-3 dash; an array gives your own dash pattern.
+
+### Problems
+
+Warnings from the fit check and from `check` are `{ kind, text, sel, at }`. `kind` is a short word
+shown in bold, `text` says what is wrong, and `at` is `[x, z]` (where clicking the warning pans to).
+`sel` lists what clicking it selects, as selection keys: `piece:<id>`, `spawn`, `person:<id>`,
+`thing:<id>`, `door:<id>`, `route:<round>:<point>`, `plant:<index>`, `exclude:<index>`.
+
+## The map file format
+
+### The frame
+
+Every number is in **metres**. **+X is east, +Z is south, Y is up.** Positions are `[x, z]`. A rotation
+`rot` is in **degrees about Y**: 0 faces +Z (south), 90 faces +X (east), -90 faces -X (west). A piece's
+front (its own +Z) turns to `(sin rot, cos rot)`. On screen north is up, so screen right is +X and screen
+down is +Z. Each file states its frame in `frame`, so nobody has to guess.
+
+### layout.json
+
+| Field | | |
+|---|---|---|
+| `id` | required | the map's folder name |
+| `name` | required | the name shown |
+| `frame` | required | `{ "units": "metres", "x": "east", "z": "south", "up": "y", "rot": "degrees" }` and an optional `note` |
+| `ring` or `bounds` | one is required | `ring: { centre: [x, z], radius, gateWidth?, pillarEvery? }`: a round map inside a ring wall, open for `gateWidth` metres at `gate`, with a pier every `pillarEvery` metres. `bounds: { min: [x, z], max: [x, z] }`: a rectangular map with no wall |
+| `spawn` | required | `{ at: [x, z], yaw }`: where the player arrives, facing `yaw` degrees |
+| `pieces` | required | `[{ id, kind, at, rot, y?, scale?, stretch?, seat?, note? }]` (see below) |
+| `games` | | which games use it (strings) |
+| `note` | | where the plan came from |
+| `gate` | | `[x, z]`: the way out, on the ring |
+| `kindScale` | | `{ "<kind>": factor }`: a size for every piece of a kind |
+| `sizes` | | `{ "<kind>": [w, d, h] }`: a footprint for a kind the kit does not list (or to override it) |
+| `marks` | | `[{ id, kind, at, rot?, y?, scale? }]`: places for things with no model, drawn by the game's code |
+| `people` | | `{ "<id>": [x, z] }` (or `{ at, facing }`): where named people stand |
+| `doors` | | `[{ id, piece?, at?, sign?, label?, room?, needs?, lockedText?, shut? }]`: a door hangs on a `piece` (and stands at its kind's `door` spot) or stands free `at` a point. `room` is where it leads; `needs` is what opens it (a string or a list); `lockedText` is what it says while locked; `shut` is what a door that never opens says |
+| `routes` | | walkers' rounds: `[[[x, z], ...], ...]`, each a closed loop of at least two points |
+| `things` | | `[{ id, label, at, radius, action?, card?: { title, body } }]`: things to walk up to and use or read, within `radius` metres |
+
+A **piece** has an `id` (lower case letters, digits, `_` and `-`, unique among pieces and marks), a
+`kind`, `at` and `rot`. `y` lifts it (onto a roof, say: the editor treats `y > 0.5` as lifted). `scale`
+sizes it (over `kindScale`). `stretch` lengthens it along its own x only. `seat` is for a project's
+compile (false: keep `y` as written).
+
+Other top-level sections are allowed and kept: a project can add what it needs. The file is always
+written the same way (keys in a fixed order, one piece per line), so moving one piece shows as one
+changed line in a diff.
+
+### plants.json
+
+| Field | | |
+|---|---|---|
+| `points` | | plants placed by hand: `[{ kind, at, rot?, scale?, district? }]`. `kind` is one of the config's `plants.kinds`. `rot` is in degrees; leave it out to let the project choose. `district` is a free note |
+| `exclude` | | places where the project's rules plant nothing: `[{ at, r, note? }]` (`r` in metres). Points are not affected |
+| `note` | | |
+
+Any other section (a project's planting rules, say) is kept as it is; the editor edits only `points` and
+`exclude`. The file is written as two-space JSON with keys in a fixed order.
+
+## Using the editor
+
+The page has three columns: the palette and layers on the left, the map in the middle, and the map's
+state and the selection on the right.
+
+### The map
+
+- **Top left**: the coordinates under the mouse, in the plan (and in the game, when `display` scales the
+  plan). Hovering a plant also tells you what it is.
+- **Top right**: notes from the project's layers (for example, when its generated files were made).
+- **Bottom left**: a scale bar and the grid's spacing (1, 5 or 10 m, depending on zoom).
+- The map's ground is drawn round (a ring map, with its wall, the gate's two posts and "GATE") or as a
+  rectangle (bounds). Each piece is a rectangle with a short tick at its front. Where only some of it is
+  solid (`boxes`), the solid parts are filled in. Lifted pieces are drawn see-through with a dashed edge.
+  People are blue dots, things to use are yellow diamonds, doors are orange squares, walkers' rounds are
+  dashed loops, and where the player arrives is a green arrow labelled "you arrive".
+
+### Mouse
+
+| Do | What happens |
+|---|---|
+| **Click** something | selects it |
+| **Drag** something | moves it (and everything selected with it). The one under the mouse lands on the snap grid; the others keep their places beside it |
+| **Drag empty ground** | pans (and clears the selection, unless Ctrl is held) |
+| **Right or middle button drag**, anywhere | pans |
+| **Wheel** | zooms about the mouse |
+| **Shift drag** | box select: adds everything inside the box to the selection |
+| **Shift click** or **Ctrl click** | adds one thing to the selection, or takes it out |
+| **Drag the turn handle** (the white circle in front of a single selected piece) | turns it in 15° steps; hold **Alt** to turn freely, by 1° |
+| **Click the map while a palette entry is picked** | places one there; the entry stays picked so you can place more |
+| **Drag a rule-made plant** (zoomed in) | it becomes a plant placed by hand where you drop it, plus an exclusion where it stood |
+
+Doors that hang on a piece cannot be dragged: they move with their piece. Rule-made plants can only be
+picked when zoomed in far enough (6 pixels a metre or more). Debris kinds and plants that follow
+something (config `plants.debris`, `plants.follows`) are drawn but cannot be picked.
+
+### Keys
+
+| Key | What happens |
+|---|---|
+| **R** / **Shift R** | turns the selected pieces and plants 15° one way or the other (with **Alt**: 1°). With only the arrival selected, turns which way the player faces |
+| **Arrows** | nudges the selection one snap step (**Shift**: 1 m) |
+| **Ctrl D** | duplicates the selected pieces (2 m away, with new ids) and plants (1 m away) |
+| **Delete** or **Backspace** | removes the selection. A piece with a door on it is kept; move or remove the door first |
+| **Ctrl Z** | undo |
+| **Ctrl Y** or **Ctrl Shift Z** | redo |
+| **Ctrl S** | save (this works even while typing in a field) |
+| **F** | fits the whole map in view |
+| **Esc** | stops placing; pressed again, clears the selection |
+
+On a Mac, Cmd works in place of Ctrl. Keys other than Ctrl S are ignored while you type in a field.
+
+### Left column
+
+- **Add a piece**: the palette. The project's presets come first, then plants (`plants.json`), then the
+  kinds of piece under their group headings, each with its size and its class tag. Click an entry to pick
+  it, then click the map wherever it should go. Click the entry again, or press Esc, to stop. A new piece
+  gets an id from its kind's name (`house`, `house2` ...), a preset piece gets the next id of its series,
+  and everything snaps to the grid.
+- **Add something else**:
+  - **A thing to use**: a new thing (`thing1` ...) at the middle of the view, with a radius of 2.5 m
+    and an empty card to fill in.
+  - **A walker's round**: a new square round of four points, 8 m across, at the middle of the view.
+  - **A door**: with a piece selected whose kind has a `door`, a door hangs on it. With no piece selected,
+    the door stands free at the middle of the view. It starts as sign `PRIVATE`, shut `Locked.`.
+  - **A person's place**: asks for the person's id, then places them at the middle of the view.
+- **Show**: one checkbox per layer: the metre grid, plants, walkers' rounds, people, things to use, doors,
+  and names, plus any layers the project adds. A lazy layer is loaded the first time you tick it.
+- **Legend**: what each colour means, including the project's own classes and layers.
+- **Keys**: a short list of the mouse and keyboard controls.
+
+### Right column
+
+- **The map's name**, with a list to switch maps when the project has more than one. You can also open a
+  map directly with `?map=<name>` in the address.
+- **Save** (Ctrl S), **Undo**, **Redo**, and **snap** (on: positions snap to the snap step, 0.25 m by
+  default; off: to 0.01 m). **unsaved** appears while there are changes not yet saved, and the browser
+  asks before you leave the page with them.
+- **The status line**: what just happened (loaded, saved, placed, an error).
+- **Apply** (only when the project has actions): one button per action, a spinner with the running step
+  and its time, the project's status panels, the "Which edit needs what" table (config `help`), and the
+  last job's output. Action buttons are disabled while there are unsaved changes or a job is running.
+  In each status panel, the names of changed things are links: clicking one selects it.
+- **Problems**: what stops a save (red, marked "schema") and the warnings (see [The fit check](#the-fit-check)).
+  Clicking a warning selects what it is about and pans to it. "Everything sits right." means none.
+- **Selected**: the selection's own panel.
+  - **Nothing selected**: the map itself. For a ring map: ring radius (changing it moves the gate onto the
+    ring), gate width, and piers every so many metres. Then counts of pieces, doors, things, rounds and
+    people, and the file's path.
+  - **Several**: how many, their ids, **Duplicate** and **Remove**.
+  - **A piece**: its id, class tag and kind, and its class's note. Then **x, z**, **turn °** (0 faces
+    south, 90 east), **lift y** (and "seated at" when a project's compile sets the height), **scale**
+    (empty: the kind's scale) and **stretch**. **id** renames it, and doors on it follow (taken or reserved
+    ids are refused). **kind** changes it to another kind. Below that are its footprint in metres (and its
+    place in the game, when scaled), the doors on it, and **Duplicate** and **Remove**.
+  - **Where the player arrives**: **x, z** and **facing °**.
+  - **A person's place**: **x, z** and **Remove**.
+  - **A thing to use**: **x, z**, **radius** (metres to use it from), **id**, **label**, **action** (empty:
+    it shows its card), the card's **title** and **what the card says**, and **Remove**.
+  - **A door**: **on** (the piece it hangs on, from pieces whose kind has a door) with **Show** to select
+    that piece, or **x, z** for a door standing free. Then **sign**, **label**, **room** (empty: it is
+    shut), **needs** (comma-separated), **what it says while locked**, **what it says if it never opens**,
+    and **Remove the door**.
+  - **A plant placed by hand**: **kind**, **x, z**, **turn °** (empty: the project chooses), **scale**,
+    **district**, any warnings about it, and **Duplicate** and **Remove**.
+  - **An exclusion**: **x, z**, **radius**, and **Remove the exclusion**.
+  - **A rule-made plant**: where it is and which rule made it, **Place it by hand here** (it becomes a
+    point, plus an exclusion), and **Remove it** (an exclusion only).
+  - **A point of a walker's round**: **x, z**, **Add a point after it** (halfway to the next point),
+    **Remove the point** (a round needs two points: removing one of the last two removes the round), and
+    **Remove the round**.
+
+Every edit goes onto the undo stack, and the page re-checks the plan with the server a quarter second
+after you stop editing. Nothing is written until you save.
+
+## Save and backups
+
+Save (the button, or Ctrl S) sends the plan and, if the map has one, the planting plan. The server then
+does the following, in order:
+
+1. **Checks the plan**: against its schema, then what a schema cannot say: the `id` is the folder's name,
+   piece ids are unique (pieces and marks together) and not reserved, door and thing ids are unique,
+   every door's `piece` exists, there is a `ring` or `bounds`, and finally the project's `validate` hook.
+   `plants.json` is checked against its schema. **Any error stops the save**, and the errors are listed
+   under Problems. Fit-check warnings never stop a save.
+2. **Refuses to overwrite a file that changed on disk** since the page read it (a second editor, or an
+   edit by hand), with "has changed on disk". Note your changes, then reload the page.
+3. Runs `beforeSave`.
+4. **Writes each file only if its text changed**: first to a temporary file beside it
+   (`layout.json.<pid>.tmp`), then the current file is copied to **`layout.prev.json`** (or
+   `plants.prev.json`), then the temporary file is renamed over it. A crash part-way leaves either the
+   old file or the new one, never half of one. Only the last overwritten version is kept as `.prev.json`.
+   Add `*.prev.json` to your project's `.gitignore`.
+5. Runs `afterSave`, then sends back the saved files and a fresh check.
+
+If nothing changed, nothing is written and the status says so. `plants.json` is written only when the
+map has one, or after you place a plant in the editor.
+
+## The fit check
+
+The built-in check needs only the plan and the kinds' footprints, so it works for any project. Every
+finding is a warning:
+
+| Kind | Found when |
+|---|---|
+| `overlap` | two pieces on the ground stand more than 5 cm in each other (separating axes on their solid boxes). Pieces at exactly the same place, and kinds listed in `mayOverlap`, are allowed |
+| `outside` | a piece on the ground has its middle or a corner of its footprint beyond the ring or the bounds (kinds with `across` are allowed) |
+| `float` | a lifted piece (`y > 0.5`) has nothing solid under its middle, or its `y` is more than 5 cm off the top (`deck`, else height) of what it stands on |
+| `overhang` | a lifted piece has part of its footprint off what it stands on |
+| `person` | a person stands in a solid piece or beyond the edge |
+| `thing` | there is nowhere to stand within a thing's radius |
+| `round` | a leg of a walker's round goes through a solid piece or beyond the edge (sampled every 25 cm) |
+| `door` | the spot before a door is inside something, or its piece's kind has no `door` |
+| `spawn` | the player arrives inside something |
+| `plant` | a hand-placed plant has an unknown kind, is outside the map, in a piece, in a doorway, or on a walker's round |
+
+A project can add warnings of its own (`check`), or replace these with its own (`builtInCheck: false`
+plus `check`), as Thoon Run does to check against its compiled walk grid.
+
+## Apply actions
+
+Apply buttons run the project's own steps, such as compiling a map, baking lighting or exporting to the
+game. They are declared in the config; the page can only ask for one by its id:
+
+```js
+actions: {
+  build: {
+    label: 'Build',                          // the button
+    title: 'compile, then export',           // its tooltip (default: the steps' labels)
+    maps: ['town'],                          // only for these maps (default: every map)
+    confirm: 'Rebuild everything? About ten minutes.', // asked before it starts (not in a dry run)
+    doneText: 'Reload the game to see it.',  // added to the status line when it finishes
+    steps: [
+      { label: 'compile', node: ['tools/compile.mjs', '{map}'] },                  // node <project>/tools/compile.mjs <map>
+      { label: 'export', command: ['blender', '-b', '-P', 'tools/export.py'], cwd: 'art', heavy: true },
+    ],
+    beforeJob(job, ctx) {}, beforeStep(step, ctx) { return memo; }, afterStep(step, ctx, memo) {}, afterJob(job, ctx) {},
+  },
+},
+```
+
+- A step is either `node: [script, ...args]` (run with the same Node as the editor; the script path is
+  relative to the step's `cwd`) or `command: [program, ...args]` (a program on the PATH, or a path).
+  `cwd` defaults to the project root. Every value must be a string, and the config is refused at start-up
+  if one is not.
+- **`{map}`** as a whole argument is replaced by the map's name. That is the only value that comes from
+  the page, and it has already been checked to be a plain folder name of an existing map. Nothing else
+  is substituted, and **no shell is ever used** (`shell: false`).
+- Steps run one after another; a step that exits non-zero stops the job. Only one job runs at a time.
+  The output (stdout and stderr, the last megabyte or so) appears under the buttons.
+- **`heavy: true`** marks a step that `--dry-run` replaces with a stub that prints what it would run.
+- The hooks run in the editor's process: `beforeJob` before the first step; `beforeStep` before each step
+  that really runs, whose return value is passed to `afterStep` after that step succeeds; and `afterJob`
+  once it is done or has failed (`job.state`). Thoon Run uses them to keep records of what each step read.
+- When a job finishes, the page reloads the project's layers, rule-made plants and status panels.
+
+## Security model
+
+The editor reads and writes files on your machine, so it accepts requests only from its own page:
+
+- **Loopback only.** The server binds to `127.0.0.1`, never to `0.0.0.0`, so other machines cannot
+  reach it.
+- **Host check.** A request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` is refused
+  (403). No other website, and no DNS name pointed at your machine (DNS rebinding), can read or write a
+  plan through your browser.
+- **Writes come from the page, as JSON.** Every POST must carry an `Origin` equal to `http://<its Host>`
+  and `Content-Type: application/json`, or it is refused (403). A form or `fetch` from another site
+  cannot do either.
+- **Plain map names.** A map is named by its folder: lower-case letters, digits, `_` and `-`, at most 40
+  characters, starting with a letter, and it must contain a `layout.json`. Nothing in a request can
+  reach a path outside the maps folder.
+- **Its page and its API, nothing else.** It serves `/`, its `/api/...` routes, and an empty favicon. Any
+  other path is a 404, and no file from the project is ever served directly. Responses are marked
+  `no-store`, `nosniff` and `X-Frame-Options: DENY`. Request bodies over 2 MB are refused.
+- **Fixed commands.** Apply actions run only what the config lists, with `shell: false`. The action's id
+  is looked up as the config's own key, and the only value from the request that reaches a command is
+  the checked map name, as one whole argument.
+
+A config file is code, so it runs with your rights. Only use configs you trust, as with any build script.
+
+## Troubleshooting
+
+| Symptom | What to do |
+|---|---|
+| `port 8793 is in use (another editor?)` | start this one with `--port 8794` (or `MAP_EDIT_PORT=8794`) |
+| The page says `local only: open http://127.0.0.1:<port>/` | open the address the editor printed. Other names for your machine (its network address, `0.0.0.0`, a proxy or tunnel) are refused on purpose |
+| Save says `a write must come from this page, as JSON` | something between the browser and the editor (an extension, a proxy) changed the request's `Origin` or `Content-Type`. Open the page directly |
+| Save says `has changed on disk since this page read it` | another editor, or an edit by hand, changed the file. Note your changes, reload, and make them again |
+| Save says `not saved: the plan does not pass its schema` | the errors are listed under Problems, each with its path in the file (`pieces[3].at: ...`) |
+| `no such map` | a map is a folder of the maps folder with a `layout.json`, named with lower-case letters, digits, `_` and `-` |
+| `no maps yet in ...` at start | check `--project` and the config's `maps`. The editor prints the folder it looked in |
+| Every piece is a 2 x 2 m pink square | the editor does not know the kinds' sizes: add a `kit.json`, a `kinds` hook, or `sizes` in the plan |
+| `map editor config: ...` at start | the config has a mistake (an action step that is not a list of strings, a missing schema file ...); the message says which |
+| `the compile failed: ...` under Problems | the project's `compile` hook threw. Its message follows |
+| An Apply button is greyed out | save first (actions read the saved files), or wait for the running job. The button's tooltip says which |
+| An Apply step fails with `could not start` | the program in `command` is not on the PATH. On Windows, `.cmd` and `.bat` files cannot be run without a shell: point at the `.exe`, or wrap the step in a Node script |
+| `npm run check:browser` says `playwright-core not found` | `npm i --no-save playwright-core`, or set `PLAYWRIGHT_MODULE` to an existing copy's folder |
+
+## Tests
+
+```sh
+npm test                 # node:test, no dependencies: a few seconds
+```
+
+These cover the plan's text format (byte-for-byte round trips, one changed line per move, key order),
+`plants.json`'s format, the plant edits the page shares with the server, the schema messages, map names,
+the config (defaults, kit, actions that are not fixed lists refused), the fit check and the plants check,
+and the server over HTTP. The server tests include: refused Hosts, Origins and content types; traversal
+names; no file served; a save that writes the file in its format and keeps `layout.prev.json`; a save
+refused after the file changed on disk; `plants.json`; unknown actions refused; a real action run; and
+`--dry-run`.
+
+```sh
+npm run check:browser    # the page in headless Chrome, against a copy of the sample project
+npm run screenshot       # the same, and docs/editor.png
+```
+
+The browser check loads the page and fails on any console error or warning. It drags a piece with the
+mouse, saves with Ctrl S, checks that `layout.json` changed and `layout.prev.json` holds the old file,
+runs the Report action from its button, and checks that a foreign Host and a foreign Origin are refused.
+It needs `playwright-core` (not a dependency: `npm i --no-save playwright-core`, or
+`PLAYWRIGHT_MODULE=<its folder>`) and Chrome (`CHROME=<path>`, else the usual install places). To check a
+server you started yourself, run
+`node scripts/browser-check.mjs --url http://127.0.0.1:8794/ --project examples/sample`. That edits the
+example in place, so afterwards run `git checkout examples/sample`.
+
+## Licence
+
+The NFGames Map Editor is **source-available**, under the Apache License 2.0 with the Commons Clause
+License Condition v1.0 (see `LICENSE` and `NOTICE`). In plain words:
+
+- It is free to use, including for making commercial games.
+- It is free to change, to share, and to contribute to (see `CONTRIBUTING.md`).
+- You may not sell the editor or a derivative of it. That includes a paid product or service whose value
+  comes mainly from the editor.
+- The maps and games you make with it are yours.
+
+Copyright 2026 No FUD Games Inc.

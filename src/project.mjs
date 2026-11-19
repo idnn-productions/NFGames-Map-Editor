@@ -1,0 +1,184 @@
+// A project: the folder whose maps the editor edits, and what its config file (map-editor.config.mjs in the
+// project's root) says about them. Everything game-specific lives in that config; with none, the defaults below
+// make a plain editor of <project>/maps/<name>/layout.json. README.md "Running it against your own project" lists
+// every option and hook.
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { dirname, join, resolve, isAbsolute, relative } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { NAME, formatPlan, formatPlants, writeKeeping, fileStamp } from './plan.mjs';
+import { checkFile } from './schema.mjs';
+
+export const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+export const BUILT_IN_SCHEMAS = { layout: join(EDITOR_ROOT, 'schemas', 'map.schema.json'), plants: join(EDITOR_ROOT, 'schemas', 'map-plants.schema.json') };
+export const CONFIG_NAME = 'map-editor.config.mjs';
+export const DEFAULT_PORT = 8793;
+
+/** The classes a kind can be in when the project names none: how it is tagged and coloured in the palette. */
+const DEFAULT_CLASSES = {
+  piece: { tag: 'piece', colour: '#e9dccb', legend: 'a piece', note: '' },
+  mark: { tag: 'mark', colour: '#e58af0', legend: 'a mark: no model, or no known size', note: 'A kind with no known footprint: drawn as 2 x 2 m.' },
+};
+const DEFAULT_HINTS = { afterSave: { plan: '', plants: '', both: '' }, ring: '', person: 'Who they are and what they say is not in the map.', thing: '', plant: '', round: '' };
+
+const isFn = (f) => typeof f === 'function';
+const fail = (text) => { throw new Error(`map editor config: ${text}`); };
+
+/** Reads a kit file: { "<kind>": { size: [w, d, h], boxes?, cls?, door?, group?, solid?, hidden?, across?, mayOverlap?, deck?, label? } }. */
+export function readKit(file) {
+  if (!existsSync(file)) return {};
+  const raw = JSON.parse(readFileSync(file, 'utf8')), out = {};
+  for (const [kind, k] of Object.entries(raw)) if (k && typeof k === 'object' && !Array.isArray(k) && !kind.startsWith('$')) out[kind] = k;
+  return out;
+}
+
+/** A kind as the editor uses it: every field there, boxes defaulting to the whole footprint. */
+export function normaliseKind(k = {}) {
+  const size = Array.isArray(k.size) && k.size.length >= 2 ? [k.size[0], k.size[1], k.size[2] ?? 1] : null;
+  if (!size) return { size: [2, 2, 2], boxes: [[0, 0, 2, 2]], cls: k.cls || 'mark', unknown: true, solid: false, door: k.door || null, group: k.group || null, hidden: !!k.hidden };
+  return {
+    ...k, size,
+    boxes: Array.isArray(k.boxes) ? k.boxes.map((b) => b.slice(0, 4)) : [[0, 0, size[0], size[1]]],
+    cls: k.cls || 'piece', door: k.door || null, group: k.group || null, hidden: !!k.hidden, solid: k.solid !== false,
+  };
+}
+
+/**
+ * Loads a project. `root` is the project's folder; `config` a config file (default: <root>/map-editor.config.mjs when
+ * there is one), or a config object (tests). Returns the project the server works with.
+ */
+export async function loadProject({ root = process.cwd(), config = undefined } = {}) {
+  root = resolve(root);
+  let options = {}, configFile = null;
+  if (config && typeof config === 'object') options = config;
+  else {
+    configFile = config ? resolve(config) : join(root, CONFIG_NAME);
+    if (config && !existsSync(configFile)) fail(`no such file: ${configFile}`);
+    if (existsSync(configFile)) {
+      const mod = await import(pathToFileURL(configFile).href);
+      options = mod.default ?? {};
+      if (isFn(options)) options = await options({ root, editorRoot: EDITOR_ROOT });
+      if (!options || typeof options !== 'object') fail(`${configFile} must export an object (or a function returning one) as its default`);
+    } else configFile = null;
+  }
+  const at = (p) => (isAbsolute(p) ? p : join(root, p));
+
+  // where the maps are: the config's, or the first of maps/ and data/maps/ that exists
+  const mapsDir = options.maps ? at(options.maps) : [join(root, 'maps'), join(root, 'data', 'maps')].find((d) => existsSync(d)) || join(root, 'maps');
+  const schemaFile = options.schema ? at(options.schema) : BUILT_IN_SCHEMAS.layout;
+  const plantsCfg = options.plants === false ? null : { kinds: {}, labels: {}, draw: {}, excludeRadius: 0.6, clearance: 0.6, tall: [], tallClearance: 1.0, debris: [], follows: [], ...(options.plants || {}) };
+  const plantsSchemaFile = plantsCfg && plantsCfg.schema ? at(plantsCfg.schema) : BUILT_IN_SCHEMAS.plants;
+  for (const f of [schemaFile, ...(plantsCfg ? [plantsSchemaFile] : [])]) if (!existsSync(f)) fail(`schema not found: ${f}`);
+  const reserved = options.reservedIds instanceof RegExp ? options.reservedIds : null;
+  const presets = (options.presets || []).map((p) => {
+    if (!p || typeof p.id !== 'string' || typeof p.kind !== 'string' || !/^[a-z][a-z0-9_]*$/.test(p.idPrefix || '')) fail(`a preset needs an id, a kind and an idPrefix (lower case): ${JSON.stringify(p)}`);
+    return { label: p.id, group: 'Presets', scale: undefined, colour: '#3fae49', note: '', when: null, ...p };
+  });
+  const actions = normaliseActions(options.actions || {}, root);
+  const overlays = {};
+  for (const [id, o] of Object.entries(options.overlays || {})) {
+    if (!/^[a-z][a-zA-Z0-9_-]*$/.test(id) || !o || !isFn(o.load)) fail(`overlay "${id}" needs a plain id and a load function`);
+    overlays[id] = { label: id, on: true, lazy: false, legend: [], ...o };
+  }
+
+  const mapDir = (name) => {
+    if (typeof name !== 'string' || !NAME.test(name)) throw new Error(`not a map name: ${JSON.stringify(name)}`);
+    const dir = join(mapsDir, name);
+    if (dirname(dir) !== mapsDir) throw new Error(`not a map name: ${JSON.stringify(name)}`);
+    return dir;
+  };
+  const planFile = (name) => join(mapDir(name), 'layout.json');
+  const plantsFile = (name) => join(mapDir(name), 'plants.json');
+  const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
+  const readPlan = (name) => readJson(planFile(name));
+  const readPlants = (name) => (plantsCfg && existsSync(plantsFile(name)) ? readJson(plantsFile(name)) : null);
+  const listMaps = () => (existsSync(mapsDir) ? readdirSync(mapsDir).filter((n) => NAME.test(n) && statSync(join(mapsDir, n)).isDirectory() && existsSync(join(mapsDir, n, 'layout.json'))).sort() : []);
+  /** A map name from a request: a plain folder name with a plan in it, or null. */
+  const knownMap = (name) => { if (typeof name !== 'string' || !NAME.test(name)) return null; try { return existsSync(planFile(name)) ? name : null; } catch { return null; } };
+  const rel = (file) => { const r = relative(root, file); return (r.startsWith('..') || isAbsolute(r) ? file : r).replace(/\\/g, '/'); };
+
+  // what every hook gets as its second argument: where things are, and the editor's own helpers (no import of the editor needed)
+  const ctx = { root, editorRoot: EDITOR_ROOT, mapsDir, mapDir, planFile, plantsFile, readPlan, readPlants, readJson, rel, formatPlan, formatPlants, fileStamp, dryRun: false };
+
+  /** A piece of a preset (a planter, say): its kind and an id of its series, while the preset applies to the plan. */
+  const presetOf = (plan, p) => presets.find((s) => p && s.kind === p.kind && new RegExp(`^${s.idPrefix}\\d+$`).test(p.id) && (!s.when || (plan && plan[s.when.field] === s.when.equals)));
+
+  /** Problems that stop a plan being saved: its schema's, then what a schema cannot say, then the project's own. */
+  async function planErrors(layout, name = null) {
+    const errors = checkFile(layout, schemaFile);
+    if (errors.length || !layout || typeof layout !== 'object') return errors;
+    if (name && layout.id !== name) errors.push(`id: the map is "${name}" but its id is "${layout.id}"`);
+    const seen = new Set();
+    for (const p of [...(layout.pieces || []), ...(layout.marks || [])]) {
+      if (seen.has(p.id)) errors.push(`pieces: two are called "${p.id}"`);
+      else if (reserved && reserved.test(p.id) && !presetOf(layout, p)) errors.push(`pieces: "${p.id}" is a name kept for things the project's tools make`);
+      seen.add(p.id);
+    }
+    for (const list of ['doors', 'things']) { const ids = new Set(); for (const d of layout[list] || []) { if (ids.has(d.id)) errors.push(`${list}: two are called "${d.id}"`); ids.add(d.id); } }
+    for (const d of layout.doors || []) if (d.piece && !seen.has(d.piece)) errors.push(`doors: "${d.id}" hangs on "${d.piece}", which is not a piece`);
+    if (!layout.ring && !layout.bounds) errors.push('(top): needs a ring or bounds');
+    if (isFn(options.validate)) errors.push(...((await options.validate({ plan: layout, name }, ctx)) || []));
+    return errors;
+  }
+  /** What stops plants.json being saved: its schema. */
+  const plantsErrors = async (plants) => checkFile(plants, plantsSchemaFile).map((e) => `plants.json ${e}`);
+
+  /** Every kind a plan can place: the project's (its `kinds` hook, or its kit file), then the plan's own `sizes`. */
+  async function kinds(name, plan) {
+    let raw = {};
+    if (isFn(options.kinds)) raw = (await options.kinds({ name, plan }, ctx)) || {};
+    else { const kit = options.kit === undefined ? 'kit.json' : options.kit; if (kit) raw = readKit(at(kit)); }
+    const out = {};
+    for (const [kind, k] of Object.entries(raw)) out[kind] = normaliseKind(k);
+    for (const [kind, size] of Object.entries((plan && plan.sizes) || {})) out[kind] = normaliseKind({ ...(raw[kind] || {}), size, boxes: undefined });
+    // the palette's groups: the kind's own `group`, else the first of the config's that matches
+    const groups = (options.palette && options.palette.groups) || [];
+    for (const [kind, k] of Object.entries(out)) if (!k.group) { const g = groups.find((q) => (q.match instanceof RegExp ? q.match.test(kind) : isFn(q.match) ? q.match(kind, k) : false)); if (g) k.group = g.title; }
+    return out;
+  }
+
+  return {
+    root, configFile, mapsDir, schemaFile, plantsSchemaFile, ctx, options,
+    port: options.port || DEFAULT_PORT, defaultMap: options.defaultMap || null,
+    mapDir, planFile, plantsFile, readPlan, readPlants, listMaps, knownMap, rel,
+    planErrors, plantsErrors, kinds, presets, presetOf, actions, overlays, plants: plantsCfg, reserved,
+    builtInCheck: options.builtInCheck !== false,
+    hooks: { compile: options.compile, check: options.check, status: options.status, beforeSave: options.beforeSave, afterSave: options.afterSave, ruleMade: plantsCfg && plantsCfg.ruleMade },
+    writePlan: (name, layout) => writeKeeping(planFile(name), formatPlan(layout), 'layout.prev.json'),
+    writePlants: (name, plants) => writeKeeping(plantsFile(name), formatPlants(plants), 'plants.prev.json'),
+    stamps: (name) => ({ layout: fileStamp(planFile(name)), plants: fileStamp(plantsFile(name)) }),
+    /** What the page needs to know about the project's look and words (all plain data). */
+    ui: (name = null) => ({
+      classes: { ...DEFAULT_CLASSES, ...(options.classes || {}) },
+      groups: ((options.palette && options.palette.groups) || []).map((g) => g.title),
+      presets: presets.map(({ id, label, group, kind, scale, idPrefix, colour, note, when }) => ({ id, label, group, kind, scale, idPrefix, colour, note, when })),
+      reserved: reserved ? { source: reserved.source, flags: reserved.flags } : null,
+      display: { planScale: 1, kindScale: {}, defaultKindScale: 1, attach: {}, wallThickness: 0.6, snap: 0.25, gameLabel: 'in the game', ...((isFn(options.display) ? options.display({ name }) : options.display) || {}) },
+      help: Array.isArray(options.help) ? options.help.map((r) => [String(r[0]), String(r[1])]) : [],
+      hints: { ...DEFAULT_HINTS, ...(options.hints || {}), afterSave: { ...DEFAULT_HINTS.afterSave, ...((options.hints || {}).afterSave || {}) } },
+      overlays: Object.entries(overlays).map(([id, o]) => ({ id, label: o.label, on: !!o.on, lazy: !!o.lazy, legend: o.legend || [] })),
+      compileLayers: (options.compileLayers || []).map((l) => ({ id: l.id, label: l.label || l.id, on: l.on !== false, legend: l.legend || [] })),
+      plantsOn: !!plantsCfg,
+      title: options.title || null,
+    }),
+  };
+}
+
+/**
+ * The Apply actions: fixed commands with fixed arguments, from the config only. The one value that can come from a
+ * request is a map's name, already checked against NAME and the maps folder, which replaces a whole argument `{map}`.
+ */
+function normaliseActions(actions, root) {
+  const out = {};
+  for (const [id, a] of Object.entries(actions)) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(id)) fail(`an action's id must be a plain word: ${JSON.stringify(id)}`);
+    if (!a || !Array.isArray(a.steps) || !a.steps.length) fail(`action "${id}" needs a list of steps`);
+    const steps = a.steps.map((s, i) => {
+      const argv = s.node || s.command;
+      if (!Array.isArray(argv) || !argv.length || !argv.every((x) => typeof x === 'string')) fail(`action "${id}" step ${i}: "node" or "command" must be a list of strings`);
+      if (s.node && s.command) fail(`action "${id}" step ${i}: one of "node" or "command", not both`);
+      return { key: s.key || `step${i}`, label: s.label || argv.join(' '), heavy: !!s.heavy, node: !!s.node, argv: [...argv], cwd: s.cwd ? resolve(root, s.cwd) : root };
+    });
+    out[id] = { id, label: a.label || id, title: a.title || '', confirm: a.confirm || null, maps: Array.isArray(a.maps) ? a.maps : null, doneText: a.doneText || '', steps, hooks: { beforeJob: a.beforeJob, beforeStep: a.beforeStep, afterStep: a.afterStep, afterJob: a.afterJob } };
+  }
+  return out;
+}

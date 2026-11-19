@@ -1,0 +1,53 @@
+{
+  "id": "plaza",
+  "name": "Plaza",
+  "games": ["sample"],
+  "note": "The editor's sample map: a small walled square with a tower, three houses, an open hall, a market stall, crates, two planters and a beacon.",
+  "frame": { "units": "metres", "x": "east", "z": "south", "up": "y", "rot": "degrees" },
+  "ring": {
+    "centre": [0, 0],
+    "radius": 24,
+    "gateWidth": 6,
+    "pillarEvery": 8
+  },
+  "gate": [-24, 0],
+  "spawn": {
+    "at": [-18, 0],
+    "yaw": 90
+  },
+  "pieces": [
+    { "id": "tower", "kind": "kit:tower", "at": [6, -10], "rot": 0 },
+    { "id": "h1", "kind": "kit:house", "at": [-8, 10], "rot": 180 },
+    { "id": "tank", "kind": "kit:roof_tank", "at": [-8, 10], "rot": 0, "y": 3.5 },
+    { "id": "h2", "kind": "kit:house", "at": [4, 12], "rot": 180 },
+    { "id": "h3", "kind": "kit:house_long", "at": [-10, -10], "rot": 90 },
+    { "id": "hall", "kind": "kit:hall", "at": [-1, -18], "rot": 0 },
+    { "id": "stall", "kind": "kit:stall", "at": [12, 2], "rot": -90 },
+    { "id": "crate", "kind": "kit:crate", "at": [2, 2], "rot": 15 },
+    { "id": "crate2", "kind": "kit:crate", "at": [3.25, 2.5], "rot": 0 },
+    { "id": "planter0", "kind": "kit:pot", "at": [-5, 6.5], "rot": 0 },
+    { "id": "planter1", "kind": "kit:pot", "at": [1, 7], "rot": 0 }
+  ],
+  "marks": [
+    { "id": "beacon", "kind": "mark:beacon", "at": [0, -3] }
+  ],
+  "people": {
+    "keeper": [-4, 3]
+  },
+  "doors": [
+    { "id": "tower_door", "piece": "tower", "sign": "TOWER", "room": "tower" },
+    { "id": "home", "piece": "h1", "sign": "PRIVATE", "shut": "Locked." }
+  ],
+  "routes": [
+    [[-14, -2], [-2, -4], [0, 5], [-14, 5]]
+  ],
+  "things": [
+    {
+      "id": "well",
+      "label": "Look down the well",
+      "at": [-3, -7],
+      "radius": 2,
+      "card": { "title": "The well", "body": "Dry, and deeper than it looks." }
+    }
+  ]
+}

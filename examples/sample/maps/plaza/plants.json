@@ -1,0 +1,27 @@
+{
+  "note": "The sample map's plants placed by hand (points). A project's own planting rules could live here too; the editor edits only points and exclude.",
+  "points": [
+    {
+      "kind": "shrub",
+      "at": [
+        -13,
+        3
+      ]
+    },
+    {
+      "kind": "flowers",
+      "at": [
+        -3,
+        9
+      ],
+      "rot": 30
+    },
+    {
+      "kind": "cactus",
+      "at": [
+        10,
+        -3
+      ]
+    }
+  ]
+}

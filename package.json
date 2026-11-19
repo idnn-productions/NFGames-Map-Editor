@@ -1,0 +1,25 @@
+{
+  "name": "nfgames-map-editor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A map editor in the browser: a game map's plan (layout.json) from above, on this machine only. Game specifics plug in through a project config file.",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "bin": { "nfgames-map-editor": "bin/nfgames-map-editor.mjs" },
+  "main": "src/server.mjs",
+  "exports": {
+    ".": "./src/server.mjs",
+    "./project": "./src/project.mjs",
+    "./plan": "./src/plan.mjs",
+    "./check": "./src/check.mjs",
+    "./schema": "./src/schema.mjs"
+  },
+  "files": ["bin/", "src/", "schemas/", "examples/", "README.md", "LICENSE", "NOTICE"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node bin/nfgames-map-editor.mjs --project examples/sample",
+    "test": "node --test",
+    "check:browser": "node scripts/browser-check.mjs",
+    "screenshot": "node scripts/browser-check.mjs --screenshot docs/editor.png"
+  }
+}

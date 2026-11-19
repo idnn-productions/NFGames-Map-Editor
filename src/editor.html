@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Map editor</title>
+<style>
+  :root { --bg: #1b1917; --panel: #26221f; --ink: #efe6da; --dim: #a8998a; --line: #453c35; --accent: #ff9a62; --bad: #ff6b5e; --warn: #f2c14e; --ok: #8fd694; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.4 system-ui, "Segoe UI", sans-serif; display: grid; grid-template-columns: 250px 1fr 372px; overflow: hidden; }
+  aside { background: var(--panel); padding: 10px 12px 30px; overflow-y: auto; height: 100vh; }
+  #left { border-right: 1px solid var(--line); }
+  #right { border-left: 1px solid var(--line); }
+  main { position: relative; height: 100vh; min-width: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; background: #8a6a4c; }
+  h1 { font-size: 15px; margin: 0 0 6px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--dim); margin: 16px 0 6px; border-top: 1px solid var(--line); padding-top: 10px; }
+  button, select, input, textarea { font: inherit; color: var(--ink); background: #382f29; border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: #2a160c; border-color: var(--accent); font-weight: 600; }
+  textarea { width: 100%; min-height: 84px; resize: vertical; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
+  .row label { color: var(--dim); min-width: 52px; }
+  .row input[type=number] { width: 84px; }
+  .row input[type=text] { flex: 1; min-width: 0; }
+  .dim { color: var(--dim); } .small { font-size: 12px; }
+  .pal { display: grid; grid-template-columns: 1fr; gap: 3px; }
+  .pal button { text-align: left; font-size: 12px; padding: 3px 6px; display: flex; justify-content: space-between; gap: 6px; }
+  .pal button.on { background: var(--accent); color: #2a160c; border-color: var(--accent); }
+  .pal-h { color: var(--dim); font-size: 11px; margin: 8px 0 3px; }
+  .tag { font-size: 10px; border-radius: 3px; padding: 0 4px; color: #1b1917; white-space: nowrap; align-self: center; }
+  #status { min-height: 1.4em; white-space: pre-wrap; margin: 6px 0; }
+  #status.bad { color: var(--bad); } #status.ok { color: var(--ok); }
+  #dirty { color: var(--warn); font-weight: 600; }
+  ul.list { list-style: none; margin: 0; padding: 0; max-height: 190px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; }
+  ul.list li { padding: 3px 7px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 12px; }
+  ul.list li:last-child { border-bottom: 0; }
+  ul.list li:hover { background: #33291f; }
+  ul.list li.error { color: var(--bad); } ul.list li b { color: var(--warn); font-weight: 600; }
+  ul.list li.error b { color: var(--bad); }
+  .state { padding: 4px 7px; border-radius: 4px; border: 1px solid var(--line); margin: 4px 0; font-size: 12px; }
+  .state.fresh b { color: var(--ok); } .state.stale b { color: var(--warn); } .state.unknown b { color: var(--dim); }
+  .state a { color: var(--ink); cursor: pointer; text-decoration: underline dotted; }
+  #log { background: #14110f; border: 1px solid var(--line); border-radius: 4px; padding: 6px; max-height: 170px; overflow: auto; font: 11px/1.35 ui-monospace, Consolas, monospace; white-space: pre-wrap; margin: 4px 0 0; }
+  #busy { display: none; color: var(--warn); } #busy.on { display: inline; }
+  #busy::before { content: ''; display: inline-block; width: 9px; height: 9px; border: 2px solid var(--warn); border-right-color: transparent; border-radius: 50%; margin-right: 5px; vertical-align: -1px; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #hud:empty, #banner:empty { display: none; }
+  #hud { position: absolute; left: 10px; top: 8px; background: #000a; padding: 3px 8px; border-radius: 4px; font: 12px ui-monospace, Consolas, monospace; pointer-events: none; }
+  #banner { position: absolute; right: 10px; top: 8px; background: #000a; padding: 3px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; max-width: 60%; text-align: right; }
+  .legend div { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 2px 0; }
+  .legend i { display: inline-block; width: 14px; height: 11px; border-radius: 2px; flex: none; border: 1px solid #0006; }
+  .keys { color: var(--dim); font-size: 12px; } .keys b { color: var(--ink); font-weight: 600; }
+  table.what { border-collapse: collapse; font-size: 12px; width: 100%; } table.what td { padding: 2px 4px; border-bottom: 1px solid var(--line); vertical-align: top; } table.what td:last-child { color: var(--dim); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<aside id="left">
+  <h1>Add a piece</h1>
+  <p class="keys" id="palHelp">Pick one, then click the map where it goes. It stays picked (<b>Esc</b> to stop).</p>
+  <div id="palette"></div>
+  <h2>Add something else</h2>
+  <div class="row"><button id="addThing">A thing to use</button><button id="addRound">A walker's round</button></div>
+  <div class="row"><button id="addDoor" title="Hangs on the selected piece when its kind has a door; with no piece selected, stands free at the middle of the view">A door</button></div>
+  <div class="row"><button id="addPerson">A person's place</button></div>
+  <h2>Show</h2>
+  <div id="layers"></div>
+  <h2>Legend</h2>
+  <div class="legend" id="legend"></div>
+  <h2>Keys</h2>
+  <div class="keys"><b>drag</b> move · <b>drag empty ground</b> (or the right button anywhere) pan · <b>wheel</b> zoom · <b>Shift drag</b> box select · <b>Shift/Ctrl click</b> add to selection · <b>handle</b> or <b>R</b> / <b>Shift R</b> turn 15° (<b>Alt</b>: free, 1°) · <b>arrows</b> nudge one snap step (<b>Shift</b> 1 m) · <b>Ctrl D</b> duplicate · <b>Del</b> remove · <b>Ctrl Z</b> / <b>Ctrl Y</b> undo, redo · <b>Ctrl S</b> save · <b>F</b> fit · <b>Esc</b> stop / deselect</div>
+</aside>
+<main><canvas id="map"></canvas><div id="hud"></div><div id="banner"></div></main>
+<aside id="right">
+  <h1><span id="title">Map</span> <select id="maps" style="float:right;display:none"></select></h1>
+  <div class="row"><button class="primary" id="save" title="Ctrl S">Save</button><button id="undo" title="Ctrl Z">Undo</button><button id="redo" title="Ctrl Y">Redo</button><label style="min-width:0"><input type="checkbox" id="snap" checked> <span id="snapText">snap 0.25 m</span></label><span id="dirty"></span></div>
+  <div id="status">Loading…</div>
+
+  <div id="applyBox" hidden>
+    <h2>Apply</h2>
+    <div class="row" id="actions"></div><div class="row"><span id="busy">running</span></div>
+    <div id="applyNote" class="small dim"></div>
+  </div>
+  <div id="statusPanels"></div>
+  <details id="helpBox" hidden><summary class="small dim">Which edit needs what</summary><table class="what" id="help"></table></details>
+  <pre id="log" hidden></pre>
+
+  <h2>Problems <span id="probCount" class="dim"></span></h2>
+  <ul class="list" id="problems"></ul>
+
+  <h2>Selected</h2>
+  <div id="sel"></div>
+</aside>
+<script>
+'use strict';
+// The plan's frame: metres, +X east, +Z south. On screen north is up: screen right is +X, screen down is +Z.
+// Everything is drawn in the PLAN's metres, the numbers that are in layout.json. A project may draw its maps larger
+// in its game (display.planScale about the map's centre, display.kindScale per kind): footprints here are the game's,
+// divided by the plan's scale, so what touches here touches there.
+const $ = (id) => document.getElementById(id);
+const canvas = $('map'), ctx = canvas.getContext('2d');
+const mapName = new URLSearchParams(location.search).get('map');
+const api = (path, extra = '') => `/api/${path}?${mapName ? `map=${encodeURIComponent(mapName)}&` : ''}${extra}`;
+const post = (path, body) => fetch(api(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const rad = (d) => (d * Math.PI) / 180;
+const clone = (v) => JSON.parse(JSON.stringify(v));
+const h = (tag, props = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (k === 'class') e.className = v; else if (k in e) e[k] = v; else e.setAttribute(k, v); } for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) e.append(kid); return e; };
+
+let S = null, UI = null, D = null, plan = null, kindsInfo = {}, pv = { errors: [], problems: [], seated: {}, overlays: null, status: null };
+const ovl = {}; // the project's own layers, loaded from /api/overlay: id -> { present, shapes, note, error }
+// plants.json: `points` placed by hand and `exclude` (where the project's rules may plant nothing) are edited here;
+// plants made by the project's rules come from its ruleMade hook (faint, movable). Plan frame, degrees.
+let plants = null, savedPlantsJson = 'null', plantKinds = {}, plantLabels = {}, pointKindOf = {}, PLANT_DRAW = {}, stamps = null, rule = { present: false, items: [] };
+let EXCLUDE_R = 0.6, DEBRIS = [], FOLLOWS = [];
+const plantEditing = /*@plantEditing*/ null; // src/plan.mjs plantEditing, written in by the server (the same code its tests run)
+const PE = plantEditing();
+const builtOf = (kind) => plantKinds[kind] || [kind, 1];
+const plantPoints = () => (plants && plants.points) || [];
+const exclusions = () => (plants && plants.exclude) || [];
+/** A hand-placed plant's radius in the plan's metres. */
+const pointR = (pt) => { const [b, f] = builtOf(pt.kind); return ((PLANT_DRAW[b] || PLANT_DRAW[pt.kind] || { r: 0.3 }).r * f * (pt.scale ?? 1)) / P(); };
+const plantStyle = (built) => PLANT_DRAW[built] || { r: 0.3, fill: '#7fbf6a' };
+/** Rule-made plants not inside an exclusion (an excluded one goes at the project's next planting), with their index in rule.items. */
+const ruleShown = () => rule.items.map((it, i) => ({ it, i })).filter(({ it }) => !PE.covered(plants, it.at));
+const ensurePlants = () => { if (!plants) plants = { points: [] }; if (!plants.points) plants.points = []; return plants; };
+let view = { x: 0, z: 0, k: 6 }, sel = [], undoStack = [], redoStack = [], savedJson = '', placing = null, drag = null;
+const show = { grid: true, plants: true, routes: true, people: true, things: true, doors: true, labels: true };
+const BASE_LAYERS = [['grid', 'the metre grid'], ['plants', 'plants: placed by hand (plants.json), made by rule (faint), exclusions (dashed red)'], ['routes', 'walkers\' rounds'], ['people', 'people'], ['things', 'things to use'], ['doors', 'doors'], ['labels', 'names']];
+const COLOUR = { planter: '#3fae49', rule: '#b9a3ff', wall: '#f3e6d4', person: '#7fe3ff', thing: '#ffd34d', door: '#ff9a62', spawn: '#c4f07a', sel: '#ff3d00' };
+let RESERVED = null;
+const classOf = (cls) => (UI.classes[cls] || { tag: cls, colour: '#e9dccb', legend: cls, note: '' });
+
+// --- presets: pieces of a kind with ids of a series (planter0, planter1 ...), such as a pot with a plant in it ---------
+const activePresets = () => UI.presets.filter((s) => !s.when || plan[s.when.field] === s.when.equals);
+const presetOf = (p) => activePresets().find((s) => s.kind === p.kind && new RegExp(`^${s.idPrefix}\\d+$`).test(p.id)) || null;
+const takenId = (id, kind) => !!pieceById(id) || (!!RESERVED && RESERVED.test(id) && !activePresets().some((s) => s.kind === kind && new RegExp(`^${s.idPrefix}\\d+$`).test(id)));
+function nextSeriesId(prefix) { const used = new Set(pieces().map((p) => p.id)); let n = 0; while (used.has(`${prefix}${n}`)) n++; return `${prefix}${n}`; }
+
+// --- the plan's geometry ---------------------------------------------------------------------------
+const pieces = () => [...plan.pieces, ...(plan.marks || [])];
+const pieceById = (id) => pieces().find((p) => p.id === id);
+const scaleOf = (p) => p.scale || (plan.kindScale || {})[p.kind] || 1;
+const centre = () => (plan.ring ? plan.ring.centre : plan.bounds ? [(plan.bounds.min[0] + plan.bounds.max[0]) / 2, (plan.bounds.min[1] + plan.bounds.max[1]) / 2] : [0, 0]);
+const P = () => D.planScale || 1;
+const lookK = (kind) => D.kindScale[kind] ?? D.defaultKindScale ?? 1;
+const scaled = () => P() !== 1 || (D.defaultKindScale ?? 1) !== 1 || Object.keys(D.kindScale || {}).length > 0;
+/** A plan point in the game's metres, and back. */
+const toGame = ([x, z]) => { const c = centre(); return [c[0] + (x - c[0]) * P(), c[1] + (z - c[1]) * P()]; };
+const fromGame = ([x, z]) => { const c = centre(); return [c[0] + (x - c[0]) / P(), c[1] + (z - c[1]) / P()]; };
+/** How large a piece is drawn, relative to the plan's metres (the game's size over the plan's scale). */
+const drawScale = (p) => (scaleOf(p) * lookK(p.kind)) / P();
+/** A piece that stands on another (display.attach) keeps its place on it at that piece's scale. */
+const hostOf = (p) => (D.attach && D.attach[p.id] ? pieceById(D.attach[p.id]) : null);
+const drawAt = (p) => { const host = hostOf(p); if (!host) return p.at; const f = lookK(host.kind) / P(); return [host.at[0] + (p.at[0] - host.at[0]) * f, host.at[1] + (p.at[1] - host.at[1]) * f]; };
+const info = (kind) => kindsInfo[kind] || { size: [2, 2, 2], boxes: [[0, 0, 2, 2]], cls: 'mark', unknown: true };
+const footprint = (p) => { const s = info(p.kind).size, k = drawScale(p); return [s[0] * k * (p.stretch || 1), s[1] * k]; };
+const lifted = (p) => (p.y || 0) > 0.5;
+const personAt = (v) => (Array.isArray(v) ? v : v.at);
+const round = (v, step) => Math.round(v / step) * step;
+const tidy = (v) => Math.round(v * 1000) / 1000;
+const snapOn = () => $('snap').checked;
+const snapStep = () => D.snap || 0.25;
+const snap = (v) => tidy(snapOn() ? round(v, snapStep()) : round(v, 0.01));
+
+// --- screen ------------------------------------------------------------------------------------------
+let W = 0, H = 0;
+const toScreen = ([x, z]) => [(x - view.x) * view.k + W / 2, (z - view.z) * view.k + H / 2];
+const toPlan = (sx, sy) => [(sx - W / 2) / view.k + view.x, (sy - H / 2) / view.k + view.z];
+function resize() { const r = canvas.getBoundingClientRect(), d = window.devicePixelRatio || 1; W = r.width; H = r.height; canvas.width = Math.round(W * d); canvas.height = Math.round(H * d); ctx.setTransform(d, 0, 0, d, 0, 0); draw(); }
+function fit() {
+  const c = centre(), half = plan.ring ? plan.ring.radius * 1.12 : plan.bounds ? Math.max(plan.bounds.max[0] - plan.bounds.min[0], plan.bounds.max[1] - plan.bounds.min[1]) * 0.56 : 30;
+  view = { x: c[0], z: c[1], k: Math.min(W, H) / (half * 2) }; draw();
+}
+function focusOn(at, zoom = null) { if (!at) return; view.x = at[0]; view.z = at[1]; if (zoom) view.k = Math.max(view.k, zoom); draw(); }
+
+// --- what can be picked: { key, at, movable, rect: [w, d, rot] | r (pixels) } -------------------------------
+function targets() {
+  const out = [];
+  for (const p of pieces()) {
+    // a piece that is mostly open (a hall with walls round it) is picked by its walls, so the ground inside it still pans and holds other things
+    const k = info(p.kind), s = drawScale(p), st = p.stretch || 1, covered = k.boxes.reduce((a, b) => a + b[2] * b[3], 0) / (k.size[0] * k.size[1]);
+    const parts = covered < 0.6 && k.boxes.length && k.cls !== 'prop' ? k.boxes.map(([bx, bz, bw, bd]) => [bx * s * st, bz * s, bw * s * st, bd * s]) : null;
+    out.push({ key: `piece:${p.id}`, at: drawAt(p), rect: [...footprint(p), p.rot || 0], parts, area: footprint(p)[0] * footprint(p)[1] - (lifted(p) ? 1e6 : 0), movable: true, piece: p });
+  }
+  out.sort((a, b) => a.area - b.area); // small and lifted things are picked before what they stand on
+  const dots = [];
+  if (show.plants && UI.plantsOn) {
+    plantPoints().forEach((pt, i) => dots.push({ key: `plant:${i}`, at: pt.at, r: Math.max(7, pointR(pt) * view.k), movable: true }));
+    exclusions().forEach((e, i) => dots.push({ key: `exclude:${i}`, at: e.at, r: Math.max(6, e.r * view.k), movable: true }));
+  }
+  dots.push({ key: 'spawn', at: plan.spawn.at, r: 9, movable: true });
+  if (show.people) for (const [id, v] of Object.entries(plan.people || {})) dots.push({ key: `person:${id}`, at: personAt(v), r: 7, movable: true });
+  if (show.things) for (const t of plan.things || []) dots.push({ key: `thing:${t.id}`, at: t.at, r: 7, movable: true });
+  if (show.routes) (plan.routes || []).forEach((r, ri) => r.forEach((pt, pi) => dots.push({ key: `route:${ri}:${pi}`, at: pt, r: 6, movable: true })));
+  if (show.doors) for (const d of plan.doors || []) { const at = doorAt(d); if (at) dots.push({ key: `door:${d.id}`, at, r: 7, movable: !d.piece && !!d.at }); }
+  // rule-made plants: picked only when zoomed in, after everything else that is small, before the pieces they stand by
+  const ruled = show.plants && view.k >= 6 ? ruleShown().filter(({ it }) => !DEBRIS.includes(it.kind) && !FOLLOWS.includes(it.rule)).map(({ it, i }) => ({ key: `rule:${i}`, at: it.at, r: 5, movable: false, ruled: true })) : [];
+  return [...dots, ...ruled, ...out];
+}
+function doorAt(d) {
+  if (d.at && !d.piece) return d.at;
+  const p = pieceById(d.piece), spot = p && info(p.kind).door;
+  if (!p) return d.at || null;
+  if (!spot) return p.at;
+  const k = scaleOf(p), t = rad(p.rot || 0), lx = spot[0] * k, lz = spot[1] * k;
+  return [p.at[0] + lx * Math.cos(t) + lz * Math.sin(t), p.at[1] - lx * Math.sin(t) + lz * Math.cos(t)];
+}
+function hits(t, x, z) {
+  const dx = x - t.at[0], dz = z - t.at[1];
+  if (t.rect) {
+    const [w, d, rot] = t.rect, a = rad(rot), c = Math.cos(a), s = Math.sin(a), u = dx * c - dz * s, v = dx * s + dz * c, pad = 3 / view.k;
+    if (t.parts) return t.parts.some(([bx, bz, bw, bd]) => Math.abs(u - bx) <= bw / 2 + 0.4 + pad && Math.abs(v - bz) <= bd / 2 + 0.4 + pad);
+    return Math.abs(u) <= Math.max(w / 2, 5 / view.k) + pad && Math.abs(v) <= Math.max(d / 2, 5 / view.k) + pad;
+  }
+  return Math.hypot(dx, dz) * view.k <= t.r + 3;
+}
+const pickAt = (x, z) => targets().find((t) => hits(t, x, z)) || null;
+/** Where a selection key's thing is, and how to put it somewhere else. */
+function handle(key) {
+  const [type, a, b] = key.split(':');
+  if (type === 'piece') { const p = pieceById(a); return p && { at: p.at, set: (v) => { p.at = v; }, piece: p }; }
+  if (type === 'spawn') return { at: plan.spawn.at, set: (v) => { plan.spawn.at = v; } };
+  if (type === 'person') { const v = (plan.people || {})[a]; return v && { at: personAt(v), set: (n) => { if (Array.isArray(v)) plan.people[a] = n; else v.at = n; } }; }
+  if (type === 'thing') { const t = (plan.things || []).find((q) => q.id === a); return t && { at: t.at, set: (v) => { t.at = v; }, thing: t }; }
+  if (type === 'route') { const r = (plan.routes || [])[+a]; return r && r[+b] && { at: r[+b], set: (v) => { r[+b] = v; } }; }
+  if (type === 'door') { const d = (plan.doors || []).find((q) => q.id === a); return d && { at: doorAt(d), set: (v) => { if (!d.piece && d.at) d.at = v; }, door: d, fixed: !!d.piece }; }
+  if (type === 'plant') { const pt = plantPoints()[+a]; return pt && { at: pt.at, set: (v) => { pt.at = v; }, point: pt }; }
+  if (type === 'exclude') { const e = exclusions()[+a]; return e && { at: e.at, set: (v) => { e.at = v; }, exclusion: e }; }
+  if (type === 'rule') { const it = rule.items[+a]; return it && { at: it.at, set: () => {}, fixed: true, ruleItem: it }; }
+  return null;
+}
+
+// --- drawing -------------------------------------------------------------------------------------------
+function localFrame(at, rotDeg, fn) { const [sx, sy] = toScreen(at), t = rad(rotDeg), c = Math.cos(t), s = Math.sin(t); ctx.save(); ctx.translate(sx, sy); ctx.transform(c, -s, s, c, 0, 0); ctx.scale(view.k, view.k); fn(1 / view.k); ctx.restore(); }
+const circle = (at, r, fill, stroke, lw = 1) => { const [sx, sy] = toScreen(at); ctx.beginPath(); ctx.arc(sx, sy, Math.max(0.5, r), 0, Math.PI * 2); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); } };
+const poly = (pts, close = false) => { ctx.beginPath(); pts.forEach((p, i) => { const [sx, sy] = toScreen(p); if (i) ctx.lineTo(sx, sy); else ctx.moveTo(sx, sy); }); if (close) ctx.closePath(); };
+const label = (text, at, colour = '#2a1a10', dx = 0, dy = 0, size = 11, align = 'center') => { const [sx, sy] = toScreen(at); ctx.font = `${size}px system-ui, sans-serif`; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.lineWidth = 3; ctx.strokeStyle = colour === '#2a1a10' ? '#fff8' : '#000a'; ctx.strokeText(text, sx + dx, sy + dy); ctx.fillStyle = colour; ctx.fillText(text, sx + dx, sy + dy); };
+
+/** The layers the project draws (its compile's and its files'), in the order they are drawn. */
+function layerList() {
+  const out = [];
+  const comp = (pv.overlays && typeof pv.overlays === 'object') ? pv.overlays : {};
+  for (const l of UI.compileLayers) out.push({ id: l.id, data: comp[l.id] || null });
+  for (const [id, o] of Object.entries(comp)) if (!UI.compileLayers.some((l) => l.id === id)) out.push({ id, data: o });
+  for (const o of UI.overlays) out.push({ id: o.id, data: ovl[o.id] || null });
+  return out;
+}
+function draw() {
+  if (!plan) return;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#8a6a4c'; ctx.fillRect(0, 0, W, H);
+  const c = centre();
+  // the map's ground
+  if (plan.ring) circle(c, plan.ring.radius * view.k, '#c9a27a', null);
+  else if (plan.bounds) { const [x0, y0] = toScreen(plan.bounds.min), [x1, y1] = toScreen(plan.bounds.max); ctx.fillStyle = '#c9a27a'; ctx.fillRect(x0, y0, x1 - x0, y1 - y0); ctx.strokeStyle = COLOUR.wall; ctx.lineWidth = 2; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); }
+  const layers = layerList();
+  for (const l of layers) if (show[l.id] && l.data && l.data.shapes) for (const s of l.data.shapes) if (s.type !== 'grid' && !s.over) drawShape(s);
+  if (show.grid) drawGrid();
+  drawRing();
+  // the plan's pieces: on the ground first, then what is lifted
+  const list = pieces().slice().sort((a, b) => (lifted(a) - lifted(b)) || (footprint(b)[0] * footprint(b)[1] - footprint(a)[0] * footprint(a)[1]));
+  for (const p of list) drawPiece(p);
+  for (const l of layers) if (show[l.id] && l.data && l.data.shapes) for (const s of l.data.shapes) if (s.type === 'grid' || s.over) drawShape(s); // over the pieces: what the game treats as solid
+  if (show.labels) for (const p of list) drawPieceLabel(p);
+  if (show.routes) (plan.routes || []).forEach((r, ri) => {
+    const hue = (ri * 47) % 360; poly(r, true); ctx.strokeStyle = `hsl(${hue} 85% 72% / 0.7)`; ctx.lineWidth = 1.2; ctx.setLineDash([6, 4]); ctx.stroke(); ctx.setLineDash([]);
+    r.forEach((pt, pi) => circle(pt, sel.includes(`route:${ri}:${pi}`) ? 6 : 4, `hsl(${hue} 85% 72%)`, sel.includes(`route:${ri}:${pi}`) ? COLOUR.sel : '#0008', sel.includes(`route:${ri}:${pi}`) ? 2.5 : 1));
+  });
+  if (show.doors) for (const d of plan.doors || []) { const at = doorAt(d); if (!at) continue; const on = sel.includes(`door:${d.id}`), [sx, sy] = toScreen(at); ctx.fillStyle = COLOUR.door; ctx.strokeStyle = on ? COLOUR.sel : '#402010'; ctx.lineWidth = on ? 2.5 : 1; ctx.beginPath(); ctx.rect(sx - 5, sy - 6, 10, 12); ctx.fill(); ctx.stroke(); if (show.labels && view.k > 4) label(d.sign || d.id, at, '#ffd9c2', 9, 0, 10, 'left'); }
+  if (show.things) for (const t of plan.things || []) {
+    const on = sel.includes(`thing:${t.id}`), [sx, sy] = toScreen(t.at);
+    if (on) circle(t.at, t.radius * view.k, '#ffd34d22', '#ffd34d', 1);
+    ctx.save(); ctx.translate(sx, sy); ctx.rotate(Math.PI / 4); ctx.fillStyle = COLOUR.thing; ctx.strokeStyle = on ? COLOUR.sel : '#5a4300'; ctx.lineWidth = on ? 2.5 : 1; ctx.beginPath(); ctx.rect(-5, -5, 10, 10); ctx.fill(); ctx.stroke(); ctx.restore();
+    if (show.labels) label(t.id, t.at, '#ffe9a8', 10, 0, 10, 'left');
+  }
+  if (show.people) for (const [id, v] of Object.entries(plan.people || {})) { const on = sel.includes(`person:${id}`); circle(personAt(v), on ? 7 : 5.5, COLOUR.person, on ? COLOUR.sel : '#063', on ? 2.5 : 1); if (show.labels) label(id, personAt(v), '#d8f7ff', 10, 0, 10, 'left'); }
+  { // where the player arrives, and which way they face
+    const on = sel.includes('spawn'), [sx, sy] = toScreen(plan.spawn.at), t = rad(plan.spawn.yaw || 0);
+    ctx.save(); ctx.translate(sx, sy); ctx.rotate(Math.atan2(Math.cos(t), Math.sin(t))); // the arrow's point along (sin yaw, cos yaw): 0 faces down the screen (south)
+    ctx.beginPath(); ctx.moveTo(11, 0); ctx.lineTo(-7, -7); ctx.lineTo(-3, 0); ctx.lineTo(-7, 7); ctx.closePath(); ctx.fillStyle = COLOUR.spawn; ctx.strokeStyle = on ? COLOUR.sel : '#2a4a00'; ctx.lineWidth = on ? 2.5 : 1; ctx.fill(); ctx.stroke(); ctx.restore();
+    if (show.labels) label('you arrive', plan.spawn.at, '#e4ffc0', 13, 0, 10, 'left');
+  }
+  if (show.plants && UI.plantsOn) drawPlants();
+  drawSelection();
+  if (drag && drag.box) { const [x0, y0] = drag.box.from, [x1, y1] = drag.box.to; ctx.strokeStyle = '#fff'; ctx.setLineDash([4, 3]); ctx.lineWidth = 1; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.setLineDash([]); }
+  drawScaleBar();
+}
+/** One shape of a project's layer, in the plan's metres (README "Overlays"). */
+function drawShape(s) {
+  const dash = s.dash ? (Array.isArray(s.dash) ? s.dash : [4, 3]) : [];
+  ctx.lineCap = s.round ? 'round' : 'butt'; ctx.lineJoin = s.round ? 'round' : 'miter';
+  if (s.type === 'rect') {
+    localFrame(s.at, s.rot || 0, (px) => { ctx.beginPath(); ctx.rect(-s.w / 2, -s.d / 2, s.w, s.d); if (s.fill) { ctx.fillStyle = s.fill; ctx.fill(); } if (s.stroke) { ctx.strokeStyle = s.stroke; ctx.lineWidth = (s.lw || 1) * px; ctx.setLineDash(dash.map((v) => v * px)); ctx.stroke(); ctx.setLineDash([]); } });
+  } else if (s.type === 'circle') {
+    ctx.setLineDash(dash); circle(s.at, Math.max(s.minPx || 0, s.r * view.k), s.fill, s.stroke, s.lw || 1); ctx.setLineDash([]);
+  } else if (s.type === 'line' && Array.isArray(s.pts) && s.pts.length > 1) {
+    poly(s.pts, !!s.closed); ctx.strokeStyle = s.stroke || '#000'; ctx.lineWidth = s.width ? Math.max(s.minPx || 1, s.width * view.k) : s.px || 1; ctx.setLineDash(dash); ctx.stroke(); ctx.setLineDash([]);
+  } else if (s.type === 'dot') {
+    const [sx, sy] = toScreen(s.at), r = s.px || 5; ctx.fillStyle = s.fill || '#000'; ctx.fillRect(sx - r / 2, sy - r / 2, r, r);
+  } else if (s.type === 'label') {
+    label(String(s.text), s.at, s.colour || '#fff', 0, 0, s.size || 10);
+  } else if (s.type === 'grid') {
+    if (!s._img) s._img = gridImage(s);
+    if (!s._img) return;
+    const [x, z] = toScreen(s.min), size = s.cell * view.k; ctx.imageSmoothingEnabled = false; ctx.drawImage(s._img, x, z, s.cols * size, s.rows * size);
+  }
+  ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+}
+/** A height grid (uint16 per cell, base64): nowhere to stand (none, or above `solidAbove`) blue; raised ground paler. */
+function gridImage(g) {
+  const bytes = Uint8Array.from(atob(g.data), (ch) => ch.charCodeAt(0));
+  if (bytes.length !== g.cols * g.rows * 2) return null;
+  const cells = new Uint16Array(bytes.buffer), off = document.createElement('canvas'); off.width = g.cols; off.height = g.rows;
+  const o = off.getContext('2d'), img = o.createImageData(g.cols, g.rows), above = g.solidAbove ?? 0.3;
+  for (let i = 0; i < cells.length; i++) {
+    const v = cells[i], height = v / (g.scale || 1) - (g.offset || 0);
+    if (v !== g.none && height < above) continue;
+    img.data[i * 4] = 30; img.data[i * 4 + 1] = 50; img.data[i * 4 + 2] = 150; img.data[i * 4 + 3] = v === g.none ? 120 : 60;
+  }
+  o.putImageData(img, 0, 0); return off;
+}
+function drawGrid() {
+  const [x0, z0] = toPlan(0, 0), [x1, z1] = toPlan(W, H);
+  const step = view.k >= 14 ? 1 : view.k >= 3.2 ? 5 : 10;
+  for (let x = Math.floor(x0 / step) * step; x <= x1; x += step) { const [sx] = toScreen([x, 0]); ctx.strokeStyle = x % 10 === 0 ? '#0000002e' : '#00000014'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(Math.round(sx) + 0.5, 0); ctx.lineTo(Math.round(sx) + 0.5, H); ctx.stroke(); }
+  for (let z = Math.floor(z0 / step) * step; z <= z1; z += step) { const [, sy] = toScreen([0, z]); ctx.strokeStyle = z % 10 === 0 ? '#0000002e' : '#00000014'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, Math.round(sy) + 0.5); ctx.lineTo(W, Math.round(sy) + 0.5); ctx.stroke(); }
+}
+function drawRing() {
+  if (!plan.ring) return;
+  const { centre: C, radius: R, gateWidth = 0 } = plan.ring, gate = plan.gate;
+  const ga = gate ? Math.atan2(gate[1] - C[1], gate[0] - C[0]) : 0, half = gate ? gateWidth / 2 / R : 0;
+  const pts = []; for (let k = 0; k <= 180; k++) { const a = ga + half + (k / 180) * (Math.PI * 2 - half * 2); pts.push([C[0] + Math.cos(a) * R, C[1] + Math.sin(a) * R]); }
+  poly(pts); ctx.strokeStyle = COLOUR.wall; ctx.lineWidth = Math.max(2.5, ((D.wallThickness || 0.6) / P()) * view.k); ctx.stroke();
+  if (gate) { for (const side of [-1, 1]) { const a = ga + side * half; circle([C[0] + Math.cos(a) * R, C[1] + Math.sin(a) * R], Math.max(4, 0.9 * view.k), COLOUR.wall, '#5a4030'); } if (show.labels) label('GATE', gate, '#fff', 0, 0, 11); }
+}
+/** One plant: a pot (a rim, green inside), a star (an agave, say), anything else a disc. `r` in pixels. */
+function plantIcon(at, built, r, { alpha = 1, on = false, rot = null } = {}) {
+  const d = plantStyle(built), [sx, sy] = toScreen(at);
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(sx, sy);
+  ctx.beginPath();
+  if (d.star) { const n = d.star; for (let k = 0; k < n * 2; k++) { const a = (k / (n * 2)) * Math.PI * 2 + (rot ?? 0), q = k % 2 ? r * 0.42 : r; if (k) ctx.lineTo(Math.cos(a) * q, Math.sin(a) * q); else ctx.moveTo(Math.cos(a) * q, Math.sin(a) * q); } ctx.closePath(); }
+  else ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = d.ring || d.fill || '#7fbf6a'; ctx.fill();
+  if (d.ring) { ctx.beginPath(); ctx.arc(0, 0, r * 0.66, 0, Math.PI * 2); ctx.fillStyle = d.fill || '#7fbf6a'; ctx.fill(); }
+  ctx.lineWidth = on ? 2.5 : 1; ctx.strokeStyle = on ? COLOUR.sel : '#123d16'; ctx.beginPath(); ctx.arc(0, 0, r + (on ? 1.5 : 0), 0, Math.PI * 2); if (on || alpha >= 1) ctx.stroke();
+  if (rot !== null && alpha >= 1 && r >= 6) { ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.sin(rot) * r, Math.cos(rot) * r); ctx.strokeStyle = '#0008'; ctx.lineWidth = 1; ctx.stroke(); } // which way it faces
+  ctx.restore();
+}
+function drawPlants() {
+  // rule-made, faint (an excluded one is not drawn: it goes at the project's next planting)
+  if (rule.present) for (const { it, i } of ruleShown()) {
+    const d = plantStyle(it.kind), r = Math.max(DEBRIS.includes(it.kind) ? 1 : 2, (((d.r || 0.25) * (it.scale ?? 1)) / P()) * view.k);
+    plantIcon(it.at, it.kind, r, { alpha: sel.includes(`rule:${i}`) ? 1 : 0.38, on: sel.includes(`rule:${i}`) });
+  }
+  exclusions().forEach((e, i) => { const on = sel.includes(`exclude:${i}`); ctx.setLineDash([4, 3]); circle(e.at, Math.max(5, e.r * view.k), '#ff5a5a22', on ? COLOUR.sel : '#ff5a5a', on ? 2.5 : 1.4); ctx.setLineDash([]); });
+  plantPoints().forEach((pt, i) => {
+    const on = sel.includes(`plant:${i}`), r = Math.max(5, pointR(pt) * view.k);
+    plantIcon(pt.at, builtOf(pt.kind)[0], r, { on, rot: pt.rot === undefined ? null : rad(pt.rot) });
+    if (show.labels && (view.k > 9 || on)) label(plantLabels[pt.kind] ? plantLabels[pt.kind].replace(/ \(.*\)$/, '') : pt.kind, pt.at, '#d9ffd0', r + 4, 0, 10, 'left');
+  });
+}
+function drawPiece(p) {
+  const k = info(p.kind), on = sel.includes(`piece:${p.id}`), up = lifted(p), s = drawScale(p), st = p.stretch || 1, [w, d] = footprint(p), pre = presetOf(p), colour = classOf(k.cls).colour;
+  localFrame(drawAt(p), p.rot || 0, (px) => {
+    ctx.globalAlpha = up ? 0.55 : 1;
+    const whole = k.boxes.length === 1 && Math.abs(k.boxes[0][2] - k.size[0]) < 0.01 && Math.abs(k.boxes[0][3] - k.size[1]) < 0.01;
+    ctx.fillStyle = pre ? pre.colour : colour + (whole ? '' : '55'); ctx.strokeStyle = on ? COLOUR.sel : pre ? '#123d16' : '#5a4030'; ctx.lineWidth = (on ? 2.5 : 1) * px;
+    if (up) ctx.setLineDash([4 * px, 3 * px]);
+    const airy = !whole && k.cls === 'prop' && k.boxes.reduce((a, b) => a + b[2] * b[3], 0) < 0.1 * k.size[0] * k.size[1];
+    ctx.beginPath(); if (airy) ctx.ellipse(0, 0, w / 2, d / 2, 0, 0, Math.PI * 2); else ctx.rect(-w / 2, -d / 2, w, d); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+    if (!whole) { ctx.fillStyle = colour; for (const [bx, bz, bw, bd] of k.boxes) ctx.fillRect((bx - bw / 2) * s * st, (bz - bd / 2) * s, bw * s * st, bd * s); } // where it is solid (an open hall, a colonnade's piers)
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#5a4030'; ctx.lineWidth = 2 * px; ctx.beginPath(); ctx.moveTo(0, d / 2); ctx.lineTo(0, d / 2 + 6 * px); ctx.stroke(); // the front
+    if (pre) { ctx.beginPath(); ctx.arc(0, 0, Math.max(Math.min(w, d) * 0.3, 3 * px), 0, Math.PI * 2); ctx.fillStyle = '#1f6b28'; ctx.fill(); } // a preset's mark (the plant in a pot)
+  });
+}
+function drawPieceLabel(p) {
+  const size = Math.max(9, Math.min(12, 3 + view.k));
+  if (view.k > 5.5 || sel.includes(`piece:${p.id}`) || info(p.kind).cls === 'mark') label(p.id, drawAt(p), '#2a1a10', 0, lifted(p) ? size + 1 : 0, size);
+}
+const turnHandle = () => { if (sel.length !== 1 || !sel[0].startsWith('piece:')) return null; const p = pieceById(sel[0].slice(6)); if (!p) return null; const [, d] = footprint(p), t = rad(p.rot || 0), reach = d / 2 + 22 / view.k, at = drawAt(p); return { p, at: [at[0] + Math.sin(t) * reach, at[1] + Math.cos(t) * reach], from: at }; };
+function drawSelection() {
+  const th = turnHandle();
+  if (th) { poly([th.from, th.at]); ctx.strokeStyle = COLOUR.sel; ctx.lineWidth = 1.5; ctx.stroke(); circle(th.at, 6, '#fff', COLOUR.sel, 2); }
+}
+function drawScaleBar() {
+  const nice = [1, 2, 5, 10, 20, 50, 100], n = nice.find((v) => v * view.k >= 90) || 100, x = 14, y = H - 18, len = n * view.k;
+  ctx.fillStyle = '#000a'; ctx.fillRect(x - 6, y - 20, Math.max(len, 230) + 12, 32);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x, y + 4); ctx.lineTo(x + len, y + 4); ctx.lineTo(x + len, y - 4); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(`${n} m in the plan` + (P() !== 1 ? ` = ${tidy(n * P())} m ${D.gameLabel}` : '') + `   (grid ${view.k >= 14 ? 1 : view.k >= 3.2 ? 5 : 10} m)`, x, y - 8);
+}
+
+// --- changing the plan ----------------------------------------------------------------------------------
+const snapshot = () => JSON.stringify({ plan, plants, sel });
+function remember() { undoStack.push(snapshot()); redoStack = []; }
+function restore(text) { const s = JSON.parse(text); plan = s.plan; plants = s.plants; sel = s.sel.filter((k) => handle(k)); changed(); }
+function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); status('Undone.'); }
+function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); status('Redone.'); }
+const isDirty = () => JSON.stringify(plan) !== savedJson || JSON.stringify(plants) !== savedPlantsJson;
+let previewTimer = null, previewSeq = 0;
+function changed({ panel = true } = {}) {
+  draw(); if (panel) renderSelected();
+  $('dirty').textContent = isDirty() ? 'unsaved' : '';
+  $('undo').disabled = !undoStack.length; $('redo').disabled = !redoStack.length;
+  updateJobButtons();
+  clearTimeout(previewTimer); previewTimer = setTimeout(refreshPreview, 250);
+}
+async function refreshPreview() {
+  const seq = ++previewSeq;
+  try { const r = await post('preview', { plan, plants }); const body = await r.json(); if (seq !== previewSeq) return; if (!r.ok) { status(body.error || 'the preview failed', 'bad'); return; } applyPreview(body); } catch (e) { status('The editor\'s server is not answering: ' + e.message, 'bad'); }
+}
+function applyPreview(body) {
+  const had = layerList().map((l) => l.id).join();
+  pv = { errors: body.errors || [], problems: body.problems || [], seated: body.seated || {}, overlays: body.overlays || pv.overlays, status: body.status || null };
+  if (layerList().map((l) => l.id).join() !== had) buildLayers();
+  renderProblems(); renderStatus(); draw(); if (sel.length === 1) renderSelected(); window.__map.previews++;
+}
+function status(text, kind = '') { const e = $('status'); e.textContent = text; e.className = kind; }
+function uniqueId(base) { base = String(base).toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/^[^a-z]+/, '').replace(/\d+$/, '') || 'piece'; const pre = activePresets().find((s) => s.idPrefix === base); if (pre) return nextSeriesId(base); const used = new Set(pieces().map((p) => p.id)); let id = base, n = 1; while (used.has(id) || (RESERVED && RESERVED.test(id))) id = `${base}${++n}`; return id; }
+function select(keys, add = false) { sel = add ? [...new Set([...sel, ...keys])] : keys; sel = sel.filter((k) => handle(k)); draw(); renderSelected(); }
+const selectedPieces = () => sel.filter((k) => k.startsWith('piece:')).map((k) => pieceById(k.slice(6))).filter(Boolean);
+function removeSelected() {
+  if (!sel.length) return;
+  const kept = [];
+  let did = false;
+  const before = snapshot();
+  for (const key of sel) {
+    const [type, a, b] = key.split(':');
+    if (type === 'piece') {
+      const door = (plan.doors || []).find((d) => d.piece === a);
+      if (door) { kept.push(key); status(`${a} has a door on it (${door.id}): move the door to another piece or remove it first.`, 'bad'); continue; }
+      for (const list of [plan.pieces, plan.marks || []]) { const i = list.findIndex((p) => p.id === a); if (i >= 0) { list.splice(i, 1); did = true; } }
+    } else if (type === 'thing') { plan.things = plan.things.filter((t) => t.id !== a); did = true; }
+    else if (type === 'person') { delete plan.people[a]; did = true; }
+    else if (type === 'door') { plan.doors = plan.doors.filter((d) => d.id !== a); did = true; }
+    else if (type === 'route') { const r = plan.routes[+a]; if (r && r.length > 2) { r[+b] = null; did = true; } else if (r) { plan.routes[+a] = null; did = true; } }
+    else if (type === 'plant' && plantPoints()[+a]) { plants.points[+a] = null; did = true; }
+    else if (type === 'exclude' && exclusions()[+a]) { plants.exclude[+a] = null; did = true; }
+    else if (type === 'rule' && rule.items[+a]) { PE.exclude(ensurePlants(), rule.items[+a], EXCLUDE_R); did = true; }
+    else kept.push(key);
+  }
+  if (plants && plants.points) plants.points = plants.points.filter(Boolean);
+  if (plants && plants.exclude) { plants.exclude = plants.exclude.filter(Boolean); if (!plants.exclude.length) delete plants.exclude; }
+  kept.splice(0, kept.length, ...kept.filter((k) => !/^(plant|exclude|rule):/.test(k)));
+  if (plan.routes) plan.routes = plan.routes.filter(Boolean).map((r) => r.filter(Boolean)).filter((r) => r.length >= 2);
+  if (!did) return;
+  undoStack.push(before); redoStack = [];
+  sel = kept; changed();
+}
+function duplicateSelected() {
+  const list = selectedPieces(), pts = sel.filter((k) => k.startsWith('plant:')).map((k) => plantPoints()[+k.slice(6)]).filter(Boolean);
+  if (!list.length && !pts.length) return;
+  remember();
+  const made = [];
+  for (const pt of pts) { const q = clone(pt); q.at = [tidy(pt.at[0] + 1), tidy(pt.at[1] + 1)]; plants.points.push(q); made.push(`plant:${plants.points.length - 1}`); }
+  for (const p of list) { const q = clone(p); q.id = uniqueId(p.id); q.at = [tidy(p.at[0] + 2), tidy(p.at[1] + 2)]; (plan.marks && plan.marks.includes(p) ? plan.marks : plan.pieces).push(q); made.push(`piece:${q.id}`); }
+  sel = made; changed(); status(`Duplicated ${made.length}: ${made.map((k) => k.slice(6)).join(', ')}.`);
+}
+function turnSelected(by) {
+  const pts = sel.filter((k) => k.startsWith('plant:')).map((k) => plantPoints()[+k.slice(6)]).filter(Boolean);
+  if (pts.length) { remember(); for (const pt of pts) pt.rot = norm((pt.rot || 0) + by); for (const p of selectedPieces()) p.rot = norm((p.rot || 0) + by); changed(); return; }
+  const list = selectedPieces(); if (!list.length) { if (sel.includes('spawn')) { remember(); plan.spawn.yaw = norm((plan.spawn.yaw || 0) + by); changed(); } return; }
+  remember(); for (const p of list) p.rot = norm((p.rot || 0) + by); changed();
+}
+const norm = (deg) => { let v = ((deg + 180) % 360 + 360) % 360 - 180; if (v === -180) v = 180; return tidy(v); };
+function nudge(dx, dz) {
+  const hs = sel.map(handle).filter((x) => x && !x.fixed); if (!hs.length) return;
+  remember(); for (const x of hs) x.set([tidy(x.at[0] + dx), tidy(x.at[1] + dz)]); changed();
+}
+/** Moving a rule-made plant: an exclusion where it stood (the rule plants nothing there now) and a point of its own. Returns the point's key. */
+function adoptRule(i) {
+  const it = rule.items[i], n = it ? PE.adopt(ensurePlants(), it, { pointKindOf, kinds: plantKinds, r: EXCLUDE_R }) : -1;
+  if (n < 0) { status(`A rule-made ${it ? it.kind : 'thing'} cannot be placed by hand (no plant of that kind): it can only be removed (Del).`, 'bad'); return null; }
+  return `plant:${n}`;
+}
+function placeAt(kind, x, z) {
+  remember();
+  if (kind.startsWith('plant:')) {
+    ensurePlants().points.push({ kind: kind.slice(6), at: [snap(x), snap(z)] });
+    sel = [`plant:${plants.points.length - 1}`]; changed();
+    status(`Placed a ${plantLabels[kind.slice(6)] || kind.slice(6)}. Click again for another; Esc to stop.` + (UI.hints.plant ? ` ${UI.hints.plant}` : ''));
+    return;
+  }
+  const pre = kind.startsWith('preset:') ? UI.presets.find((s) => s.id === kind.slice(7)) : null;
+  const p = pre ? { id: nextSeriesId(pre.idPrefix), kind: pre.kind, at: [snap(x), snap(z)], rot: 0, ...(pre.scale ? { scale: pre.scale } : {}) } : { id: uniqueId((kind.split(':')[1] || kind).replace(/_\d.*$/, '')), kind, at: [snap(x), snap(z)], rot: 0 };
+  plan.pieces.push(p); sel = [`piece:${p.id}`]; changed();
+  status(`Placed ${p.id} (${p.kind}). Click again for another; Esc to stop.`);
+}
+
+// --- the mouse -------------------------------------------------------------------------------------------
+canvas.addEventListener('pointerdown', (e) => {
+  if (!plan) return;
+  const [x, z] = toPlan(e.offsetX, e.offsetY);
+  canvas.setPointerCapture(e.pointerId);
+  if (e.button !== 0) { drag = { pan: true, sx: e.offsetX, sy: e.offsetY, x: view.x, z: view.z }; return; }
+  if (placing) { placeAt(placing, x, z); return; }
+  const th = turnHandle();
+  if (th && Math.hypot(...toScreen(th.at).map((v, i) => v - [e.offsetX, e.offsetY][i])) <= 9) { drag = { turn: th.p, before: snapshot(), moved: false }; return; }
+  const t = pickAt(x, z);
+  if (e.shiftKey) { drag = { box: { from: [e.offsetX, e.offsetY], to: [e.offsetX, e.offsetY] }, toggle: t ? t.key : null }; return; } // Shift: a box when dragged, add or drop one thing when clicked
+  if (!t) { if (!e.ctrlKey) select([]); drag = { pan: true, sx: e.offsetX, sy: e.offsetY, x: view.x, z: view.z }; return; }
+  if (t.ruled && !e.ctrlKey) { select([t.key]); drag = { fromRule: +t.key.slice(5), start: [x, z], before: snapshot(), moved: false }; return; } // dragged: it becomes a point of its own
+  if (e.ctrlKey) { select(sel.includes(t.key) ? sel.filter((k) => k !== t.key) : [...sel, t.key]); return; }
+  if (!sel.includes(t.key)) select([t.key]);
+  const moving = sel.map((key) => ({ key, h: handle(key) })).filter((m) => m.h && !m.h.fixed).map((m) => ({ ...m, from: [...m.h.at] }));
+  const lead = moving.find((m) => m.key === t.key) || moving[0];
+  if (lead) drag = { move: moving, lead, start: [x, z], before: snapshot(), moved: false };
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!plan) return;
+  const [x, z] = toPlan(e.offsetX, e.offsetY), g = toGame([x, z]);
+  $('hud').textContent = `plan x ${x.toFixed(2)}  z ${z.toFixed(2)}` + (P() !== 1 ? `   ·   ${D.gameLabel} x ${g[0].toFixed(2)}  z ${g[1].toFixed(2)}` : '');
+  if (!drag) {
+    const th = turnHandle(), t = pickAt(x, z);
+    canvas.style.cursor = placing ? 'crosshair' : th && Math.hypot(...toScreen(th.at).map((v, i) => v - [e.offsetX, e.offsetY][i])) <= 9 ? 'grab' : t ? 'move' : 'default';
+    if (t && t.ruled) { const it = rule.items[+t.key.slice(5)]; $('hud').textContent += `   ·   made by rule: ${it.kind}${it.source ? ` (${it.source})` : ''}${it.rule ? `, ${it.rule}` : ''} (drag to move it, Del to remove it)`; }
+    else if (t && t.key.startsWith('plant:')) { const pt = plantPoints()[+t.key.slice(6)]; $('hud').textContent += `   ·   placed by hand: ${plantLabels[pt.kind] || pt.kind}`; }
+    else if (t && t.key.startsWith('exclude:')) $('hud').textContent += '   ·   an exclusion: the rules plant nothing here';
+    return;
+  }
+  if (drag.fromRule !== undefined && !drag.move) { // a rule-made plant starts to move: from here on it is a point of its own
+    if (Math.hypot(e.offsetX - toScreen(drag.start)[0], e.offsetY - toScreen(drag.start)[1]) < 3) return;
+    const key = adoptRule(drag.fromRule);
+    if (!key) { drag = null; return; }
+    sel = [key];
+    const hh = handle(key);
+    drag.move = [{ key, h: hh, from: [...hh.at] }]; drag.lead = drag.move[0]; drag.moved = true;
+  }
+  if (drag.pan) { view.x = drag.x - (e.offsetX - drag.sx) / view.k; view.z = drag.z - (e.offsetY - drag.sy) / view.k; draw(); return; }
+  if (drag.box) { drag.box.to = [e.offsetX, e.offsetY]; draw(); return; }
+  if (drag.turn) {
+    const at = drawAt(drag.turn), deg = (Math.atan2(x - at[0], z - at[1]) * 180) / Math.PI; // the front is (sin rot, cos rot)
+    drag.turn.rot = norm(e.altKey ? Math.round(deg) : round(deg, 15)); drag.moved = true; draw(); renderSelected(); return;
+  }
+  if (drag.move) {
+    // the thing under the mouse lands on the grid; the rest of the selection keeps its place beside it
+    const L = drag.lead, f = L.h.piece && hostOf(L.h.piece) ? P() / lookK(hostOf(L.h.piece).kind) : 1;
+    const dx = snap(L.from[0] + (x - drag.start[0]) * f) - L.from[0], dz = snap(L.from[1] + (z - drag.start[1]) * f) - L.from[1];
+    if (!drag.moved && Math.hypot(e.offsetX - toScreen(drag.start)[0], e.offsetY - toScreen(drag.start)[1]) < 3) return;
+    drag.moved = true;
+    for (const m of drag.move) m.h.set([tidy(m.from[0] + dx), tidy(m.from[1] + dz)]);
+    for (const m of drag.move) m.h = handle(m.key);
+    draw(); if (sel.length === 1) renderSelected();
+  }
+});
+canvas.addEventListener('pointerup', () => {
+  const d = drag; drag = null;
+  if (!d) return;
+  if (d.box) {
+    if (Math.hypot(d.box.to[0] - d.box.from[0], d.box.to[1] - d.box.from[1]) < 4) { if (d.toggle) select(sel.includes(d.toggle) ? sel.filter((k) => k !== d.toggle) : [...sel, d.toggle]); else draw(); return; }
+    const [a, b] = [toPlan(...d.box.from), toPlan(...d.box.to)], x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), z0 = Math.min(a[1], b[1]), z1 = Math.max(a[1], b[1]);
+    select(targets().filter((t) => !t.ruled && t.at[0] >= x0 && t.at[0] <= x1 && t.at[1] >= z0 && t.at[1] <= z1).map((t) => t.key), true); return;
+  }
+  if ((d.move || d.turn) && d.moved) { undoStack.push(d.before); redoStack = []; changed(); }
+});
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault(); if (!plan) return;
+  const before = toPlan(e.offsetX, e.offsetY);
+  view.k = Math.max(1.2, Math.min(90, view.k * (e.deltaY > 0 ? 0.87 : 1.15)));
+  view.x = before[0] - (e.offsetX - W / 2) / view.k; view.z = before[1] - (e.offsetY - H / 2) / view.k; draw();
+}, { passive: false });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+// Alt is "turn freely": keep the browser from taking it as its menu key (on Windows a bare Alt focuses Chrome's menu, and the next keys go there)
+for (const type of ['keydown', 'keyup']) window.addEventListener(type, (e) => { if (e.key === 'Alt') e.preventDefault(); });
+window.addEventListener('keydown', (e) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+  const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
+  if (mod && key === 's') { e.preventDefault(); save(); return; }
+  if (typing) return;
+  if (mod && key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+  else if (mod && key === 'y') { e.preventDefault(); redo(); }
+  else if (mod && key === 'd') { e.preventDefault(); duplicateSelected(); }
+  else if (key === 'escape') { if (placing) { placing = null; markPalette(); status('Stopped placing.'); } else select([]); }
+  else if (key === 'delete' || key === 'backspace') { e.preventDefault(); removeSelected(); }
+  else if (key === 'r') turnSelected((e.shiftKey ? -1 : 1) * (e.altKey ? 1 : 15));
+  else if (key === 'f') fit();
+  else if (key.startsWith('arrow')) { e.preventDefault(); const s = e.shiftKey ? 1 : snapStep(); nudge(key === 'arrowleft' ? -s : key === 'arrowright' ? s : 0, key === 'arrowup' ? -s : key === 'arrowdown' ? s : 0); }
+});
+window.addEventListener('beforeunload', (e) => { if (plan && isDirty()) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('resize', resize);
+
+// --- the panels --------------------------------------------------------------------------------------------
+const swatch = (style) => h('i', { style: `display:inline-block;width:10px;height:10px;border-radius:50%;${style};margin-right:6px;vertical-align:-1px` });
+const tagOf = (cls, text) => { const c = classOf(cls); return h('span', { class: 'tag', textContent: text || c.tag, style: `background:${c.colour}` }); };
+function buildPalette() {
+  const box = $('palette'); box.textContent = '';
+  const tags = Object.entries(UI.classes).filter(([cls]) => Object.values(kindsInfo).some((k) => k.cls === cls));
+  $('palHelp').replaceChildren('Pick one, then click the map where it goes. It stays picked (', h('b', { textContent: 'Esc' }), ' to stop).', ...(tags.length > 1 ? [' The tag says what it is: ', ...tags.flatMap(([cls, c], i) => [i ? ', ' : '', tagOf(cls), ` ${c.legend}`]), '.'] : []));
+  const presets = activePresets();
+  for (const group of [...new Set(presets.map((s) => s.group))]) {
+    box.append(h('div', { class: 'pal-h', textContent: group }));
+    const grid = h('div', { class: 'pal' });
+    for (const s of presets.filter((q) => q.group === group)) {
+      const b = h('button', { title: `${s.kind}${s.scale ? ` at scale ${s.scale}` : ''} with the next free ${s.idPrefix}N id.${s.note ? ' ' + s.note : ''}`, onclick: () => { placing = placing === `preset:${s.id}` ? null : `preset:${s.id}`; markPalette(); } }, h('span', {}, swatch(`background:${s.colour}`), s.label), tagOf(info(s.kind).cls));
+      b.dataset.kind = `preset:${s.id}`; grid.append(b);
+    }
+    box.append(grid);
+  }
+  if (UI.plantsOn && Object.keys(plantKinds).length) { // plants placed by hand (plants.json points)
+    box.append(h('div', { class: 'pal-h', textContent: 'Plants (plants.json)' }));
+    const grid = h('div', { class: 'pal' });
+    const listed = Object.keys(plantLabels).length ? Object.keys(plantLabels) : Object.keys(plantKinds);
+    for (const k of listed) {
+      if (!plantKinds[k]) continue;
+      const d = plantStyle(plantKinds[k][0]);
+      const b = h('button', { title: `${k}: built as ${plantKinds[k][0]}${plantKinds[k][1] !== 1 ? ` at ${plantKinds[k][1]}x` : ''}`, onclick: () => { placing = placing === `plant:${k}` ? null : `plant:${k}`; markPalette(); } }, h('span', {}, swatch(`background:${d.fill || '#7fbf6a'};${d.ring ? `box-shadow:0 0 0 2px ${d.ring}` : ''}`), plantLabels[k] || k), h('span', { class: 'tag', textContent: 'plant', style: 'background:#7fd4c1' }));
+      b.dataset.kind = `plant:${k}`; grid.append(b);
+    }
+    box.append(grid);
+  }
+  const all = Object.keys(kindsInfo).filter((k) => !kindsInfo[k].hidden).sort(), seen = new Set();
+  const groups = [...UI.groups, ...new Set(all.map((k) => kindsInfo[k].group).filter((g) => g && !UI.groups.includes(g))), null];
+  for (const title of groups) {
+    const list = all.filter((k) => !seen.has(k) && (title === null || kindsInfo[k].group === title)); if (!list.length) continue;
+    list.forEach((k) => seen.add(k));
+    box.append(h('div', { class: 'pal-h', textContent: title === null ? (groups.length > 1 ? 'Other' : 'Pieces') : title }));
+    const grid = h('div', { class: 'pal' });
+    for (const k of list) {
+      const s = kindsInfo[k].size, f = ((plan.kindScale || {})[k] || 1) * lookK(k);
+      const b = h('button', { title: `${k}: ${tidy(s[0] * f)} x ${tidy(s[1] * f)} m${scaled() ? ' ' + D.gameLabel : ''}`, onclick: () => { placing = placing === k ? null : k; markPalette(); } }, h('span', { textContent: `${kindsInfo[k].label || (k.split(':')[1] || k).replace(/_/g, ' ')}  ${tidy(Math.round(s[0] * f * 10) / 10)}×${tidy(Math.round(s[1] * f * 10) / 10)}` }), tagOf(kindsInfo[k].cls));
+      b.dataset.kind = k; grid.append(b);
+    }
+    box.append(grid);
+  }
+  if (!box.children.length) box.append(h('div', { class: 'small dim', textContent: 'This project lists no kinds of piece: give it a kit.json, or a kinds hook in its config (README).' }));
+}
+function markPalette() { document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('on', b.dataset.kind === placing)); canvas.style.cursor = placing ? 'crosshair' : 'default'; if (placing) status(`Placing ${placing.replace(/^(preset|plant):/, '')}: click on the map. Esc to stop.`); }
+function buildLayers() {
+  const box = $('layers'); box.textContent = '';
+  const defs = [...BASE_LAYERS.filter(([k]) => k !== 'plants' || UI.plantsOn).map(([id, text]) => ({ id, label: text })), ...layerList().map((l) => { const d = UI.compileLayers.find((q) => q.id === l.id) || UI.overlays.find((q) => q.id === l.id) || { label: (l.data && l.data.label) || l.id, on: true }; return { id: l.id, label: d.label, on: d.on, lazy: d.lazy }; })];
+  for (const d of defs) {
+    if (!(d.id in show)) show[d.id] = d.on !== false && !d.lazy;
+    box.append(h('div', {}, h('label', {}, h('input', { type: 'checkbox', checked: show[d.id], onchange: (e) => { show[d.id] = e.target.checked; if (show[d.id] && UI.overlays.some((o) => o.id === d.id) && !ovl[d.id]) loadOverlay(d.id); draw(); } }), ' ' + d.label)));
+  }
+  const legend = $('legend'); legend.textContent = '';
+  const rows = [];
+  for (const [cls, c] of Object.entries(UI.classes)) if (Object.values(kindsInfo).some((k) => k.cls === cls)) rows.push([c.colour, c.legend]);
+  for (const s of activePresets()) rows.push([s.colour, `${s.label}${s.note ? ': ' + s.note : ''}`]);
+  if (UI.plantsOn) rows.push(['#3fae49', 'a plant placed by hand (plants.json)'], ['#76b49366', 'a plant made by the project\'s rules (faint: drag to move it, Del to remove it)'], ['#ff5a5a55', 'an exclusion: the rules plant nothing inside it (dashed red)']);
+  rows.push(['#e9dccb88', 'lifted (dashed edge)']);
+  for (const d of [...UI.compileLayers, ...UI.overlays]) for (const r of d.legend || []) rows.push(r);
+  rows.push([COLOUR.wall, 'the ring wall and gate'], [COLOUR.person, 'a person\'s place'], [COLOUR.thing, 'a thing to use'], [COLOUR.door, 'a door'], [COLOUR.spawn, 'where the player arrives']);
+  for (const [colour, text] of rows) legend.append(h('div', {}, h('i', { style: `background:${colour}` }), text));
+}
+function renderProblems() {
+  const box = $('problems'); box.textContent = '';
+  for (const text of pv.errors) box.append(h('li', { class: 'error' }, h('b', { textContent: 'schema ' }), text));
+  for (const p of pv.problems) box.append(h('li', { title: 'click to show it', onclick: () => { if (p.sel && p.sel.length) select(p.sel.filter((k) => handle(k))); focusOn(p.at, 9); } }, h('b', { textContent: p.kind + ' ' }), p.text));
+  if (!pv.errors.length && !pv.problems.length) box.append(h('li', { class: 'dim', textContent: 'Everything sits right.' }));
+  $('probCount').textContent = pv.errors.length ? `${pv.errors.length} that stop a save` + (pv.problems.length ? `, ${pv.problems.length} warnings` : '') : pv.problems.length ? `${pv.problems.length} warnings (a save still goes through)` : '';
+}
+/** The project's status panels (is what its tools last built still what the plan says?). */
+function renderStatus() {
+  const box = $('statusPanels'); box.textContent = '';
+  for (const s of pv.status || []) {
+    const e = h('div', { class: `state ${['fresh', 'stale'].includes(s.state) ? s.state : 'unknown'}` });
+    if (s.state === 'unknown' || !['fresh', 'stale'].includes(s.state)) e.append(h('b', { textContent: `${s.title}: cannot tell. ` }), s.basis || '');
+    else if (s.state === 'fresh') e.append(h('b', { textContent: `${s.title}: up to date. ` }), s.basis ? `Nothing on screen differs (${s.basis}).` : '');
+    else {
+      const changes = s.changes || [];
+      e.append(h('b', { textContent: `${s.title} is stale: ${changes.length} differ. ` }));
+      changes.slice(0, 12).forEach((c, i) => e.append(i ? ', ' : '', h('a', { textContent: c.id, onclick: () => { select((c.sel || []).filter((k) => handle(k))); const x = c.sel && c.sel[0] && handle(c.sel[0]); if (x) focusOn(x.at); } }), ` ${c.what}`));
+      if (changes.length > 12) e.append(` and ${changes.length - 12} more`);
+      if (s.action) e.append(`. Press ${s.action}.`);
+    }
+    box.append(e);
+  }
+}
+const row = (text, ...kids) => h('div', { class: 'row' }, h('label', { textContent: text }), ...kids);
+const num = (value, step, apply, extra = {}) => h('input', { type: 'number', step, value: value ?? '', ...extra, onchange: (e) => { if (e.target.value === '' && !extra.optional) { e.target.value = value; return; } remember(); apply(e.target.value === '' ? null : +e.target.value); changed(); } });
+const txt = (value, apply, extra = {}) => h('input', { type: 'text', value: value ?? '', ...extra, onchange: (e) => { remember(); apply(e.target.value); changed(); } });
+const area = (value, apply) => h('textarea', { value: value ?? '', onchange: (e) => { remember(); apply(e.target.value); changed(); } });
+const optional = (object, key) => (v) => { if (v === null || v === '' || v === undefined) delete object[key]; else object[key] = v; };
+const note = (text) => (text ? h('div', { class: 'small dim', textContent: text }) : null);
+function renderSelected() {
+  const box = $('sel'); box.textContent = '';
+  if (!plan) return;
+  if (sel.length > 1) {
+    const ps = selectedPieces();
+    box.append(h('div', { class: 'row' }, h('b', { textContent: `${sel.length} selected` }), h('span', { class: 'dim', textContent: ps.length ? `(${ps.length} pieces)` : '' })), h('div', { class: 'small dim', textContent: sel.map((k) => k.replace(/^piece:/, '')).join(', ') }),
+      h('div', { class: 'row' }, h('button', { textContent: 'Duplicate', onclick: duplicateSelected, disabled: !ps.length }), h('button', { textContent: 'Remove', onclick: removeSelected })), h('div', { class: 'small dim', textContent: 'Drag any of them to move them all; arrows nudge; R turns the pieces.' }));
+    return;
+  }
+  if (!sel.length) { renderMap(box); return; }
+  const key = sel[0], [type, a, b] = key.split(':'), x = handle(key);
+  if (!x) { box.textContent = 'Nothing.'; return; }
+  const place = (set = x.set, at = x.at) => row('x, z', num(at[0], snapStep(), (v) => set([v, handle(key).at[1]])), num(at[1], snapStep(), (v) => set([handle(key).at[0], v])));
+  if (type === 'piece') {
+    const p = x.piece, k = info(p.kind), g = toGame(drawAt(p)), [w, d] = footprint(p), seat = pv.seated[p.id], pre = presetOf(p);
+    box.append(h('div', { class: 'row' }, h('b', { textContent: p.id }), tagOf(k.cls), h('span', { class: 'dim', textContent: p.kind })),
+      note((pre && pre.note ? pre.note : classOf(k.cls).note) + (k.unknown ? ' (No size is known for this kind: drawn as 2 x 2 m.)' : '')),
+      place(),
+      row('turn °', num(p.rot || 0, 15, (v) => { p.rot = v; }), h('span', { class: 'dim small', textContent: '0 faces south (+Z), 90 east' })),
+      row('lift y', num(p.y, 0.1, optional(p, 'y'), { optional: true, placeholder: '0' }), seat !== undefined && lifted(p) ? h('span', { class: 'dim small', textContent: `seated at ${tidy(seat)}` }) : null),
+      row('scale', num(p.scale, 0.05, optional(p, 'scale'), { optional: true, min: 0.05, placeholder: String((plan.kindScale || {})[p.kind] || 1) }), h('label', { textContent: 'stretch', style: 'min-width:0' }), num(p.stretch, 0.1, optional(p, 'stretch'), { optional: true, min: 0.1, placeholder: '1' })),
+      row('id', txt(p.id, (v) => renamePiece(p, v))),
+      row('kind', h('select', { onchange: (e) => { remember(); p.kind = e.target.value; changed(); } }, Object.keys(kindsInfo).filter((q) => !kindsInfo[q].hidden || q === p.kind).concat(kindsInfo[p.kind] ? [] : [p.kind]).sort().map((q) => h('option', { value: q, textContent: q, selected: q === p.kind })))),
+      h('div', { class: 'small dim', textContent: (P() !== 1 ? `${D.gameLabel}: x ${g[0].toFixed(2)}, z ${g[1].toFixed(2)}; ` : '') + `footprint ${tidy(Math.round(w * P() * 100) / 100)} × ${tidy(Math.round(d * P() * 100) / 100)} m` + ((plan.doors || []).some((q) => q.piece === p.id) ? `; door: ${(plan.doors || []).filter((q) => q.piece === p.id).map((q) => q.id).join(', ')}` : '') }),
+      h('div', { class: 'row' }, h('button', { textContent: 'Duplicate', onclick: duplicateSelected }), h('button', { textContent: 'Remove', onclick: removeSelected })));
+  } else if (type === 'spawn') {
+    const g = toGame(plan.spawn.at);
+    box.append(h('div', { class: 'row' }, h('b', { textContent: 'Where the player arrives' })), place(), row('facing °', num(plan.spawn.yaw || 0, 15, (v) => { plan.spawn.yaw = v; }), h('span', { class: 'dim small', textContent: '0 south, 90 east (R turns it)' })), P() !== 1 ? note(`${D.gameLabel}: x ${g[0].toFixed(2)}, z ${g[1].toFixed(2)}.`) : null);
+  } else if (type === 'person') {
+    box.append(h('div', { class: 'row' }, h('b', { textContent: a }), h('span', { class: 'dim', textContent: 'a person\'s place' })), place(), note(UI.hints.person), h('div', { class: 'row' }, h('button', { textContent: 'Remove', onclick: removeSelected })));
+  } else if (type === 'thing') {
+    const t = x.thing;
+    box.append(h('div', { class: 'row' }, h('b', { textContent: t.id }), h('span', { class: 'dim', textContent: 'a thing to use' })), place(),
+      row('radius', num(t.radius, 0.25, (v) => { t.radius = v; }, { min: 0.25 }), h('span', { class: 'dim small', textContent: 'metres to use it from' })),
+      row('id', txt(t.id, (v) => { const id = cleanId(v); if (id && !(plan.things || []).some((q) => q !== t && q.id === id)) { t.id = id; sel = [`thing:${id}`]; } })),
+      row('label', txt(t.label, (v) => { t.label = v; })), row('action', txt(t.action, optional(t, 'action'), { placeholder: '(none: it shows its card)' })),
+      row('title', txt(t.card && t.card.title, (v) => { t.card = { ...(t.card || {}), title: v }; })),
+      h('label', { class: 'dim', textContent: 'what the card says' }), area(t.card && t.card.body, (v) => { t.card = { ...(t.card || {}), body: v }; }),
+      note(UI.hints.thing),
+      h('div', { class: 'row' }, h('button', { textContent: 'Remove', onclick: removeSelected })));
+  } else if (type === 'door') {
+    const d = x.door;
+    box.append(h('div', { class: 'row' }, h('b', { textContent: d.id }), h('span', { class: 'dim', textContent: d.piece ? 'a door' : 'a door standing free' })));
+    if (d.piece) box.append(row('on', h('select', { onchange: (e) => { remember(); d.piece = e.target.value; changed(); } }, pieces().filter((p) => info(p.kind).door || p.id === d.piece).map((p) => h('option', { value: p.id, textContent: `${p.id} (${p.kind.split(':')[1] || p.kind})`, selected: p.id === d.piece }))), h('button', { textContent: 'Show', onclick: () => { const p = pieceById(d.piece); if (p) { select([`piece:${p.id}`]); focusOn(p.at); } } })),
+      note('A door stands where its piece\'s door is: move the piece, or hang the door on another.'));
+    else box.append(place());
+    box.append(row('sign', txt(d.sign, optional(d, 'sign'))), row('label', txt(d.label, optional(d, 'label'))), row('room', txt(d.room, optional(d, 'room'), { placeholder: '(none: it is shut)' })), row('needs', txt(Array.isArray(d.needs) ? d.needs.join(', ') : d.needs, (v) => { const list = v.split(',').map((s) => s.trim()).filter(Boolean); optional(d, 'needs')(list.length > 1 ? list : list[0] || null); }, { placeholder: 'what opens it' })),
+      h('label', { class: 'dim', textContent: 'what it says while locked' }), area(d.lockedText, optional(d, 'lockedText')),
+      h('label', { class: 'dim', textContent: 'what it says if it never opens' }), area(d.shut, optional(d, 'shut')),
+      h('div', { class: 'row' }, h('button', { textContent: 'Remove the door', onclick: removeSelected })));
+  } else if (type === 'plant') {
+    const pt = x.point, [built, factor] = builtOf(pt.kind), g = toGame(pt.at), problems = pv.problems.filter((p) => p.sel && p.sel.includes(key));
+    const kindList = [...Object.keys(plantLabels), ...Object.keys(plantKinds).filter((k) => !plantLabels[k])].concat(plantKinds[pt.kind] ? [] : [pt.kind]);
+    box.append(h('div', { class: 'row' }, h('b', { textContent: `Plant ${a}` }), h('span', { class: 'dim', textContent: 'placed by hand (plants.json points)' })),
+      row('kind', h('select', { onchange: (ev) => { remember(); pt.kind = ev.target.value; changed(); } }, kindList.map((k) => h('option', { value: k, textContent: plantLabels[k] ? `${plantLabels[k]} (${k})` : k, selected: k === pt.kind })))),
+      place(),
+      row('turn °', num(pt.rot, 15, optional(pt, 'rot'), { optional: true, placeholder: 'any' }), h('span', { class: 'dim small', textContent: 'R turns it (Alt: 1°); empty: the project chooses' })),
+      row('scale', num(pt.scale, 0.05, optional(pt, 'scale'), { optional: true, min: 0.05, placeholder: '1' })),
+      row('district', txt(pt.district, optional(pt, 'district'), { placeholder: '(a note: which part of the map)' })),
+      note((built !== pt.kind || factor !== 1 ? `Built as ${built}${factor !== 1 ? ` at ${factor}x` : ''}. ` : '') + (Object.keys(plantKinds).length && !plantKinds[pt.kind] ? 'Not a kind this project plants: nothing grows. ' : '') + (P() !== 1 ? `${D.gameLabel}: x ${g[0].toFixed(2)}, z ${g[1].toFixed(2)}. ` : '') + (UI.hints.plant || '')),
+      ...problems.map((p) => h('div', { class: 'small', style: 'color:var(--warn)', textContent: p.text })),
+      h('div', { class: 'row' }, h('button', { textContent: 'Duplicate', onclick: duplicateSelected }), h('button', { textContent: 'Remove', onclick: removeSelected })));
+  } else if (type === 'exclude') {
+    const ex = x.exclusion;
+    box.append(h('div', { class: 'row' }, h('b', { textContent: `Exclusion ${a}` }), h('span', { class: 'dim', textContent: 'plants.json exclude' })), place(),
+      row('radius', num(ex.r, 0.1, (v) => { ex.r = v; }, { min: 0.05 }), h('span', { class: 'dim small', textContent: 'metres of the plan' })),
+      note('The project\'s rules plant nothing within it; plants placed by hand still grow. Remove it and the rule\'s plant comes back at the next planting.'),
+      h('div', { class: 'row' }, h('button', { textContent: 'Remove the exclusion', onclick: removeSelected })));
+  } else if (type === 'rule') {
+    const it = x.ruleItem, can = !!PE.pointFromRule(it, pointKindOf, plantKinds);
+    box.append(h('div', { class: 'row' }, h('b', { textContent: `A ${it.kind}` }), h('span', { class: 'dim', textContent: `made by rule${it.rule ? ` (${it.rule})` : ''}` })),
+      note(`At ${it.at.join(', ')} in the plan${rule.file ? `, from ${rule.file}` : ''}. Drag it to move it: it becomes a plant placed by hand and the rule is told to keep off where it stood (an exclusion). Del removes it (an exclusion only).`),
+      h('div', { class: 'row' }, h('button', { textContent: 'Place it by hand here', disabled: !can, onclick: () => { remember(); const k = adoptRule(+a); if (k) { sel = [k]; changed(); } } }), h('button', { textContent: 'Remove it', onclick: removeSelected })));
+  } else if (type === 'route') {
+    const r = plan.routes[+a];
+    box.append(h('div', { class: 'row' }, h('b', { textContent: `Round ${a}, point ${b}` }), h('span', { class: 'dim', textContent: `of ${r.length}` })), place(),
+      h('div', { class: 'row' }, h('button', { textContent: 'Add a point after it', onclick: () => { remember(); const n = r[(+b + 1) % r.length]; r.splice(+b + 1, 0, [snap((x.at[0] + n[0]) / 2), snap((x.at[1] + n[1]) / 2)]); sel = [`route:${a}:${+b + 1}`]; changed(); } }), h('button', { textContent: 'Remove the point', onclick: removeSelected }), h('button', { textContent: 'Remove the round', onclick: () => { remember(); plan.routes.splice(+a, 1); sel = []; changed(); } })),
+      note(UI.hints.round));
+  }
+}
+function renderMap(box) {
+  box.append(h('div', { class: 'dim small', textContent: 'Nothing selected: the map itself. Click something to edit it.' }));
+  if (plan.ring) {
+    const moveGate = () => { if (!plan.gate) return; const C = plan.ring.centre, a = Math.atan2(plan.gate[1] - C[1], plan.gate[0] - C[0]); plan.gate = [tidy(C[0] + Math.cos(a) * plan.ring.radius), tidy(C[1] + Math.sin(a) * plan.ring.radius)]; };
+    box.append(row('ring radius', num(plan.ring.radius, 1, (v) => { plan.ring.radius = v; moveGate(); }, { min: 5 }), h('span', { class: 'dim small', textContent: P() !== 1 ? `m (${tidy(plan.ring.radius * P())} ${D.gameLabel})` : 'm' })),
+      row('gate width', num(plan.ring.gateWidth, 0.5, optional(plan.ring, 'gateWidth'), { min: 0, optional: true })),
+      row('piers every', num(plan.ring.pillarEvery, 1, optional(plan.ring, 'pillarEvery'), { min: 1, optional: true }), h('span', { class: 'dim small', textContent: 'm' })),
+      note(UI.hints.ring));
+  }
+  box.append(h('div', { class: 'small dim', style: 'margin-top:8px', textContent: `${plan.pieces.length} pieces, ${(plan.doors || []).length} doors, ${(plan.things || []).length} things, ${(plan.routes || []).length} rounds, ${Object.keys(plan.people || {}).length} people's places. ${S.file}` }));
+  if (UI.plantsOn && (plants || Object.keys(plantKinds).length)) box.append(h('div', { class: 'small dim', textContent: `${plantPoints().length} plants placed by hand, ${exclusions().length} exclusions${rule.present ? `, ${rule.items.length} made by rule` : ''}. ${S.plantsFile || 'plants.json (new)'}` }));
+}
+const cleanId = (v) => { const id = String(v).trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/^[^a-z]+/, ''); return id || null; };
+function renamePiece(p, value) {
+  const id = cleanId(value);
+  if (!id || id === p.id) return;
+  if (takenId(id, p.kind)) { status(`"${id}" is taken (or kept for things the project's tools make).`, 'bad'); return; }
+  for (const d of plan.doors || []) if (d.piece === p.id) d.piece = id; // its doors follow it
+  p.id = id; sel = [`piece:${id}`];
+}
+$('addThing').onclick = () => { remember(); const ids = new Set((plan.things ||= []).map((t) => t.id)); let n = 1; while (ids.has(`thing${n}`)) n++; const at = [snap(view.x), snap(view.z)]; plan.things.push({ id: `thing${n}`, label: 'Look at it', at, radius: 2.5, card: { title: 'A new thing', body: '' } }); sel = [`thing:thing${n}`]; changed(); status('A thing was added at the middle of the view: drag it, and write its card on the right.'); };
+$('addRound').onclick = () => { remember(); const x = snap(view.x), z = snap(view.z); (plan.routes ||= []).push([[x - 4, z - 4], [x + 4, z - 4], [x + 4, z + 4], [x - 4, z + 4]]); show.routes = true; sel = [`route:${plan.routes.length - 1}:0`]; changed(); status('A round was added at the middle of the view: drag its points.'); };
+$('addPerson').onclick = () => { const id = cleanId(prompt('Whose place? Their id:') || ''); if (!id) return; if ((plan.people || {})[id]) { status(`${id} already has a place.`, 'bad'); select([`person:${id}`]); return; } remember(); (plan.people ||= {})[id] = [snap(view.x), snap(view.z)]; sel = [`person:${id}`]; changed(); };
+$('addDoor').onclick = () => {
+  const p = selectedPieces()[0];
+  if (p && !info(p.kind).door) { status(`${p.kind} has no door spot (its kind needs "door": [x, z] in the kit). Deselect to place a door standing free.`, 'bad'); return; }
+  remember(); const ids = new Set((plan.doors ||= []).map((d) => d.id)); let n = 1; while (ids.has(`door${n}`)) n++;
+  plan.doors.push(p ? { id: `door${n}`, piece: p.id, sign: 'PRIVATE', shut: 'Locked.' } : { id: `door${n}`, at: [snap(view.x), snap(view.z)], sign: 'PRIVATE', shut: 'Locked.' });
+  sel = [`door:door${n}`]; show.doors = true; changed();
+};
+$('undo').onclick = undo; $('redo').onclick = redo; $('save').onclick = () => save();
+$('snap').onchange = () => draw();
+
+// --- saving, and the project's Apply actions -----------------------------------------------------------------
+async function save() {
+  if (!plan) return false;
+  status('Saving…');
+  let r, body;
+  try { r = await post('save', { plan, plants, stamps }); body = await r.json(); } catch (e) { status('Not saved: the editor\'s server is not answering (' + e.message + ').', 'bad'); return false; }
+  if (!r.ok) { if (body.errors) { pv.errors = body.errors; renderProblems(); } status(`${body.error || 'Not saved.'}${body.errors ? ` (${body.errors.length}: see Problems)` : ''}`, 'bad'); return false; }
+  savedJson = JSON.stringify(plan); savedPlantsJson = JSON.stringify(plants); stamps = body.stamps; applyPreview(body); changed({ panel: false });
+  const n = body.problems.length, files = [body.planChanged && S.file, body.plantsChanged && (S.plantsFile || 'plants.json')].filter(Boolean);
+  if (body.plantsChanged && !S.plantsFile) S.plantsFile = S.file.replace(/layout\.json$/, 'plants.json');
+  const next = body.planChanged && body.plantsChanged ? UI.hints.afterSave.both : body.plantsChanged ? UI.hints.afterSave.plants : UI.hints.afterSave.plan;
+  status(`${body.changed ? `Saved ${files.join(' and ')}` : 'Nothing to save: the files already say this'}.` + (n ? ` ${n} warning${n > 1 ? 's' : ''}: see Problems.` : '') + (body.changed && next ? ` ${next}` : ''), n ? '' : 'ok');
+  window.__map.saves++;
+  return true;
+}
+let job = { state: 'idle' }, logAt = 0, jobTimer = null, jobSeen = 0;
+const actionOf = (id) => (S.actions || []).find((a) => a.id === id);
+function updateJobButtons() {
+  if (!S) return;
+  const running = job.state === 'running', dirty = plan && isDirty();
+  for (const a of S.actions) { const b = $(`job-${a.id}`); if (!b) continue; b.disabled = running || dirty; b.title = dirty ? 'save first: the project\'s tools read the saved file' : running ? 'a job is running' : a.title; }
+  $('busy').classList.toggle('on', running);
+  $('busy').textContent = running ? `${job.label || job.kind}: ${(job.steps || [])[job.step] || ''} (${Math.round((Date.now() - job.startedAt) / 1000)} s)` : '';
+  $('applyNote').textContent = (S.dryRun ? 'DRY RUN: heavy steps only print what they would run. ' : '') + (dirty ? 'Save first: these read the saved file.' : '');
+}
+async function pollJob() {
+  clearTimeout(jobTimer);
+  let j;
+  try { j = await (await fetch(`/api/job?from=${logAt}`)).json(); } catch { jobTimer = setTimeout(pollJob, 2000); return; }
+  if (j.id !== jobSeen) { $('log').textContent = ''; logAt = 0; jobSeen = j.id; if (j.id) { j = await (await fetch('/api/job?from=0')).json(); } }
+  const was = job.state; job = j;
+  if (j.log) { const log = $('log'); log.hidden = false; log.textContent += j.log; log.scrollTop = log.scrollHeight; }
+  logAt = j.next || 0;
+  updateJobButtons();
+  if (j.state === 'running') { jobTimer = setTimeout(pollJob, 600); return; }
+  if (was === 'running') {
+    const a = actionOf(j.kind);
+    if (j.state === 'done') { status(`${j.label || j.kind} done.${a && a.doneText ? ' ' + a.doneText : ''}`, 'ok'); await loadOverlays(true); await loadRulePlants(); refreshPreview(); }
+    else status(`${j.label || j.kind} failed: see the output below.`, 'bad');
+  }
+}
+async function startJob(id) {
+  const a = actionOf(id);
+  if (isDirty()) { status('Save first: the project\'s tools read the saved file.', 'bad'); return; }
+  if (a && a.confirm && !S.dryRun && !confirm(a.confirm)) return;
+  const r = await post('job', { job: id }), body = await r.json();
+  if (!r.ok) { status(body.error || 'could not start', 'bad'); return; }
+  job = { ...job, state: 'running', kind: id, label: a ? a.label : id, steps: [], step: 0, startedAt: Date.now() }; status(`${a ? a.label : id} started…`); pollJob();
+}
+function buildActions() {
+  const box = $('actions'); box.textContent = '';
+  $('applyBox').hidden = !S.actions.length;
+  for (const a of S.actions) box.append(h('button', { id: `job-${a.id}`, textContent: a.label, onclick: () => startJob(a.id) }));
+  const help = $('help'); help.textContent = '';
+  for (const [what, how] of UI.help) help.append(h('tr', {}, h('td', { textContent: what }), h('td', { textContent: how })));
+  $('helpBox').hidden = !UI.help.length;
+}
+/** The project's own layers: the eager ones now (and again after an action, `again`), the lazy ones when first shown. */
+async function loadOverlays(again = false) {
+  for (const o of UI.overlays) if ((!o.lazy && (again || !ovl[o.id])) || (o.lazy && again && ovl[o.id])) await loadOverlay(o.id);
+}
+async function loadOverlay(id) {
+  try { ovl[id] = await (await fetch(api('overlay', `id=${encodeURIComponent(id)}`))).json(); } catch { ovl[id] = { present: false }; }
+  if (!ovl[id].present && show[id] && UI.overlays.find((o) => o.id === id)?.lazy) status(`${UI.overlays.find((o) => o.id === id).label}: ${ovl[id].error || ovl[id].note || 'nothing to show yet'}.`, 'bad');
+  $('banner').textContent = UI.overlays.map((o) => ovl[o.id] && show[o.id] && ovl[o.id].note).filter(Boolean).join(' · ');
+  draw();
+}
+async function loadRulePlants() {
+  if (!S.plantRules || !S.plantRules.ruleMade) { rule = { present: false, items: [] }; return; }
+  try { const r = await (await fetch(api('rule-plants'))).json(); rule = r.present ? { ...r, items: r.items || [] } : { present: false, items: [], why: r.error || r.why || '' }; }
+  catch { rule = { present: false, items: [] }; }
+  draw();
+}
+
+async function load() {
+  const r = await fetch(api('state')), body = await r.json();
+  if (!r.ok) { status(body.error || 'could not load the map', 'bad'); return; }
+  S = body; UI = body.ui; D = UI.display; plan = body.plan; kindsInfo = body.kinds; savedJson = JSON.stringify(plan);
+  RESERVED = UI.reserved ? new RegExp(UI.reserved.source, UI.reserved.flags) : null;
+  plants = body.plants; savedPlantsJson = JSON.stringify(plants); plantKinds = body.plantKinds || {}; plantLabels = body.plantLabels || {}; pointKindOf = body.pointKindOf || {}; PLANT_DRAW = body.plantDraw || {}; stamps = body.stamps || null;
+  if (body.plantRules) { EXCLUDE_R = body.plantRules.excludeRadius ?? 0.6; DEBRIS = body.plantRules.debris || []; FOLLOWS = body.plantRules.follows || []; }
+  $('snapText').textContent = `snap ${snapStep()} m`;
+  document.title = `${plan.name || S.name}: ${UI.title || 'map editor'}`; $('title').textContent = `${plan.name || S.name} map`;
+  try { const { maps } = await (await fetch('/api/maps')).json(); if (maps.length > 1) { const m = $('maps'); m.style.display = ''; m.append(...maps.map((n) => h('option', { value: n, textContent: n, selected: n === S.name }))); m.onchange = () => { location.search = `?map=${encodeURIComponent(m.value)}`; }; } } catch { /* one map */ }
+  buildPalette(); buildActions(); resize(); fit();
+  applyPreview(body); buildLayers(); changed();
+  status(`Loaded ${S.file}.` + (S.dryRun ? ' DRY RUN: heavy steps are stubs.' : ''));
+  await loadOverlays(); await loadRulePlants(); pollJob();
+  window.__map.ready = true;
+}
+// For the tools that drive this page (tests, screenshots).
+window.__map = { ready: false, previews: 0, saves: 0, get plan() { return plan; }, get plants() { return plants; }, get rule() { return rule; }, ruleShown, targets, get view() { return view; }, get sel() { return sel; }, get problems() { return pv; }, get job() { return job; }, toScreen: (at) => { const r = canvas.getBoundingClientRect(), [x, y] = toScreen(at); return [r.left + x, r.top + y]; }, turnHandle: () => { const th = turnHandle(); return th ? window.__map.toScreen(th.at) : null; }, select, focusOn, fit, isDirty, setView: (v) => { Object.assign(view, v); draw(); } };
+load();
+</script>
+</body>
+</html>

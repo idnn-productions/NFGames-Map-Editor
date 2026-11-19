@@ -1,0 +1,10 @@
+node_modules/
+# the editor's backups and temporary files beside a map
+*.prev.json
+*.tmp
+# what the example's Apply action writes
+examples/sample/out/
+# test and check output
+test/out/
+.DS_Store
+Thumbs.db

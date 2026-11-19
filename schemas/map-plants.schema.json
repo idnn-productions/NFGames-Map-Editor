@@ -1,0 +1,33 @@
+{
+  "$id": "map-plants.schema.json", "title": "Map planting",
+  "description": "A map's planting plan beside its layout: <maps>/<id>/plants.json. The editor edits `points` (plants placed by hand) and `exclude` (places where a project's rules plant nothing); any other section is the project's own. The plan's frame: metres, +X east, +Z south; positions [x, z]; a rotation is DEGREES about Y.",
+  "type": "object", "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string" },
+    "note": { "type": "string" },
+    "points": {
+      "type": "array", "description": "plants placed by hand, one each",
+      "items": {
+        "type": "object", "additionalProperties": true, "required": ["kind", "at"],
+        "properties": {
+          "district": { "type": "string", "description": "a note: which part of the map" },
+          "kind": { "$ref": "#/$defs/kind" },
+          "at": { "$ref": "#/$defs/vec2" },
+          "rot": { "type": "number", "description": "degrees about Y; left out: the project chooses" },
+          "scale": { "type": "number", "exclusiveMinimum": 0 }
+        }
+      }
+    },
+    "exclude": {
+      "type": "array", "description": "places where a project's rules plant nothing; points are not affected",
+      "items": {
+        "type": "object", "additionalProperties": true, "required": ["at", "r"],
+        "properties": { "at": { "$ref": "#/$defs/vec2" }, "r": { "type": "number", "exclusiveMinimum": 0, "description": "metres" }, "note": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "kind": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "vec2": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
+  }
+}

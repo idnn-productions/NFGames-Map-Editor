@@ -1,0 +1,128 @@
+// The map editor's server: a map's plan (<maps>/<name>/layout.json) from above in the browser. Move, turn, size, add
+// and remove pieces; move where the player arrives, the people, the things, the walkers' rounds; edit doors' and
+// things' words; place plants (plants.json). Save checks the plan against its schema, writes it to a temporary file
+// and renames it over the old one, keeping the old one as layout.prev.json. A project's Apply actions run its own
+// steps and show their output.
+//
+// ONLY ON THIS MACHINE: bound to 127.0.0.1, never 0.0.0.0. A request whose Host is not this address is refused (so no
+// other site, nor a DNS name pointed here, can read or write a plan), a write must come from this page (Origin) as
+// JSON, and a map's name can only be a plain folder name under the maps folder. It serves its one page and its own
+// API, no other file. Child processes are started with a fixed list of arguments from the project's config (and a
+// checked map name): nothing from a request reaches a shell.
+import { createServer } from 'node:http';
+import { readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { EDITOR_ROOT } from './project.mjs';
+import { plantEditing } from './plan.mjs';
+import { checkFit, checkPlants } from './check.mjs';
+import { createJobs } from './jobs.mjs';
+
+const MAX_BODY = 2 * 1024 * 1024;
+export const HOST = '127.0.0.1';
+
+/** Only this machine's own page: the Host header must be this server's loopback address. */
+export const hostAllowed = (host, port) => host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+/** A write must come from this page, as JSON. */
+export const writeAllowed = (headers, port) => hostAllowed(headers.host, port) && headers.origin === `http://${headers.host}` && String(headers['content-type'] || '').startsWith('application/json');
+
+/** editor.html with the plant edits it shares with the server (plan.mjs plantEditing) written into it. */
+export const page = () => readFileSync(join(EDITOR_ROOT, 'src', 'editor.html'), 'utf8').replace('/*@plantEditing*/ null', () => plantEditing.toString());
+
+/** The plan compiled (when the project compiles) and checked, for the page: nothing is written. */
+export async function preview(project, name, plan, plants = undefined) {
+  const errors = await project.planErrors(plan, name);
+  if (plants) errors.push(...(await project.plantsErrors(plants)));
+  if (errors.length) return { errors, problems: [], seated: {}, overlays: null, status: null };
+  const ctx = project.ctx, kinds = await project.kinds(name, plan), { hooks } = project;
+  let built = null;
+  if (hooks.compile) {
+    try { built = (await hooks.compile({ plan, plants: plants ?? null, name, kinds }, ctx)) || null; } catch (e) { return { errors: [`the compile failed: ${e.message}`], problems: [], seated: {}, overlays: null, status: null }; }
+  }
+  const problems = [];
+  if (project.builtInCheck) {
+    problems.push(...checkFit(plan, kinds));
+    if (plants && project.plants) problems.push(...checkPlants(plants, plan, kinds, { plantKinds: project.plants.kinds, clearance: project.plants.clearance, tall: project.plants.tall, tallClearance: project.plants.tallClearance }));
+  }
+  if (hooks.check) problems.push(...((await hooks.check({ plan, plants: plants ?? null, built, name, kinds }, ctx)) || []));
+  const status = hooks.status ? (await hooks.status({ plan, plants: plants ?? null, built, name }, ctx)) || [] : null;
+  return { errors, problems, seated: (built && built.seated) || {}, overlays: (built && built.overlays) || null, status, log: (built && built.log) || [] };
+}
+
+/** The server for `project`. `port` is the one it will listen on (the Host check needs it). */
+export function createEditor(project, { port = project.port, defaultMap = null, dryRun = false } = {}) {
+  const jobs = createJobs(project, { dryRun });
+  project.ctx.dryRun = dryRun;
+  const fallback = () => defaultMap || project.defaultMap || project.listMaps()[0] || null;
+  const server = createServer(async (req, res) => {
+    const send = (code, body, type = 'application/json') => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' }); res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body)); };
+    try {
+      if (!hostAllowed(req.headers.host, port)) return send(403, { error: `local only: open http://127.0.0.1:${port}/` });
+      const url = new URL(req.url, 'http://x'), path = url.pathname;
+      const body = async () => {
+        let text = '';
+        for await (const part of req) { text += part; if (text.length > MAX_BODY) throw Object.assign(new Error('too big'), { code: 413 }); }
+        return JSON.parse(text);
+      };
+      if (req.method === 'GET' && (path === '/' || path === '/index.html')) return send(200, page(), 'text/html; charset=utf-8');
+      if (req.method === 'GET' && path === '/favicon.ico') { res.writeHead(204); return res.end(); }
+      if (req.method === 'GET' && path === '/api/maps') return send(200, { maps: project.listMaps(), default: fallback() });
+      if (req.method === 'GET' && path === '/api/job') { const job = jobs.current(), from = Math.max(0, Number(url.searchParams.get('from')) || 0); return send(200, job ? { ...job, log: job.log.slice(from), next: job.log.length } : { state: 'idle', log: '', next: 0 }); }
+      if (!path.startsWith('/api/')) return send(404, { error: 'not here' });
+      if (req.method !== 'GET' && req.method !== 'POST') return send(405, { error: 'GET or POST' });
+      if (req.method === 'POST' && !writeAllowed(req.headers, port)) return send(403, { error: 'a write must come from this page, as JSON' });
+
+      // everything below is about one map, named in the query: a plain folder name under the maps folder, or the default
+      const name = project.knownMap(url.searchParams.get('map') ?? fallback());
+      if (!name) return send(400, { error: `no such map (a map is a folder of ${project.rel(project.mapsDir) || '.'}/ with a layout.json; its name is lower-case letters, digits, _ and -)` });
+
+      if (req.method === 'GET' && path === '/api/state') {
+        const plan = project.readPlan(name), plants = project.readPlants(name), kinds = await project.kinds(name, plan);
+        const actions = Object.values(project.actions).filter((a) => !a.maps || a.maps.includes(name)).map((a) => ({ id: a.id, label: a.label, title: a.title || a.steps.map((s) => s.label).join(', then '), confirm: a.confirm, doneText: a.doneText, heavy: a.steps.some((s) => s.heavy) }));
+        const p = project.plants;
+        return send(200, {
+          name, plan, plants, kinds, dryRun, file: project.rel(project.planFile(name)), plantsFile: plants ? project.rel(project.plantsFile(name)) : null,
+          actions, ui: project.ui(name), stamps: project.stamps(name),
+          plantKinds: p ? p.kinds : {}, plantLabels: p ? p.labels : {}, plantDraw: p ? p.draw : {}, pointKindOf: p ? (p.pointKindOf || Object.fromEntries(Object.entries(p.kinds).filter(([, [, f]]) => f === 1).reverse().map(([k, [b]]) => [b, k]))) : {},
+          plantRules: p ? { excludeRadius: p.excludeRadius, debris: p.debris, follows: p.follows, ruleMade: !!project.hooks.ruleMade } : null,
+          ...(await preview(project, name, plan, plants ?? undefined)),
+        });
+      }
+      if (req.method === 'POST' && path === '/api/preview') { const { plan, plants } = await body(); return send(200, await preview(project, name, plan, plants ?? undefined)); }
+      if (req.method === 'POST' && path === '/api/save') {
+        const { plan, plants, stamps } = await body();
+        const errors = await project.planErrors(plan, name);
+        if (plants !== undefined && plants !== null) { if (!project.plants) errors.push('plants.json: this project has no plants'); else errors.push(...(await project.plantsErrors(plants))); }
+        if (errors.length) return send(400, { error: 'not saved: the plan does not pass its schema', errors });
+        // a file changed on disk since the page read it (another editor, a hand edit) is not overwritten
+        const now = project.stamps(name);
+        if (stamps) for (const what of ['layout', 'plants']) if (typeof stamps[what] === 'string' && stamps[what] !== now[what] && (what === 'layout' || plants)) return send(409, { error: `not saved: ${project.rel(what === 'layout' ? project.planFile(name) : project.plantsFile(name))} has changed on disk since this page read it (another editor open, or an edit by hand). Reload the page to see it (your changes here are lost on reload: note them first).` });
+        const ctx = project.ctx, hooks = project.hooks;
+        if (hooks.beforeSave) await hooks.beforeSave({ name, plan, plants: plants ?? null }, ctx);
+        const planChanged = project.writePlan(name, plan).changed;
+        const plantsChanged = plants ? project.writePlants(name, plants).changed : false;
+        const savedPlan = project.readPlan(name), savedPlants = project.readPlants(name);
+        const result = await preview(project, name, savedPlan, savedPlants ?? undefined);
+        if (hooks.afterSave) await hooks.afterSave({ name, plan: savedPlan, plants: savedPlants, changed: planChanged || plantsChanged }, ctx);
+        return send(200, { ok: true, changed: planChanged || plantsChanged, planChanged, plantsChanged, bytes: statSync(project.planFile(name)).size, plan: savedPlan, plants: savedPlants, stamps: project.stamps(name), ...result });
+      }
+      if (req.method === 'GET' && path === '/api/overlay') { // a layer the project draws from its own files: read-only on the page
+        const id = url.searchParams.get('id');
+        if (typeof id !== 'string' || !Object.hasOwn(project.overlays, id)) return send(400, { error: 'no such overlay' });
+        const plan = project.readPlan(name);
+        try { return send(200, { id, ...((await project.overlays[id].load({ name, plan }, project.ctx)) || { present: false }) }); } catch (e) { return send(200, { id, present: false, error: e.message }); }
+      }
+      if (req.method === 'GET' && path === '/api/rule-plants') { // the plants the project's rules made, where its hook says (movable on the page)
+        if (!project.hooks.ruleMade) return send(200, { present: false });
+        try { return send(200, (await project.hooks.ruleMade({ name, plan: project.readPlan(name) }, project.ctx)) || { present: false }); } catch (e) { return send(200, { present: false, error: e.message }); }
+      }
+      if (req.method === 'POST' && path === '/api/job') {
+        const { job: kind } = await body();
+        if (typeof kind !== 'string' || !Object.hasOwn(project.actions, kind)) return send(400, { error: 'no such action' });
+        try { const started = jobs.start(kind, name); return send(200, { id: started.id, kind, state: started.state }); } catch (e) { return send(e.code || 500, { error: e.message }); }
+      }
+      return send(404, { error: 'not here' });
+    } catch (e) { send(e.code === 413 ? 413 : e instanceof SyntaxError ? 400 : 500, { error: String(e.message || e) }); }
+  });
+  server.jobs = jobs;
+  return server;
+}

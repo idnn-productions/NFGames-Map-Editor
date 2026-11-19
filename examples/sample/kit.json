@@ -1,0 +1,12 @@
+{
+  "$note": "The sample project's kit: each kind of piece by name, its footprint `size` [w, d, h] in metres (front toward +Z), optional `boxes` [[x, z, w, d], ...] where it is solid (default: the whole footprint), `door` [x, z] (the spot in the street before its door, in its own frame), `cls` (how the palette tags it), `group` (the palette's heading).",
+  "kit:house": { "size": [4, 4, 3.5], "door": [0, 2.8], "cls": "building", "group": "Buildings" },
+  "kit:house_long": { "size": [8, 4, 3.5], "door": [0, 2.8], "cls": "building", "group": "Buildings" },
+  "kit:tower": { "size": [6, 6, 12], "door": [0, 3.8], "cls": "building", "group": "Buildings" },
+  "kit:hall": { "size": [10, 8, 5], "boxes": [[0, -3.7, 10, 0.6], [-4.7, 0, 0.6, 8], [4.7, 0, 0.6, 8]], "cls": "building", "group": "Buildings", "label": "open hall" },
+  "kit:roof_tank": { "size": [2, 2, 2], "cls": "prop", "group": "Rooftops" },
+  "kit:crate": { "size": [1, 1, 1], "cls": "prop", "group": "Street things" },
+  "kit:stall": { "size": [3, 2, 2.4], "cls": "prop", "group": "Street things", "label": "market stall" },
+  "kit:pot": { "size": [0.9, 0.9, 1], "cls": "prop", "group": "Street things" },
+  "mark:beacon": { "cls": "mark", "group": "Marks" }
+}

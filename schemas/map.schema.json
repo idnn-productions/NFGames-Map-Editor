@@ -1,0 +1,101 @@
+{
+  "$id": "map.schema.json", "title": "Map",
+  "description": "A map's plan, seen from above: <maps>/<id>/layout.json. The frame: metres, +X east, +Z south, Y up. A rotation is DEGREES about Y, 0 facing +Z (south), so a piece's front (+Z) turns to (sin rot, cos rot). Positions are [x, z]; `y` lifts a piece. Sections a map does not need are left out; sections a project adds are allowed. The editor's built-in schema: a project can give its own (config `schema`).",
+  "type": "object", "additionalProperties": true,
+  "required": ["id", "name", "frame", "spawn", "pieces"],
+  "anyOf": [{ "required": ["ring"] }, { "required": ["bounds"] }],
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": { "$ref": "#/$defs/id", "description": "the map's folder name" },
+    "name": { "type": "string" },
+    "games": { "type": "array", "items": { "type": "string" }, "description": "which games use it" },
+    "note": { "type": "string", "description": "where the plan came from and how it is edited" },
+    "frame": {
+      "type": "object", "additionalProperties": true, "required": ["units", "x", "z", "up", "rot"],
+      "description": "the frame every number in the file is in: stated in the file so nobody has to guess",
+      "properties": {
+        "units": { "const": "metres" }, "x": { "const": "east" }, "z": { "const": "south" }, "up": { "const": "y" },
+        "rot": { "const": "degrees", "description": "about Y; 0 faces +Z (south), 90 faces +X (east), -90 faces -X (west)" },
+        "note": { "type": "string" }
+      }
+    },
+    "ring": {
+      "type": "object", "additionalProperties": true, "required": ["centre", "radius"],
+      "description": "a round map inside a ring wall",
+      "properties": {
+        "centre": { "$ref": "#/$defs/vec2" },
+        "radius": { "type": "number", "exclusiveMinimum": 0, "description": "metres" },
+        "gateWidth": { "type": "number", "minimum": 0, "description": "metres of wall left open at `gate`" },
+        "pillarEvery": { "type": "number", "exclusiveMinimum": 0, "description": "metres between the wall's piers" }
+      }
+    },
+    "bounds": {
+      "type": "object", "additionalProperties": true, "required": ["min", "max"],
+      "description": "a map with no ring wall: the rectangle it lies in",
+      "properties": { "min": { "$ref": "#/$defs/vec2" }, "max": { "$ref": "#/$defs/vec2" } }
+    },
+    "gate": { "$ref": "#/$defs/vec2", "description": "the way out (on the ring, for a ring map)" },
+    "spawn": {
+      "type": "object", "additionalProperties": true, "required": ["at"],
+      "description": "where the player arrives",
+      "properties": { "at": { "$ref": "#/$defs/vec2" }, "yaw": { "type": "number", "description": "degrees, as a piece's rot" } }
+    },
+    "kindScale": { "type": "object", "description": "a size factor for every piece of a kind (a piece's own `scale` wins)", "additionalProperties": { "type": "number", "exclusiveMinimum": 0 } },
+    "sizes": {
+      "type": "object", "description": "a kind's footprint [w, d, h] in metres before scaling, for kinds the project does not list (or to overrule it)",
+      "additionalProperties": { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 }, "minItems": 3, "maxItems": 3 }
+    },
+    "pieces": { "type": "array", "description": "everything that stands in the map", "items": { "$ref": "#/$defs/piece" } },
+    "marks": { "type": "array", "description": "places for things with no model, drawn by the game's own code", "items": { "$ref": "#/$defs/mark" } },
+    "people": {
+      "type": "object", "description": "where named people stand: id -> [x, z], or an object with `at`",
+      "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/vec2" }, { "type": "object", "required": ["at"], "properties": { "at": { "$ref": "#/$defs/vec2" }, "facing": { "type": "number" } } }] }
+    },
+    "doors": { "type": "array", "items": { "$ref": "#/$defs/door" } },
+    "routes": { "type": "array", "description": "walkers' rounds: closed loops of points", "items": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/vec2" } } },
+    "things": { "type": "array", "description": "things to walk up to and use or read", "items": { "$ref": "#/$defs/thing" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$", "description": "lower case, digits, _ and -" },
+    "vec2": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, z] in metres on the ground" },
+    "kind": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)?$", "description": "a kind of piece: <group>:<piece> (kit:house_4x4) or a plain name" },
+    "piece": {
+      "type": "object", "additionalProperties": true, "required": ["id", "kind", "at", "rot"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "$ref": "#/$defs/kind" },
+        "at": { "$ref": "#/$defs/vec2" },
+        "rot": { "type": "number", "description": "degrees about Y (the editor keeps it within -180..180)" },
+        "y": { "type": "number", "description": "metres off the ground" },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "description": "the piece's size factor (overrules kindScale)" },
+        "stretch": { "type": "number", "exclusiveMinimum": 0, "description": "a factor along the piece's own x only" },
+        "seat": { "type": "boolean", "description": "for a project's compile: false keeps `y` as written" },
+        "note": { "type": "string" }
+      }
+    },
+    "mark": {
+      "type": "object", "additionalProperties": true, "required": ["id", "kind", "at"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "kind": { "$ref": "#/$defs/kind" }, "at": { "$ref": "#/$defs/vec2" }, "rot": { "type": "number" }, "y": { "type": "number" }, "scale": { "type": "number", "exclusiveMinimum": 0 }, "note": { "type": "string" } }
+    },
+    "door": {
+      "type": "object", "additionalProperties": true, "required": ["id"],
+      "anyOf": [{ "required": ["piece"] }, { "required": ["at"] }],
+      "description": "a door: it hangs on a piece (its place follows the piece's door spot) or stands `at` a point",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "piece": { "$ref": "#/$defs/id" }, "at": { "$ref": "#/$defs/vec2" },
+        "sign": { "type": "string" }, "room": { "type": "string" }, "label": { "type": "string" },
+        "needs": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }], "description": "what opens it (any of a list)" },
+        "lockedText": { "type": "string" }, "shut": { "type": "string", "description": "what a door that never opens says" }
+      }
+    },
+    "thing": {
+      "type": "object", "additionalProperties": true, "required": ["id", "at", "radius", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "at": { "$ref": "#/$defs/vec2" },
+        "radius": { "type": "number", "exclusiveMinimum": 0, "description": "metres within which it can be used" },
+        "label": { "type": "string" }, "action": { "type": "string" },
+        "card": { "type": "object", "additionalProperties": true, "properties": { "title": { "type": "string" }, "body": { "type": "string" } } }
+      }
+    }
+  }
+}

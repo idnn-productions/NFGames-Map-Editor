@@ -1,0 +1,4 @@
+# LF everywhere: the editor writes layout.json and plants.json with LF and compares them byte for byte,
+# so a checkout must not turn them into CRLF (Git for Windows does by default).
+* text=auto eol=lf
+*.png binary
