@@ -118,6 +118,8 @@ let plants = null, savedPlantsJson = 'null', plantKinds = {}, plantLabels = {}, 
 let EXCLUDE_R = 0.6, DEBRIS = [], FOLLOWS = [];
 const plantEditing = /*@plantEditing*/ null; // src/plan.mjs plantEditing, written in by the server (the same code its tests run)
 const PE = plantEditing();
+const view3d = /*@view3d*/ null; // src/view3d.mjs: the 3D view's camera, picking and landing rule, written in by the server
+const V3 = view3d();
 const builtOf = (kind) => plantKinds[kind] || [kind, 1];
 const plantPoints = () => (plants && plants.points) || [];
 const exclusions = () => (plants && plants.exclude) || [];

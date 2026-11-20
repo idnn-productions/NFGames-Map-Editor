@@ -14,6 +14,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { EDITOR_ROOT } from './project.mjs';
 import { plantEditing } from './plan.mjs';
+import { view3d } from './view3d.mjs';
 import { checkFit, checkPlants } from './check.mjs';
 import { createJobs } from './jobs.mjs';
 
@@ -25,8 +26,8 @@ export const hostAllowed = (host, port) => host === `127.0.0.1:${port}` || host 
 /** A write must come from this page, as JSON. */
 export const writeAllowed = (headers, port) => hostAllowed(headers.host, port) && headers.origin === `http://${headers.host}` && String(headers['content-type'] || '').startsWith('application/json');
 
-/** editor.html with the plant edits it shares with the server (plan.mjs plantEditing) written into it. */
-export const page = () => readFileSync(join(EDITOR_ROOT, 'src', 'editor.html'), 'utf8').replace('/*@plantEditing*/ null', () => plantEditing.toString());
+/** editor.html with the plant edits it shares with the server (plan.mjs plantEditing) and the 3D view's maths (view3d.mjs) written into it. */
+export const page = () => readFileSync(join(EDITOR_ROOT, 'src', 'editor.html'), 'utf8').replace('/*@plantEditing*/ null', () => plantEditing.toString()).replace('/*@view3d*/ null', () => view3d.toString());
 
 /** The plan compiled (when the project compiles) and checked, for the page: nothing is written. */
 export async function preview(project, name, plan, plants = undefined) {

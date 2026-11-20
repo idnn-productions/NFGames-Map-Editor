@@ -12,7 +12,8 @@
     "./project": "./src/project.mjs",
     "./plan": "./src/plan.mjs",
     "./check": "./src/check.mjs",
-    "./schema": "./src/schema.mjs"
+    "./schema": "./src/schema.mjs",
+    "./view3d": "./src/view3d.mjs"
   },
   "files": ["bin/", "src/", "schemas/", "examples/", "README.md", "LICENSE", "NOTICE"],
   "engines": { "node": ">=20" },
