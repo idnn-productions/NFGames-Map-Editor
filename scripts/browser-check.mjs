@@ -3,7 +3,8 @@
 // a request with a foreign Host or Origin is refused.
 //
 //   node scripts/browser-check.mjs                          a copy of examples/sample in a temporary folder, its own server
-//   node scripts/browser-check.mjs --screenshot docs/editor.png      also a picture of the sample map, before any edit
+//   node scripts/browser-check.mjs --screenshot docs/editor.png      also pictures of the sample map, before any edit
+//                                                           (docs/editor.png from above, docs/editor-3d.png in 3D)
 //   node scripts/browser-check.mjs --url http://127.0.0.1:8794/ --project examples/sample
 //                                                           a server already running (npm start -- --port 8794) on that project
 //
@@ -66,7 +67,12 @@ try {
     mkdirSync(dirname(resolve(shot)), { recursive: true });
     await page.screenshot({ path: resolve(shot) });
     console.log(`screenshot: ${shot}`);
-    await page.evaluate(() => window.__map.select([]));
+    const shot3d = shot.replace(/\.png$/, '') + '-3d.png'; // the same, in the 3D view
+    await page.evaluate(() => window.__map.setMode('3d'));
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: resolve(shot3d) });
+    console.log(`screenshot: ${shot3d}`);
+    await page.evaluate(() => { window.__map.setMode('top'); window.__map.select([]); });
   }
 
   // drag the crate two metres east with the mouse, then Ctrl+S
@@ -98,6 +104,31 @@ try {
     console.log(`Report: ${job.state}; status panel: "${job.panel}"`);
     if (job.state !== 'done' || !/up to date/.test(job.panel)) fail('Report should finish and the status panel say up to date');
   }
+
+  // the 3D view: it draws, its camera's target is the middle of the map, and it survives a resize
+  await page.evaluate(() => window.__map.setMode('3d'));
+  await page.waitForTimeout(300);
+  const centreOf3d = () => page.evaluate(() => { const r = document.querySelector('#map').getBoundingClientRect(), t = window.__map.cam.target; return { mid: [r.left + r.width / 2, r.top + r.height / 2], at: window.__map.toScreen3(t) }; });
+  const offCentre = (c) => Math.hypot(c.mid[0] - c.at[0], c.mid[1] - c.at[1]);
+  if ((await page.evaluate(() => window.__map.mode)) !== '3d') fail('the page should be in the 3D view');
+  else {
+    let c = await centreOf3d();
+    if (offCentre(c) > 2) fail(`the 3D camera's target should be in the middle of the map, it is ${offCentre(c).toFixed(1)} px off`);
+    // a pixel of the WebGL canvas at the top of the tower is not the background
+    const px = await page.evaluate(() => {
+      const gl = document.querySelector('#gl'), [x, y] = window.__map.toScreen3([6, 12, -10]), r = gl.getBoundingClientRect(), d = gl.width / r.width;
+      const c = document.createElement('canvas'); c.width = c.height = 1; const g = c.getContext('2d');
+      g.drawImage(gl, (x - r.left) * d, (y - r.top) * d, 1, 1, 0, 0, 1, 1); return Array.from(g.getImageData(0, 0, 1, 1).data);
+    });
+    const bg = [0x8a, 0x6a, 0x4c];
+    console.log(`3D: the tower's top is drawn rgb(${px.slice(0, 3)})`);
+    if (Math.hypot(px[0] - bg[0], px[1] - bg[1], px[2] - bg[2]) < 30) fail('the 3D view should draw the tower');
+    await page.setViewportSize({ width: 1200, height: 700 }); await page.waitForTimeout(300);
+    c = await centreOf3d();
+    if (offCentre(c) > 2) fail(`after a resize the 3D camera's target should still be in the middle, it is ${offCentre(c).toFixed(1)} px off`);
+    await page.setViewportSize({ width: 1600, height: 900 }); await page.waitForTimeout(300);
+  }
+  await page.evaluate(() => window.__map.setMode('top'));
 
   // foreign Host and Origin
   const host = await statusOf(port, { Host: 'evil.example' });

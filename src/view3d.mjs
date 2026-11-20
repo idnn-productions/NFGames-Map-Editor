@@ -113,7 +113,72 @@ export function view3d() {
     }
     return null;
   }
-  function renderer() { return null; }
+  /** A box's 8 corners: index bit 0 is +x, bit 1 is +y, bit 2 is +z of its own frame. */
+  function corners(box) {
+    const t = rad(box.rot || 0), c = Math.cos(t), s = Math.sin(t), out = [];
+    for (let i = 0; i < 8; i++) {
+      const lx = i & 1 ? box.half[0] : -box.half[0], ly = i & 2 ? box.half[1] : -box.half[1], lz = i & 4 ? box.half[2] : -box.half[2];
+      out.push([box.c[0] + lx * c + lz * s, box.c[1] + ly, box.c[2] - lx * s + lz * c]);
+    }
+    return out;
+  }
+  // a box's faces as corner indices (each a quad), with how bright each is: lit from above, one pair of sides darker than the other
+  const FACES = [[[2, 3, 7, 6], 1], [[0, 4, 5, 1], 0.5], [[1, 5, 7, 3], 0.82], [[0, 2, 6, 4], 0.82], [[4, 6, 7, 5], 0.68], [[0, 1, 3, 2], 0.68]];
+  const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
 
-  return { camera, project, ray, rayPlaneY, rayBox, axisDrag, pieceBoxes, hostTop, renderer };
+  /** Draws a scene with WebGL 1, or null when the browser has none:
+   *  scene { clear: [r, g, b], ground: { disc: { c: [x, z], r } | rect: { min, max }, colour }, tris: [{ boxes, colour: [r, g, b, a] }], lines: [{ pts: [[x, y, z], ...], colour }] }.
+   *  Colours are 0..1. See-through boxes (a < 1) are drawn last, without writing depth. */
+  function renderer(canvas) {
+    let gl = null;
+    try { gl = canvas.getContext('webgl', { antialias: true, preserveDrawingBuffer: true }); } catch { gl = null; }
+    if (!gl) return null;
+    const shader = (type, text) => { const s = gl.createShader(type); gl.shaderSource(s, text); gl.compileShader(s); return s; };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, shader(gl.VERTEX_SHADER, 'attribute vec3 p; attribute vec4 c; uniform mat4 m; varying vec4 v; void main() { gl_Position = m * vec4(p, 1.0); v = c; }'));
+    gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, 'precision mediump float; varying vec4 v; void main() { gl_FragColor = v; }'));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
+    const aP = gl.getAttribLocation(prog, 'p'), aC = gl.getAttribLocation(prog, 'c'), uM = gl.getUniformLocation(prog, 'm'), buf = gl.createBuffer();
+    const R = { lost: false };
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); R.lost = true; });
+    /** Draws vertex data [x, y, z, r, g, b, a, ...] as triangles or lines. */
+    const send = (data, mode) => {
+      if (!data.length) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STREAM_DRAW);
+      gl.enableVertexAttribArray(aP); gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 28, 0);
+      gl.enableVertexAttribArray(aC); gl.vertexAttribPointer(aC, 4, gl.FLOAT, false, 28, 12);
+      gl.drawArrays(mode, 0, data.length / 7);
+    };
+    const vert = (out, p, c, k = 1) => out.push(p[0], p[1], p[2], c[0] * k, c[1] * k, c[2] * k, c[3] ?? 1);
+    const boxTris = (out, box, colour) => {
+      const q = corners(box);
+      for (const [[a, b, c, d], k] of FACES) for (const i of [a, b, c, a, c, d]) vert(out, q[i], colour, k);
+    };
+    R.resize = (w, h) => { canvas.width = w; canvas.height = h; };
+    R.draw = (cam, scene) => {
+      if (R.lost || gl.isContextLost()) { R.lost = true; return; }
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      const bg = scene.clear || [0, 0, 0];
+      gl.clearColor(bg[0], bg[1], bg[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.useProgram(prog); gl.uniformMatrix4fv(uM, false, cam.viewProj);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      // the ground, pushed back a little so what lies on it (grid, outlines) is not lost in it
+      const g = scene.ground, ground = [];
+      if (g && g.disc) { const { c, r } = g.disc, n = 96; for (let i = 0; i < n; i++) { const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2; vert(ground, [c[0], 0, c[1]], g.colour); vert(ground, [c[0] + Math.cos(a0) * r, 0, c[1] + Math.sin(a0) * r], g.colour); vert(ground, [c[0] + Math.cos(a1) * r, 0, c[1] + Math.sin(a1) * r], g.colour); } }
+      else if (g && g.rect) { const [x0, z0] = g.rect.min, [x1, z1] = g.rect.max; for (const p of [[x0, z0], [x1, z0], [x1, z1], [x0, z0], [x1, z1], [x0, z1]]) vert(ground, [p[0], 0, p[1]], g.colour); }
+      gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1, 2); send(ground, gl.TRIANGLES); gl.disable(gl.POLYGON_OFFSET_FILL);
+      const solid = [], clear = [];
+      for (const t of scene.tris || []) for (const b of t.boxes) boxTris((t.colour[3] ?? 1) < 1 ? clear : solid, b, t.colour);
+      send(solid, gl.TRIANGLES);
+      const lines = [];
+      for (const l of scene.lines || []) for (let i = 0; i + 1 < l.pts.length; i++) { vert(lines, l.pts[i], l.colour); vert(lines, l.pts[i + 1], l.colour); }
+      send(lines, gl.LINES);
+      gl.depthMask(false); send(clear, gl.TRIANGLES); gl.depthMask(true);
+    };
+    return R;
+  }
+
+  return { camera, project, ray, rayPlaneY, rayBox, axisDrag, pieceBoxes, hostTop, corners, EDGES, renderer };
 }
