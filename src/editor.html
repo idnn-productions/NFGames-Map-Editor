@@ -476,10 +476,12 @@ function scene3(list) {
 function draw3() {
   if (!R3 || R3.lost) { setMode('top'); return; }
   C3 = V3.camera(cam3, W / Math.max(1, H));
-  const list = sceneBoxes();
-  R3.draw(C3, scene3(list));
+  const list = sceneBoxes(), scene = scene3(list), ghost = ghostScene();
+  if (ghost) scene.tris.push(ghost);
+  R3.draw(C3, scene);
   ctx.clearRect(0, 0, W, H);
   drawMarkers();
+  if (placing && ghost3 && placing.startsWith('plant:')) circle(ghost3.at, 7, '#7fbf6a88', '#fff', 1.5); // where a plant would go
   // the selection: an outline round each selected piece, over everything so it shows through what is in front of it
   for (const b of list) if (sel.includes(b.key)) for (const box of b.boxes) {
     const q = V3.corners(box).map(p3);
@@ -604,7 +606,8 @@ function adoptRule(i) {
   if (n < 0) { status(`A rule-made ${it ? it.kind : 'thing'} cannot be placed by hand (no plant of that kind): it can only be removed (Del).`, 'bad'); return null; }
   return `plant:${n}`;
 }
-function placeAt(kind, x, z) {
+/** Places one of the picked palette entry at (x, z); a plain kind placed on a roof (3D) stands at `y`. */
+function placeAt(kind, x, z, y = 0) {
   remember();
   if (kind.startsWith('plant:')) {
     ensurePlants().points.push({ kind: kind.slice(6), at: [snap(x), snap(z)] });
@@ -614,8 +617,9 @@ function placeAt(kind, x, z) {
   }
   const pre = kind.startsWith('preset:') ? UI.presets.find((s) => s.id === kind.slice(7)) : null;
   const p = pre ? { id: nextSeriesId(pre.idPrefix), kind: pre.kind, at: [snap(x), snap(z)], rot: 0, ...(pre.scale ? { scale: pre.scale } : {}) } : { id: uniqueId((kind.split(':')[1] || kind).replace(/_\d.*$/, '')), kind, at: [snap(x), snap(z)], rot: 0 };
-  plan.pieces.push(p); sel = [`piece:${p.id}`]; changed();
-  status(`Placed ${p.id} (${p.kind}). Click again for another; Esc to stop.`);
+  if (y > 0 && !pre) p.y = tidy(y);
+  plan.pieces.push(p); sel = [`piece:${p.id}`]; lead3 = sel[0]; changed();
+  status(`Placed ${p.id} (${p.kind})${p.y ? ` on a roof, at y ${p.y}` : ''}. Click again for another; Esc to stop.`);
 }
 
 // --- the mouse in 3D: orbit, pan and zoom (selecting and moving: below) -------------------------------------
@@ -699,8 +703,37 @@ const movers = () => sel.map((key) => ({ key, h: handle(key) })).filter((m) => m
 /** A drag in the plan's metres, from one in the drawn frame (a piece attached to a scaled host moves at the host's scale). */
 const attachF = (p) => (p && hostOf(p) ? P() / lookK(hostOf(p).kind) : 1);
 const setY = (p, v) => { v = tidy(Math.max(0, v)); if (v === 0) delete p.y; else p.y = v; };
+// --- placing in 3D: a palette entry lands on the ground, or on the top of a piece the fit check accepts as a host -------
+let ghost3 = null; // { at: [x, z] (the plan's), y (the plan's), yDrawn } where a click would place the picked entry
+/** Where a click at a pixel places the picked entry: the nearest of the ground and the tops of host pieces under the ray. */
+function placeSpot(sx, sy) {
+  const r = ray3(sx, sy), g = V3.rayPlaneY(r, 0);
+  let best = g ? { t: Math.hypot(g[0] - r.o[0], g[1] - r.o[1], g[2] - r.o[2]), p: g, host: false } : null;
+  const plain = placing && !/^(plant|preset):/.test(placing);
+  if (plain) for (const b of sceneBoxes()) {
+    const p = b.piece, k = kindsInfo[p.kind];
+    if (lifted(p) || !k || k.solid === false) continue;
+    for (const box of b.boxes) {
+      const top = box.c[1] + box.half[1], h = V3.rayPlaneY(r, top); if (!h) continue;
+      const t = Math.hypot(h[0] - r.o[0], h[1] - r.o[1], h[2] - r.o[2]);
+      if ((!best || t < best.t) && V3.rayBox({ o: [h[0], top + 1, h[2]], d: [0, -1, 0] }, box) !== null) best = { t, p: h, host: true }; // the point lies on that top
+    }
+  }
+  if (!best) return null;
+  const at = [snap(best.p[0]), snap(best.p[2])], host = best.host ? V3.hostTop(plan, kindsInfo, at, new Set()) : null;
+  return { at, y: host ? host.top : 0, yDrawn: host ? best.p[1] : 0 };
+}
+/** The picked entry's see-through box (or a ring, for a plant) where a click would place it. */
+function ghostScene() {
+  if (!ghost3 || !placing) return null;
+  if (placing.startsWith('plant:')) return null;
+  const pre = placing.startsWith('preset:') ? UI.presets.find((s) => s.id === placing.slice(7)) : null, kind = pre ? pre.kind : placing, k = info(kind);
+  const q = { kind, at: ghost3.at, rot: 0, ...(pre && pre.scale ? { scale: pre.scale } : {}) }, s = drawScale(q);
+  return { boxes: V3.pieceBoxes({ at: ghost3.at, rot: 0, y: ghost3.yDrawn, size: k.size, boxes: k.boxes, s, st: 1, hs: s }), colour: rgba(pre ? pre.colour : classOf(k.cls).colour, 0.45) };
+}
 function down3(e) {
   if (e.button !== 0) { drag = orbitOrPan(e); return; }
+  if (placing) { drag = { ...orbitOrPan(e), placeClick: true }; return; } // a click places; a drag still orbits
   const hd = handleAt(e.offsetX, e.offsetY), L = lead();
   if (hd && L) {
     const base = { before: snapshot(), moved: false, sx: e.offsetX, sy: e.offsetY, lead: L, move: movers() };
@@ -719,12 +752,17 @@ function down3(e) {
 }
 function move3(e) {
   if (!drag) {
+    if (placing) {
+      ghost3 = placeSpot(e.offsetX, e.offsetY); canvas.style.cursor = 'crosshair';
+      $('hud').textContent = ghost3 ? `plan x ${ghost3.at[0].toFixed(2)}  y ${ghost3.y}  z ${ghost3.at[1].toFixed(2)}${ghost3.y ? '   ·   on a roof' : ''}` : '';
+      draw(); return;
+    }
     hud3(e); const hd = handleAt(e.offsetX, e.offsetY);
     if (hd !== hover3) { hover3 = hd; draw(); }
-    canvas.style.cursor = placing ? 'crosshair' : hd ? 'grab' : pick3(e.offsetX, e.offsetY) ? 'move' : 'default';
+    canvas.style.cursor = hd ? 'grab' : pick3(e.offsetX, e.offsetY) ? 'move' : 'default';
     return;
   }
-  if (drag.cam) return moveCam(e);
+  if (drag.cam) { if (drag.placeClick && !drag.moved && Math.hypot(e.offsetX - drag.sx, e.offsetY - drag.sy) < 3) return; drag.moved = true; return moveCam(e); }
   if (!drag.moved && Math.hypot(e.offsetX - drag.sx, e.offsetY - drag.sy) < 3) return;
   const r = ray3(e.offsetX, e.offsetY), L = drag.lead, f = attachF(L.piece), lm = drag.move.find((m) => m.key === L.key) || drag.move[0];
   if (!lm) return;
@@ -751,8 +789,9 @@ function move3(e) {
   drag.moved = true;
   draw(); if (sel.length === 1) renderSelected();
 }
-function up3() {
+function up3(e) {
   const d = drag; drag = null;
+  if (d && d.placeClick && !d.moved && placing) { const s = placeSpot(e.offsetX, e.offsetY); if (s) placeAt(placing, s.at[0], s.at[1], s.y); return; }
   if (d && d.before && d.moved) { undoStack.push(d.before); redoStack = []; changed(); } else draw();
 }
 /** A drag cut short (the view switched, Esc, undo): everything goes back to where it was, and nothing lands on the undo stack. */
@@ -916,7 +955,7 @@ function buildPalette() {
   }
   if (!box.children.length) box.append(h('div', { class: 'small dim', textContent: 'This project lists no kinds of piece: give it a kit.json, or a kinds hook in its config (README).' }));
 }
-function markPalette() { document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('on', b.dataset.kind === placing)); canvas.style.cursor = placing ? 'crosshair' : 'default'; if (placing) status(`Placing ${placing.replace(/^(preset|plant):/, '')}: click on the map. Esc to stop.`); }
+function markPalette() { ghost3 = null; if (mode === '3d') draw(); document.querySelectorAll('#palette button').forEach((b) => b.classList.toggle('on', b.dataset.kind === placing)); canvas.style.cursor = placing ? 'crosshair' : 'default'; if (placing) status(`Placing ${placing.replace(/^(preset|plant):/, '')}: click on the map. Esc to stop.`); }
 function buildLayers() {
   const box = $('layers'); box.textContent = '';
   const defs = [...BASE_LAYERS.filter(([k]) => k !== 'plants' || UI.plantsOn).map(([id, text]) => ({ id, label: text })), ...layerList().map((l) => { const d = UI.compileLayers.find((q) => q.id === l.id) || UI.overlays.find((q) => q.id === l.id) || { label: (l.data && l.data.label) || l.id, on: true }; return { id: l.id, label: d.label, on: d.on, lazy: d.lazy }; })];

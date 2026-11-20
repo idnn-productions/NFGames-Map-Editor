@@ -5,7 +5,8 @@ JSON file per map (`layout.json`), plus an optional planting plan (`plants.json`
 can move, turn, size, add and remove pieces, and move where the player arrives, people, things to
 use and walkers' rounds. You can also write the text on doors and things, and place plants. Save
 checks the plan against a JSON Schema, writes it atomically and keeps the old file as a backup. A fit
-check warns about pieces standing in each other, things outside the map, blocked doors and similar.
+check warns about pieces standing in each other, things outside the map, blocked doors and similar. A
+**3D view** shows the same plan as boxes, where you lift pieces onto roofs and move them along x, y and z.
 
 The editor's core works for any game. Anything specific to one game lives in a **project config file**
 (`map-editor.config.mjs`): where its kinds of piece and their sizes come from, its own compile and
@@ -15,6 +16,8 @@ It runs on your machine only: the server listens on `127.0.0.1` and refuses ever
 [Security model](#security-model)).
 
 ![The editor on the sample map](docs/editor.png)
+
+![The same map in the 3D view](docs/editor-3d.png)
 
 ## Contents
 
@@ -36,7 +39,7 @@ It runs on your machine only: the server listens on `127.0.0.1` and refuses ever
 ## Requirements
 
 - **Node.js 20 or later.** The editor has no runtime dependencies.
-- **A desktop browser.** Chrome, Edge and Firefox all work; the page is plain HTML and a 2D canvas.
+- **A desktop browser.** Chrome, Edge and Firefox all work; the page is plain HTML, a 2D canvas, and WebGL for the 3D view.
 - Windows, macOS and Linux are all supported. Only Node is needed, and no shell scripts are involved.
 
 ## Install
@@ -353,6 +356,8 @@ something (config `plants.debris`, `plants.follows`) are drawn but cannot be pic
 | **Ctrl Z** | undo |
 | **Ctrl Y** or **Ctrl Shift Z** | redo |
 | **Ctrl S** | save (this works even while typing in a field) |
+| **Page Up** / **Page Down** | lifts or lowers the selected pieces one snap step (**Shift**: 1 m); never below the ground |
+| **Tab** | switches between the top view and the 3D view |
 | **F** | fits the whole map in view |
 | **Esc** | stops placing; pressed again, clears the selection |
 
@@ -420,6 +425,49 @@ On a Mac, Cmd works in place of Ctrl. Keys other than Ctrl S are ignored while y
 
 Every edit goes onto the undo stack, and the page re-checks the plan with the server a quarter second
 after you stop editing. Nothing is written until you save.
+
+### The 3D view
+
+**Top** and **3D** over the map (or **Tab**, or `?view=3d` in the address) switch between the plan from above
+and the same plan in 3D. Both views share the selection, undo and redo, the palette, Problems and the Selected
+panel, so you can switch at any time. The 3D view needs WebGL; without it the 3D button is greyed out.
+
+What it draws: the ground (a disc, or the bounds' rectangle) with the metre grid, the ring wall (2 m high,
+open at the gate), and every piece as solid boxes of its kind's `size` (one box per entry of `boxes`, at
+full height, so an open hall is its walls), in its class's colour, standing at its `y`. A short line on the
+ground marks each piece's front. People, things, doors, rounds, the arrival and hand-placed plants are the
+top view's markers, lying on the ground. A compass in the corner shows x (red), y (green), z (blue) and north.
+
+| Do | What happens |
+|---|---|
+| **Drag empty space** | orbits round the middle of the view |
+| **Right or middle button drag** | pans along the ground |
+| **Wheel** | zooms toward the ground under the mouse |
+| **Click** something | selects it; **Shift** or **Ctrl click** adds it or takes it out |
+| **Drag the red, green or blue arrow** | moves the selection along x, y (up) or z only. Things with no height (people, things, doors, rounds, the arrival, plants) have no green arrow |
+| **Drag a box** | slides it (and the rest of the selection) over the ground, at its height |
+| **Drag the white ring** | turns the piece in 15° steps (**Alt**: 1°) |
+| **Click the map while a palette entry is picked** | places one where the see-through box shows: on the ground, or on the roof of the piece under the mouse. A drag still orbits |
+
+The arrow keys nudge along the plan's axis nearest to that way on the screen; every other key works as in
+the top view. Everything snaps to the snap step, on all three axes.
+
+**Landing on things.** While you drag a piece up or down, it catches the top of the piece under its middle
+when it comes within 0.3 m of it, and a palette entry placed on a roof stands on it. "The piece under it" is
+what the fit check counts: a piece on the ground, of a known kind, not `solid: false` (the first in the file
+when several are). So a piece put up this way raises no `float` warning. Nothing goes below the ground, and a
+height of 0 is written as no `y` at all.
+
+What it does not do (yet):
+
+- It shows boxes, not the game's models.
+- It does not land a piece on a piece that is itself lifted (the fit check does not accept that either);
+  the green arrow and **lift y** still put a piece at any height.
+- It shows the file's `y`. A project whose compile seats pieces itself ("seated at" in the Selected panel)
+  may put them elsewhere in the game.
+- The project's own layers and rule-made plants are drawn in the top view only. Box select is top view only.
+- Maps a project draws larger (`display`) are drawn at the same sizes as in the top view; landing uses the
+  plan's own sizes, so on such maps it is best effort.
 
 ## Save and backups
 
@@ -540,6 +588,7 @@ A config file is code, so it runs with your rights. Only use configs you trust, 
 | Every piece is a 2 x 2 m pink square | the editor does not know the kinds' sizes: add a `kit.json`, a `kinds` hook, or `sizes` in the plan |
 | `map editor config: ...` at start | the config has a mistake (an action step that is not a list of strings, a missing schema file ...); the message says which |
 | `the compile failed: ...` under Problems | the project's `compile` hook threw. Its message follows |
+| The 3D button is greyed out | the browser has no WebGL (its tooltip says so). Turn on hardware acceleration in the browser's settings, or update the graphics driver |
 | An Apply button is greyed out | save first (actions read the saved files), or wait for the running job. The button's tooltip says which |
 | An Apply step fails with `could not start` | the program in `command` is not on the PATH. On Windows, `.cmd` and `.bat` files cannot be run without a shell: point at the `.exe`, or wrap the step in a Node script |
 | `npm run check:browser` says `playwright-core not found` | `npm i --no-save playwright-core`, or set `PLAYWRIGHT_MODULE` to an existing copy's folder |
@@ -550,7 +599,8 @@ A config file is code, so it runs with your rights. Only use configs you trust, 
 npm test                 # node:test, no dependencies: a few seconds
 ```
 
-These cover the plan's text format (byte-for-byte round trips, one changed line per move, key order),
+These cover the 3D view's maths (`test/view3d.test.mjs`: the camera, picking, axis drags, and that what a
+piece lands on is what the fit check accepts), the plan's text format (byte-for-byte round trips, one changed line per move, key order),
 `plants.json`'s format, the plant edits the page shares with the server, the schema messages, map names,
 the config (defaults, kit, actions that are not fixed lists refused), the fit check and the plants check,
 and the server over HTTP. The server tests include: refused Hosts, Origins and content types; traversal
@@ -560,12 +610,16 @@ refused after the file changed on disk; `plants.json`; unknown actions refused; 
 
 ```sh
 npm run check:browser    # the page in headless Chrome, against a copy of the sample project
-npm run screenshot       # the same, and docs/editor.png
+npm run screenshot       # the same, and docs/editor.png and docs/editor-3d.png
 ```
 
 The browser check loads the page and fails on any console error or warning. It drags a piece with the
 mouse, saves with Ctrl S, checks that `layout.json` changed and `layout.prev.json` holds the old file,
 runs the Report action from its button, and checks that a foreign Host and a foreign Origin are refused.
+In the 3D view it checks that the map is drawn and stays centred after a resize, that the Y arrow lifts the
+crate on the snap grid and the X arrow moves it east only, that nothing goes below the ground, that Page Down
+lowers the roof tank, that switching views mid-drag changes nothing, and that a crate clicked onto a roof
+stands on it with no fit-check warning.
 It needs `playwright-core` (not a dependency: `npm i --no-save playwright-core`, or
 `PLAYWRIGHT_MODULE=<its folder>`) and Chrome (`CHROME=<path>`, else the usual install places). To check a
 server you started yourself, run

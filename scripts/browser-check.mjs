@@ -177,6 +177,27 @@ try {
       if (!(await page.evaluate(() => window.__map.gizmo()))) fail('the beacon mark should have handles');
       if (/NaN|null/.test(await page.evaluate(() => JSON.stringify(window.__map.plan.pieces)))) fail('a NaN or null got into the plan');
       await page.evaluate(() => window.__map.select([]));
+
+      // placing in 3D: a crate clicked onto h2's roof lands on it (and the fit check agrees); on open ground it has no y
+      const count = () => page.evaluate(() => window.__map.plan.pieces.length);
+      const n0 = await count();
+      await page.click('#palette button[data-kind="kit:crate"]');
+      const roof = await page.evaluate(() => window.__map.toScreen3([4, 3.5, 12]));
+      await page.mouse.click(roof[0], roof[1]);
+      const onRoof = await page.evaluate(() => window.__map.plan.pieces.at(-1));
+      console.log(`3D: placed ${onRoof.id} at ${onRoof.at}, y ${onRoof.y}`);
+      if ((await count()) !== n0 + 1 || onRoof.y !== 3.5 || Math.hypot(onRoof.at[0] - 4, onRoof.at[1] - 12) > 0.25) fail(`a crate clicked onto h2's roof should stand on it at y 3.5: ${JSON.stringify(onRoof)}`);
+      const previews = await page.evaluate(() => window.__map.previews);
+      await page.waitForFunction((n) => window.__map.previews > n, previews, { timeout: 10000 });
+      const floats = await page.evaluate((id) => window.__map.problems.problems.filter((p) => p.kind === 'float' && p.sel.includes(`piece:${id}`)), onRoof.id);
+      if (floats.length) fail(`the fit check should accept the crate on the roof: ${floats[0].text}`);
+      const ground = await page.evaluate(() => window.__map.toScreen3([15, 0, -3]));
+      await page.mouse.click(ground[0], ground[1]);
+      const onGround = await page.evaluate(() => window.__map.plan.pieces.at(-1));
+      if ((await count()) !== n0 + 2 || 'y' in onGround) fail(`a crate clicked on open ground should have no y: ${JSON.stringify(onGround)}`);
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z');
+      if ((await count()) !== n0) fail('undo should take both placed crates away');
     }
   }
   await page.evaluate(() => window.__map.setMode('top'));
