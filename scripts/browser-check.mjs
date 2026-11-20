@@ -198,6 +198,78 @@ try {
       await page.keyboard.press('Escape');
       await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z');
       if ((await count()) !== n0) fail('undo should take both placed crates away');
+
+      // a selection lowered to the ground keeps its heights apart: the lowest stops at 0, the rest stop with it
+      const heights = () => page.evaluate(() => { const y = (id) => window.__map.plan.pieces.find((q) => q.id === id).y || 0; return [y('crate'), y('tank')]; });
+      await page.evaluate(() => { window.__map.plan.pieces.find((q) => q.id === 'crate').y = 1; window.__map.select(['piece:crate', 'piece:tank']); });
+      await page.keyboard.press('Shift+PageDown'); await page.keyboard.press('Shift+PageDown');
+      let hs = await heights();
+      if (hs[0] !== 0 || hs[1] !== 2.5) fail(`Shift Page Down twice should leave crate 0 and tank 2.5 (2.5 apart), they are at ${hs}`);
+      await page.keyboard.press('Control+z');
+      await page.evaluate(() => window.__map.select(['piece:crate', 'piece:tank'])); await page.waitForTimeout(100);
+      g = await page.evaluate(() => window.__map.gizmo());
+      await dragFrom(g.y, 0, 400);
+      hs = await heights();
+      if (hs[0] !== 0 || hs[1] !== 2.5) fail(`the Y arrow dragged down should leave crate 0 and tank 2.5, they are at ${hs}`);
+      await page.keyboard.press('Control+z');
+      await page.evaluate(() => { const p = window.__map.plan.pieces.find((q) => q.id === 'crate'); delete p.y; window.__map.select([]); });
+
+      // a key pressed in the middle of a drag edits nothing and leaves one undo step
+      await page.evaluate(() => window.__map.select(['piece:crate'])); await page.waitForTimeout(100);
+      g = await page.evaluate(() => window.__map.gizmo());
+      let undos0 = await page.evaluate(() => window.__map.undos);
+      const planAt0 = await page.evaluate(() => JSON.stringify(window.__map.plan));
+      await page.mouse.move(g.y[0], g.y[1]); await page.mouse.down();
+      for (let i = 1; i <= 6; i++) await page.mouse.move(g.y[0], g.y[1] - i * 10);
+      await page.keyboard.press('r'); await page.keyboard.press('PageUp'); await page.keyboard.press('Delete');
+      await page.mouse.move(g.y[0], g.y[1] - 70); await page.mouse.up();
+      if ((await page.evaluate(() => window.__map.undos)) !== undos0 + 1) fail('a drag with keys pressed during it should leave exactly one undo step');
+      if (!(await page.evaluate(() => window.__map.plan.pieces.some((q) => q.id === 'crate')))) fail('Delete during a drag should not remove what is dragged');
+      await page.keyboard.press('Control+z');
+      if ((await page.evaluate(() => JSON.stringify(window.__map.plan))) !== planAt0) fail('one undo after a drag should give the plan as it was before it');
+
+      // orbiting keeps the selection; a click on empty ground clears it
+      const yaw0 = await page.evaluate(() => window.__map.cam.yaw), empty = await page.evaluate(() => window.__map.toScreen3([15, 0, -3]));
+      await dragFrom(empty, 90, 0);
+      if ((await page.evaluate(() => window.__map.cam.yaw)) === yaw0) fail('a drag on empty ground should orbit');
+      if ((await page.evaluate(() => window.__map.sel.join())) !== 'piece:crate') fail('orbiting should keep the selection');
+      const empty2 = await page.evaluate(() => window.__map.toScreen3([15, 0, -3]));
+      await page.mouse.click(empty2[0], empty2[1]);
+      if ((await page.evaluate(() => window.__map.sel.length)) !== 0) fail('a click on empty ground should clear the selection');
+
+      // with the camera low, a point near the horizon is far off the map: nothing is placed, slid or zoomed out there
+      await page.evaluate(() => { const c = window.__map.cam; c.pitch = 8; c.dist = 40; c.target = [0, 0, 0]; window.__map.select([]); });
+      const farPx = await page.evaluate(() => { const c = window.__map.cam, y = (c.yaw * Math.PI) / 180; return window.__map.toScreen3([Math.sin(y) * 3000, 0, -Math.cos(y) * 3000]); });
+      const inMap = (p) => Math.hypot(p[0], p[1]) < 60;
+      const n1 = await count();
+      await page.click('#palette button[data-kind="kit:crate"]');
+      await page.mouse.click(farPx[0], farPx[1]);
+      await page.keyboard.press('Escape');
+      if ((await count()) !== n1) { fail(`a click near the horizon should place nothing: ${JSON.stringify(await page.evaluate(() => window.__map.plan.pieces.at(-1)))}`); await page.keyboard.press('Control+z'); }
+      await page.mouse.move(farPx[0], farPx[1]); await page.mouse.wheel(0, -100); await page.waitForTimeout(100);
+      const tgt = await page.evaluate(() => window.__map.cam.target);
+      if (!inMap([tgt[0], tgt[2]])) fail(`zooming at the horizon should not fling the camera off the map: target ${tgt}`);
+      await page.evaluate(() => { const c = window.__map.cam; c.target = [0, 0, 0]; c.dist = 40; window.__map.select([]); }); // nothing selected: no handles over the box, so the press grabs the box
+      const c2px = await page.evaluate(() => window.__map.toScreen3([3.25, 0.5, 2.5]));
+      await dragFrom(c2px, farPx[0] - c2px[0], farPx[1] - c2px[1], 12);
+      const slid = await page.evaluate(() => ({ far: window.__map.plan.pieces.filter((q) => Math.hypot(q.at[0], q.at[1]) >= 60).map((q) => `${q.id} at ${q.at}`) })); // whichever box was under the mouse
+      if (slid.far.length) fail(`sliding a piece toward the horizon should not fling it off the map: ${slid.far.join(', ')}`);
+      await page.keyboard.press('Control+z');
+
+      // markers behind the camera are not drawn (they used to land in the canvas's top left corner)
+      await page.evaluate(() => { const c = window.__map.cam, y = (c.yaw * Math.PI) / 180, s = window.__map.plan.spawn.at; c.pitch = 5; c.dist = 3; c.target = [s[0] + Math.sin(y) * 10, 0, s[1] - Math.cos(y) * 10]; window.__map.select([]); });
+      const corner = await page.evaluate(() => { const m = document.querySelector('#map'), d = m.width / m.getBoundingClientRect().width; return Array.from(m.getContext('2d').getImageData(0, 0, Math.round(14 * d), Math.round(14 * d)).data).filter((v, i) => i % 4 === 3 && v > 0).length; });
+      if (corner) fail(`nothing should be drawn in the top left corner when the markers are behind the camera (${corner} pixels are)`);
+      await page.evaluate(() => window.__map.setMode('3d')); await page.keyboard.press('f');
+
+      // a lost WebGL context: back to the top view, the 3D button disabled and saying why
+      const seen = errors.length;
+      await page.evaluate(() => document.querySelector('#gl').getContext('webgl').getExtension('WEBGL_lose_context').loseContext());
+      await page.waitForTimeout(300);
+      const lost = await page.evaluate(() => ({ mode: window.__map.mode, disabled: document.querySelector('#view3d').disabled, title: document.querySelector('#view3d').title, status: document.querySelector('#status').textContent }));
+      console.log(`3D: after a lost context: ${JSON.stringify(lost)}`);
+      if (lost.mode !== 'top' || !lost.disabled || !/lost/.test(lost.title)) fail('a lost WebGL context should put the page in the top view and disable the 3D button, saying the view was lost');
+      errors.splice(seen, errors.length - seen, ...errors.slice(seen).filter((m) => !/CONTEXT_LOST_WEBGL/.test(m))); // the browser's own note about the context we lost on purpose
     }
   }
   await page.evaluate(() => window.__map.setMode('top'));

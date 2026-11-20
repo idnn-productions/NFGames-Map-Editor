@@ -296,11 +296,11 @@ function drawMarkers() {
   if (show.things) for (const t of plan.things || []) {
     const on = sel.includes(`thing:${t.id}`), [sx, sy] = toScreen(t.at);
     if (on) circle(t.at, t.radius * kAt(t.at), '#ffd34d22', '#ffd34d', 1);
-    ctx.save(); ctx.translate(sx, sy); ctx.rotate(Math.PI / 4); ctx.fillStyle = COLOUR.thing; ctx.strokeStyle = on ? COLOUR.sel : '#5a4300'; ctx.lineWidth = on ? 2.5 : 1; ctx.beginPath(); ctx.rect(-5, -5, 10, 10); ctx.fill(); ctx.stroke(); ctx.restore();
+    if (Number.isFinite(sx)) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(Math.PI / 4); ctx.fillStyle = COLOUR.thing; ctx.strokeStyle = on ? COLOUR.sel : '#5a4300'; ctx.lineWidth = on ? 2.5 : 1; ctx.beginPath(); ctx.rect(-5, -5, 10, 10); ctx.fill(); ctx.stroke(); ctx.restore(); } // not when it is behind the 3D camera
     if (show.labels) label(t.id, t.at, '#ffe9a8', 10, 0, 10, 'left');
   }
   if (show.people) for (const [id, v] of Object.entries(plan.people || {})) { const on = sel.includes(`person:${id}`); circle(personAt(v), on ? 7 : 5.5, COLOUR.person, on ? COLOUR.sel : '#063', on ? 2.5 : 1); if (show.labels) label(id, personAt(v), '#d8f7ff', 10, 0, 10, 'left'); }
-  { // where the player arrives, and which way they face
+  if (Number.isFinite(toScreen(plan.spawn.at)[0])) { // where the player arrives, and which way they face (not when it is behind the 3D camera)
     const on = sel.includes('spawn'), at = plan.spawn.at, [sx, sy] = toScreen(at), t = rad(plan.spawn.yaw || 0), [fx, fy] = toScreen([at[0] + Math.sin(t), at[1] + Math.cos(t)]);
     ctx.save(); ctx.translate(sx, sy); ctx.rotate(Math.atan2(fy - sy, fx - sx)); // the arrow's point along (sin yaw, cos yaw), as it falls on the screen: 0 faces south
     ctx.beginPath(); ctx.moveTo(11, 0); ctx.lineTo(-7, -7); ctx.lineTo(-3, 0); ctx.lineTo(-7, 7); ctx.closePath(); ctx.fillStyle = COLOUR.spawn; ctx.strokeStyle = on ? COLOUR.sel : '#2a4a00'; ctx.lineWidth = on ? 2.5 : 1; ctx.fill(); ctx.stroke(); ctx.restore();
@@ -359,6 +359,7 @@ function drawRing() {
 /** One plant: a pot (a rim, green inside), a star (an agave, say), anything else a disc. `r` in pixels. */
 function plantIcon(at, built, r, { alpha = 1, on = false, rot = null } = {}) {
   const d = plantStyle(built), [sx, sy] = toScreen(at);
+  if (!Number.isFinite(sx)) return; // behind the 3D camera
   ctx.save(); ctx.globalAlpha = alpha; ctx.translate(sx, sy);
   ctx.beginPath();
   if (d.star) { const n = d.star; for (let k = 0; k < n * 2; k++) { const a = (k / (n * 2)) * Math.PI * 2 + (rot ?? 0), q = k % 2 ? r * 0.42 : r; if (k) ctx.lineTo(Math.cos(a) * q, Math.sin(a) * q); else ctx.moveTo(Math.cos(a) * q, Math.sin(a) * q); } ctx.closePath(); }
@@ -513,7 +514,7 @@ function fit3() {
 }
 /** Switches between the top view and the 3D view. 3D needs WebGL: without it the button is disabled and the top view stays. */
 function setMode(m) {
-  if (m === '3d' && (!R3 || R3.lost)) { const b = $('view3d'); b.disabled = true; b.title = 'This browser has no WebGL: the 3D view needs it.'; m = 'top'; }
+  if (m === '3d' && (!R3 || R3.lost)) { const b = $('view3d'); b.disabled = true; if (!R3) b.title = 'This browser has no WebGL: the 3D view needs it.'; m = 'top'; }
   cancelDrag();
   mode = m; hover3 = null;
   document.querySelector('main').classList.toggle('three', mode === '3d');
@@ -624,7 +625,15 @@ function placeAt(kind, x, z, y = 0) {
 
 // --- the mouse in 3D: orbit, pan and zoom (selecting and moving: below) -------------------------------------
 const ray3 = (sx, sy) => V3.ray(C3, sx, sy, W, H);
-const ground3 = (sx, sy, c = C3) => V3.rayPlaneY(V3.ray(c, sx, sy, W, H), 0);
+/** A point at a level is only "on the map" within the ring or bounds and a margin: near the horizon a ray meets the ground
+ *  kilometres away, and nothing should be placed, slid, panned or zoomed toward there. */
+function nearMap(p) {
+  if (!p) return null;
+  const c = centre(), r = plan.ring ? plan.ring.radius : plan.bounds ? Math.max(plan.bounds.max[0] - plan.bounds.min[0], plan.bounds.max[1] - plan.bounds.min[1]) / 2 : 60, margin = Math.max(20, r);
+  if (plan.bounds && !plan.ring) { const [x0, z0] = plan.bounds.min, [x1, z1] = plan.bounds.max; return p[0] >= x0 - margin && p[0] <= x1 + margin && p[2] >= z0 - margin && p[2] <= z1 + margin ? p : null; }
+  return Math.hypot(p[0] - c[0], p[2] - c[1]) <= r + margin ? p : null;
+}
+const ground3 = (sx, sy, c = C3) => nearMap(V3.rayPlaneY(V3.ray(c, sx, sy, W, H), 0));
 function orbitOrPan(e) {
   const pan = e.button !== 0;
   return { cam: true, pan, sx: e.offsetX, sy: e.offsetY, from: { ...cam3, target: [...cam3.target] }, c: C3, g: pan ? ground3(e.offsetX, e.offsetY) : null };
@@ -707,7 +716,7 @@ const setY = (p, v) => { v = tidy(Math.max(0, v)); if (v === 0) delete p.y; else
 let ghost3 = null; // { at: [x, z] (the plan's), y (the plan's), yDrawn } where a click would place the picked entry
 /** Where a click at a pixel places the picked entry: the nearest of the ground and the tops of host pieces under the ray. */
 function placeSpot(sx, sy) {
-  const r = ray3(sx, sy), g = V3.rayPlaneY(r, 0);
+  const r = ray3(sx, sy), g = nearMap(V3.rayPlaneY(r, 0));
   let best = g ? { t: Math.hypot(g[0] - r.o[0], g[1] - r.o[1], g[2] - r.o[2]), p: g, host: false } : null;
   const plain = placing && !/^(plant|preset):/.test(placing);
   if (plain) for (const b of sceneBoxes()) {
@@ -743,11 +752,11 @@ function down3(e) {
     return;
   }
   const t = pick3(e.offsetX, e.offsetY);
-  if (!t) { if (!e.ctrlKey) select([]); drag = orbitOrPan(e); return; }
+  if (!t) { drag = { ...orbitOrPan(e), clearOnClick: !e.ctrlKey }; return; } // a click clears the selection; a drag orbits and keeps it
   if (e.shiftKey || e.ctrlKey) { lead3 = t.key; select(sel.includes(t.key) ? sel.filter((k) => k !== t.key) : [...sel, t.key]); return; }
   lead3 = t.key;
   if (!sel.includes(t.key)) select([t.key]);
-  const L2 = lead(), g0 = L2 && V3.rayPlaneY(ray3(e.offsetX, e.offsetY), L2.origin[1]);
+  const L2 = lead(), g0 = L2 && nearMap(V3.rayPlaneY(ray3(e.offsetX, e.offsetY), L2.origin[1]));
   if (L2 && g0) drag = { before: snapshot(), moved: false, sx: e.offsetX, sy: e.offsetY, lead: L2, move: movers(), slide: g0 };
 }
 function move3(e) {
@@ -762,7 +771,7 @@ function move3(e) {
     canvas.style.cursor = hd ? 'grab' : pick3(e.offsetX, e.offsetY) ? 'move' : 'default';
     return;
   }
-  if (drag.cam) { if (drag.placeClick && !drag.moved && Math.hypot(e.offsetX - drag.sx, e.offsetY - drag.sy) < 3) return; drag.moved = true; return moveCam(e); }
+  if (drag.cam) { if (!drag.moved && Math.hypot(e.offsetX - drag.sx, e.offsetY - drag.sy) < 3) return; drag.moved = true; return moveCam(e); }
   if (!drag.moved && Math.hypot(e.offsetX - drag.sx, e.offsetY - drag.sy) < 3) return;
   const r = ray3(e.offsetX, e.offsetY), L = drag.lead, f = attachF(L.piece), lm = drag.move.find((m) => m.key === L.key) || drag.move[0];
   if (!lm) return;
@@ -772,7 +781,7 @@ function move3(e) {
     drag.turn.rot = norm(e.altKey ? Math.round(deg) : round(deg, 15));
   } else if (drag.slide || drag.axis === 0 || drag.axis === 2) {
     let dx = 0, dz = 0;
-    if (drag.slide) { const g = V3.rayPlaneY(r, L.origin[1]); if (!g) return; dx = (g[0] - drag.slide[0]) * f; dz = (g[2] - drag.slide[2]) * f; }
+    if (drag.slide) { const g = nearMap(V3.rayPlaneY(r, L.origin[1])); if (!g) return; dx = (g[0] - drag.slide[0]) * f; dz = (g[2] - drag.slide[2]) * f; }
     else { const v = V3.axisDrag(r, L.origin, drag.axis); if (v === null) return; (drag.axis === 0 ? (dx = (v - drag.v0) * f) : (dz = (v - drag.v0) * f)); }
     // the lead lands on the snap grid; the rest keep their places beside it
     const sx = dx || drag.slide ? snap(lm.from[0] + dx) - lm.from[0] : 0, sz = dz || drag.slide ? snap(lm.from[1] + dz) - lm.from[1] : 0;
@@ -783,7 +792,7 @@ function move3(e) {
     const yf = P() / lookK(host ? pieceById(host.id).kind : L.piece.kind); // drawn height to the plan's
     let y = Math.max(0, snap(lm.y + (v - drag.v0) * yf));
     if (host && Math.abs(y - host.top) <= 0.3) y = host.top; // it lands on the top of what is under it, where the fit check wants it
-    const dy = y - lm.y;
+    const dy = Math.max(y - lm.y, -Math.min(...drag.move.filter((m) => m.y !== null).map((m) => m.y))); // the lowest stops on the ground, the rest stop with it
     for (const m of drag.move) if (m.y !== null) setY(handle(m.key).piece, m.y + dy);
   }
   drag.moved = true;
@@ -792,6 +801,7 @@ function move3(e) {
 function up3(e) {
   const d = drag; drag = null;
   if (d && d.placeClick && !d.moved && placing) { const s = placeSpot(e.offsetX, e.offsetY); if (s) placeAt(placing, s.at[0], s.at[1], s.y); return; }
+  if (d && d.clearOnClick && !d.moved) { select([]); return; }
   if (d && d.before && d.moved) { undoStack.push(d.before); redoStack = []; changed(); } else draw();
 }
 /** A drag cut short (the view switched, Esc, undo): everything goes back to where it was, and nothing lands on the undo stack. */
@@ -802,6 +812,8 @@ function cancelDrag() {
 /** Lifts (or lowers) the selected pieces; none goes below the ground, and a height of 0 is no `y` at all. */
 function liftSelected(dy) {
   const list = selectedPieces(); if (!list.length) return;
+  dy = Math.max(dy, -Math.min(...list.map((p) => p.y || 0))); // the lowest stops on the ground, the rest stop with it
+  if (!dy) return;
   remember(); for (const p of list) setY(p, (p.y || 0) + dy); changed();
 }
 
@@ -887,6 +899,8 @@ for (const type of ['keydown', 'keyup']) window.addEventListener(type, (e) => { 
 window.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
   const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
+  // while something is being dragged, no other edit: Esc and Ctrl Z stop the drag (it goes back), every other key waits
+  if (drag && drag.before && !['alt', 'shift', 'control', 'meta'].includes(key)) { e.preventDefault(); if (key === 'escape' || (mod && key === 'z')) { cancelDrag(); status('Stopped the move.'); } return; }
   if (mod && key === 's') { e.preventDefault(); save(); return; }
   if (typing) return;
   if (key === 'tab' && !mod) { e.preventDefault(); setMode(mode === '3d' ? 'top' : '3d'); return; }
@@ -1202,6 +1216,8 @@ async function load() {
   try { const { maps } = await (await fetch('/api/maps')).json(); if (maps.length > 1) { const m = $('maps'); m.style.display = ''; m.append(...maps.map((n) => h('option', { value: n, textContent: n, selected: n === S.name }))); m.onchange = () => { location.search = `?map=${encodeURIComponent(m.value)}`; }; } } catch { /* one map */ }
   R3 = V3.renderer($('gl'));
   if (!R3) { $('view3d').disabled = true; $('view3d').title = 'This browser has no WebGL: the 3D view needs it.'; }
+  // the graphics driver can take WebGL away (a reset, too many pages using it): say so, and go on in the top view
+  $('gl').addEventListener('webglcontextlost', () => { $('view3d').disabled = true; $('view3d').title = 'The 3D view was lost (the graphics driver reset): reload the page to get it back.'; if (mode === '3d') setMode('top'); status('The 3D view was lost (the graphics driver reset). Your edits are kept; reload the page, after saving, to get the 3D view back.', 'bad'); });
   buildPalette(); buildActions(); resize(); fit();
   if (new URLSearchParams(location.search).get('view') === '3d') setMode('3d');
   applyPreview(body); buildLayers(); changed();

@@ -141,7 +141,7 @@ export function view3d() {
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
     const aP = gl.getAttribLocation(prog, 'p'), aC = gl.getAttribLocation(prog, 'c'), uM = gl.getUniformLocation(prog, 'm'), buf = gl.createBuffer();
     const R = { lost: false };
-    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); R.lost = true; });
+    canvas.addEventListener('webglcontextlost', () => { R.lost = true; });
     /** Draws vertex data [x, y, z, r, g, b, a, ...] as triangles or lines. */
     const send = (data, mode) => {
       if (!data.length) return;
