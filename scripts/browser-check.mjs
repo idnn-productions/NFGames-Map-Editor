@@ -127,6 +127,57 @@ try {
     c = await centreOf3d();
     if (offCentre(c) > 2) fail(`after a resize the 3D camera's target should still be in the middle, it is ${offCentre(c).toFixed(1)} px off`);
     await page.setViewportSize({ width: 1600, height: 900 }); await page.waitForTimeout(300);
+
+    // moving in 3D: the Y arrow lifts, the X arrow moves along x only, nothing goes below the ground
+    const crate = () => page.evaluate(() => { const p = window.__map.plan.pieces.find((q) => q.id === 'crate'); return { at: [...p.at], y: p.y, hasY: 'y' in p }; });
+    const dragFrom = async (from, dx, dy, steps = 8) => { await page.mouse.move(from[0], from[1]); await page.mouse.down(); for (let i = 1; i <= steps; i++) await page.mouse.move(from[0] + (dx * i) / steps, from[1] + (dy * i) / steps); await page.mouse.up(); };
+    await page.evaluate(() => window.__map.select(['piece:crate'])); await page.waitForTimeout(100);
+    let g = await page.evaluate(() => window.__map.gizmo());
+    const c0 = await crate();
+    if (!g || !g.y) fail('a selected piece should have a Y arrow in 3D');
+    else {
+      await dragFrom(g.y, 0, -60);
+      const c1 = await crate();
+      console.log(`3D: the Y arrow lifted the crate to y ${c1.y}`);
+      if (!(c1.y > 0) || Math.abs(c1.y / 0.25 - Math.round(c1.y / 0.25)) > 1e-9 || c1.at.join() !== c0.at.join()) fail(`the Y arrow should lift the crate on the snap grid and not move it sideways: ${JSON.stringify(c1)}`);
+      await page.keyboard.press('Control+z');
+      if ((await crate()).hasY) fail('undo should put the crate back on the ground (no y)');
+      g = await page.evaluate(() => window.__map.gizmo());
+      const ux = [g.x[0] - g.at[0], g.x[1] - g.at[1]], n = Math.hypot(...ux);
+      await dragFrom(g.x, (ux[0] / n) * 50, (ux[1] / n) * 50);
+      const c2 = await crate();
+      console.log(`3D: the X arrow moved the crate to ${c2.at}`);
+      if (!(c2.at[0] > c0.at[0]) || c2.at[1] !== c0.at[1] || c2.hasY) fail(`the X arrow should move the crate east only: ${JSON.stringify(c2)}`);
+      g = await page.evaluate(() => window.__map.gizmo());
+      await dragFrom(g.y, 0, 400);
+      const c3 = await crate();
+      if (c3.hasY) fail(`the Y arrow dragged down should stop on the ground (no y), the crate has y ${c3.y}`);
+      await page.keyboard.press('Control+z');
+      // Page Down lowers the tank one snap step at a time
+      await page.evaluate(() => window.__map.select(['piece:tank']));
+      await page.keyboard.press('PageDown'); await page.keyboard.press('PageDown');
+      const ty = await page.evaluate(() => window.__map.plan.pieces.find((q) => q.id === 'tank').y);
+      if (ty !== 3) fail(`Page Down twice should take the tank from 3.5 to 3, it is at ${ty}`);
+      await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z');
+      // switching views in the middle of a drag leaves the plan as it was, with nothing to undo
+      await page.evaluate(() => window.__map.select(['piece:crate'])); await page.waitForTimeout(100);
+      g = await page.evaluate(() => window.__map.gizmo());
+      const planBefore = await page.evaluate(() => JSON.stringify(window.__map.plan)), undosBefore = await page.evaluate(() => window.__map.undos);
+      await page.mouse.move(g.y[0], g.y[1]); await page.mouse.down();
+      for (let i = 1; i <= 5; i++) await page.mouse.move(g.y[0], g.y[1] - i * 10);
+      await page.evaluate(() => window.__map.setMode('top'));
+      await page.mouse.up();
+      if ((await page.evaluate(() => JSON.stringify(window.__map.plan))) !== planBefore || (await page.evaluate(() => window.__map.undos)) !== undosBefore) fail('a drag cut short by switching views should leave the plan and the undo stack as they were');
+      await page.evaluate(() => window.__map.setMode('3d'));
+      // what has no height gets no Y arrow, and nothing becomes NaN
+      await page.evaluate(() => window.__map.select(['spawn'])); await page.waitForTimeout(100);
+      g = await page.evaluate(() => window.__map.gizmo());
+      if (!g || g.y !== null || !g.x) fail(`where the player arrives should have X and Z arrows and no Y arrow: ${JSON.stringify(g)}`);
+      await page.evaluate(() => window.__map.select(['piece:beacon'])); await page.waitForTimeout(100);
+      if (!(await page.evaluate(() => window.__map.gizmo()))) fail('the beacon mark should have handles');
+      if (/NaN|null/.test(await page.evaluate(() => JSON.stringify(window.__map.plan.pieces)))) fail('a NaN or null got into the plan');
+      await page.evaluate(() => window.__map.select([]));
+    }
   }
   await page.evaluate(() => window.__map.setMode('top'));
 

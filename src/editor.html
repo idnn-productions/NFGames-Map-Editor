@@ -77,7 +77,8 @@
   <h2>Legend</h2>
   <div class="legend" id="legend"></div>
   <h2>Keys</h2>
-  <div class="keys"><b>drag</b> move · <b>drag empty ground</b> (or the right button anywhere) pan · <b>wheel</b> zoom · <b>Shift drag</b> box select · <b>Shift/Ctrl click</b> add to selection · <b>handle</b> or <b>R</b> / <b>Shift R</b> turn 15° (<b>Alt</b>: free, 1°) · <b>arrows</b> nudge one snap step (<b>Shift</b> 1 m) · <b>Ctrl D</b> duplicate · <b>Del</b> remove · <b>Ctrl Z</b> / <b>Ctrl Y</b> undo, redo · <b>Ctrl S</b> save · <b>F</b> fit · <b>Esc</b> stop / deselect</div>
+  <div class="keys"><b>drag</b> move · <b>drag empty ground</b> (or the right button anywhere) pan · <b>wheel</b> zoom · <b>Shift drag</b> box select · <b>Shift/Ctrl click</b> add to selection · <b>handle</b> or <b>R</b> / <b>Shift R</b> turn 15° (<b>Alt</b>: free, 1°) · <b>arrows</b> nudge one snap step (<b>Shift</b> 1 m) · <b>Page Up</b> / <b>Page Down</b> lift, lower · <b>Ctrl D</b> duplicate · <b>Del</b> remove · <b>Ctrl Z</b> / <b>Ctrl Y</b> undo, redo · <b>Ctrl S</b> save · <b>F</b> fit · <b>Esc</b> stop / deselect · <b>Tab</b> top view / 3D</div>
+  <div class="keys" style="margin-top:6px"><b>In 3D:</b> <b>drag empty space</b> orbit · <b>right drag</b> pan · <b>wheel</b> zoom · <b>click</b> select · <b>drag the red, green, blue arrow</b> move along x, y (up), z · <b>drag a box</b> slide it on the ground · <b>drag the white ring</b> turn · a piece lifted near the top of what is under it lands on it</div>
 </aside>
 <main><canvas id="gl"></canvas><canvas id="map"></canvas><div id="viewBar"><button id="viewTop" class="on" title="The plan from above (Tab switches)">Top</button><button id="view3d" title="The plan in 3D: boxes from the kinds' sizes (Tab switches)">3D</button></div><div id="hud"></div><div id="banner"></div></main>
 <aside id="right">
@@ -488,6 +489,7 @@ function draw3() {
   }
   if (show.labels) for (const b of list) { const at = drawAt(b.piece), s = p3([at[0], b.top, at[1]]); if (s && (kAt(at) > 5.5 || sel.includes(b.key) || info(b.piece.kind).cls === 'mark')) { const size = Math.max(9, Math.min(12, 3 + kAt(at))); ctx.font = `${size}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.lineWidth = 3; ctx.strokeStyle = '#fff8'; ctx.strokeText(b.piece.id, s[0], s[1] - 3); ctx.fillStyle = '#2a1a10'; ctx.fillText(b.piece.id, s[0], s[1] - 3); } }
   drawCompass();
+  drawGizmo();
 }
 /** Bottom right: which way x, y and z (and north) point from here. */
 function drawCompass() {
@@ -510,8 +512,8 @@ function fit3() {
 /** Switches between the top view and the 3D view. 3D needs WebGL: without it the button is disabled and the top view stays. */
 function setMode(m) {
   if (m === '3d' && (!R3 || R3.lost)) { const b = $('view3d'); b.disabled = true; b.title = 'This browser has no WebGL: the 3D view needs it.'; m = 'top'; }
-  if (drag) drag = null;
-  mode = m;
+  cancelDrag();
+  mode = m; hover3 = null;
   document.querySelector('main').classList.toggle('three', mode === '3d');
   $('viewTop').classList.toggle('on', mode === 'top'); $('view3d').classList.toggle('on', mode === '3d');
   $('gl').style.visibility = mode === '3d' ? 'visible' : 'hidden';
@@ -523,7 +525,7 @@ $('viewTop').onclick = () => setMode('top'); $('view3d').onclick = () => setMode
 const snapshot = () => JSON.stringify({ plan, plants, sel });
 function remember() { undoStack.push(snapshot()); redoStack = []; }
 function restore(text) { const s = JSON.parse(text); plan = s.plan; plants = s.plants; sel = s.sel.filter((k) => handle(k)); changed(); }
-function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); status('Undone.'); }
+function undo() { if (drag && drag.moved) { cancelDrag(); status('Stopped the move.'); return; } if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); status('Undone.'); }
 function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); status('Redone.'); }
 const isDirty = () => JSON.stringify(plan) !== savedJson || JSON.stringify(plants) !== savedPlantsJson;
 let previewTimer = null, previewSeq = 0;
@@ -638,9 +640,131 @@ function wheel3(e) {
   if (g) cam3.target = [g[0] + (cam3.target[0] - g[0]) * f, 0, g[2] + (cam3.target[2] - g[2]) * f]; // zooms toward the ground under the mouse
   cam3.dist = dist; draw();
 }
-function down3(e) { drag = orbitOrPan(e); }
-function move3(e) { if (!drag) { hud3(e); return; } if (drag.cam) moveCam(e); }
-function up3() { drag = null; }
+
+// --- selecting and moving in 3D --------------------------------------------------------------------------------
+let lead3 = null, hover3 = null; // the key whose handles are shown (the one clicked last); the handle under the mouse
+/** What is under a pixel: a marker (nearest within its radius on screen), else the nearest box the ray enters. */
+function pick3(sx, sy) {
+  let best = null, bd = Infinity;
+  for (const t of targets()) {
+    if (t.rect || t.ruled) continue;
+    const s = toScreen(t.at), d = Math.hypot(s[0] - sx, s[1] - sy);
+    if (d <= Math.min(t.r, 12) + 3 && d < bd) { best = t; bd = d; }
+  }
+  if (best) return { key: best.key, movable: best.movable };
+  const r = ray3(sx, sy);
+  let hit = null, ht = Infinity;
+  for (const b of sceneBoxes()) for (const box of b.boxes) { const t = V3.rayBox(r, box); if (t !== null && t < ht) { ht = t; hit = b; } }
+  return hit ? { key: hit.key, movable: true, piece: hit.piece } : null;
+}
+/** The lead of the selection, when it can be moved: the key, its handle, and where its handles stand (its bottom middle). */
+function lead() {
+  const key = sel.includes(lead3) ? lead3 : sel[sel.length - 1], x = key && handle(key);
+  if (!x || x.fixed) return null;
+  const at = x.piece ? drawAt(x.piece) : x.at;
+  return { key, x, piece: x.piece || null, origin: [at[0], x.piece ? yDraw(x.piece) : 0, at[1]] };
+}
+/** The handles of the selection's lead, on the canvas: arrows (x, y, z tips; y only for a piece) and a turning ring (a piece). */
+function gizmo() {
+  const L = lead(); if (!L || !C3) return null;
+  const o = p3(L.origin); if (!o) return null;
+  const tip = (v) => { const e = p3(L.origin.map((c, i) => c + v[i])); if (!e) return null; const dx = e[0] - o[0], dy = e[1] - o[1], n = Math.hypot(dx, dy); return n < 1e-3 ? null : [o[0] + (dx / n) * 70, o[1] + (dy / n) * 70]; };
+  let ring = null;
+  if (L.piece) { const [w, d] = footprint(L.piece), r = Math.hypot(w, d) / 2 + 0.8; ring = []; for (let i = 0; i <= 48; i++) { const a = (i / 48) * Math.PI * 2, s = p3([L.origin[0] + Math.cos(a) * r, L.origin[1], L.origin[2] + Math.sin(a) * r]); if (s) ring.push(s); } }
+  return { key: L.key, at: o, x: tip([1, 0, 0]), y: L.piece ? tip([0, 1, 0]) : null, z: tip([0, 0, 1]), ring };
+}
+const segDist = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1))); return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy); };
+/** Which handle is under a pixel: 'x', 'y', 'z', 'ring' or null. */
+function handleAt(sx, sy) {
+  const g = gizmo(); if (!g) return null;
+  for (const a of ['x', 'y', 'z']) if (g[a] && segDist([sx, sy], g.at, g[a]) <= 8) return a;
+  if (g.ring) for (let i = 1; i < g.ring.length; i++) if (segDist([sx, sy], g.ring[i - 1], g.ring[i]) <= 6) return 'ring';
+  return null;
+}
+function drawGizmo() {
+  const g = gizmo(); if (!g) return;
+  if (g.ring) { ctx.beginPath(); g.ring.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.strokeStyle = hover3 === 'ring' || (drag && drag.turn) ? '#fff' : '#ffffffaa'; ctx.lineWidth = hover3 === 'ring' || (drag && drag.turn) ? 4 : 2; ctx.stroke(); }
+  for (const [a, colour] of [['x', '#ff5a4d'], ['y', '#6fdc5a'], ['z', '#5aa2ff']]) {
+    const t = g[a]; if (!t) continue;
+    const dx = t[0] - g.at[0], dy = t[1] - g.at[1], n = Math.hypot(dx, dy), ux = dx / n, uy = dy / n, on = hover3 === a || (drag && drag.axis === 'xyz'.indexOf(a));
+    ctx.strokeStyle = colour; ctx.lineWidth = on ? 5 : 3; ctx.beginPath(); ctx.moveTo(g.at[0], g.at[1]); ctx.lineTo(t[0] - ux * 8, t[1] - uy * 8); ctx.stroke();
+    ctx.fillStyle = on ? '#fff' : colour; ctx.beginPath(); ctx.moveTo(t[0] + ux * 4, t[1] + uy * 4); ctx.lineTo(t[0] - ux * 10 - uy * 6, t[1] - uy * 10 + ux * 6); ctx.lineTo(t[0] - ux * 10 + uy * 6, t[1] - uy * 10 - ux * 6); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#0008'; ctx.lineWidth = 1; ctx.stroke();
+  }
+  circle_px(g.at, 4, '#fff', COLOUR.sel);
+}
+const circle_px = ([x, y], r, fill, stroke) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); };
+/** What a drag moves: every selected thing that can move, with where it started (and its height, for pieces). */
+const movers = () => sel.map((key) => ({ key, h: handle(key) })).filter((m) => m.h && !m.h.fixed).map((m) => ({ key: m.key, from: [...m.h.at], y: m.h.piece ? m.h.piece.y || 0 : null }));
+/** A drag in the plan's metres, from one in the drawn frame (a piece attached to a scaled host moves at the host's scale). */
+const attachF = (p) => (p && hostOf(p) ? P() / lookK(hostOf(p).kind) : 1);
+const setY = (p, v) => { v = tidy(Math.max(0, v)); if (v === 0) delete p.y; else p.y = v; };
+function down3(e) {
+  if (e.button !== 0) { drag = orbitOrPan(e); return; }
+  const hd = handleAt(e.offsetX, e.offsetY), L = lead();
+  if (hd && L) {
+    const base = { before: snapshot(), moved: false, sx: e.offsetX, sy: e.offsetY, lead: L, move: movers() };
+    if (hd === 'ring') { drag = { ...base, turn: L.piece }; return; }
+    const axis = 'xyz'.indexOf(hd), v0 = V3.axisDrag(ray3(e.offsetX, e.offsetY), L.origin, axis);
+    if (v0 !== null) drag = { ...base, axis, v0 };
+    return;
+  }
+  const t = pick3(e.offsetX, e.offsetY);
+  if (!t) { if (!e.ctrlKey) select([]); drag = orbitOrPan(e); return; }
+  if (e.shiftKey || e.ctrlKey) { lead3 = t.key; select(sel.includes(t.key) ? sel.filter((k) => k !== t.key) : [...sel, t.key]); return; }
+  lead3 = t.key;
+  if (!sel.includes(t.key)) select([t.key]);
+  const L2 = lead(), g0 = L2 && V3.rayPlaneY(ray3(e.offsetX, e.offsetY), L2.origin[1]);
+  if (L2 && g0) drag = { before: snapshot(), moved: false, sx: e.offsetX, sy: e.offsetY, lead: L2, move: movers(), slide: g0 };
+}
+function move3(e) {
+  if (!drag) {
+    hud3(e); const hd = handleAt(e.offsetX, e.offsetY);
+    if (hd !== hover3) { hover3 = hd; draw(); }
+    canvas.style.cursor = placing ? 'crosshair' : hd ? 'grab' : pick3(e.offsetX, e.offsetY) ? 'move' : 'default';
+    return;
+  }
+  if (drag.cam) return moveCam(e);
+  if (!drag.moved && Math.hypot(e.offsetX - drag.sx, e.offsetY - drag.sy) < 3) return;
+  const r = ray3(e.offsetX, e.offsetY), L = drag.lead, f = attachF(L.piece), lm = drag.move.find((m) => m.key === L.key) || drag.move[0];
+  if (!lm) return;
+  if (drag.turn) {
+    const g = V3.rayPlaneY(r, L.origin[1]); if (!g) return;
+    const deg = (Math.atan2(g[0] - L.origin[0], g[2] - L.origin[2]) * 180) / Math.PI;
+    drag.turn.rot = norm(e.altKey ? Math.round(deg) : round(deg, 15));
+  } else if (drag.slide || drag.axis === 0 || drag.axis === 2) {
+    let dx = 0, dz = 0;
+    if (drag.slide) { const g = V3.rayPlaneY(r, L.origin[1]); if (!g) return; dx = (g[0] - drag.slide[0]) * f; dz = (g[2] - drag.slide[2]) * f; }
+    else { const v = V3.axisDrag(r, L.origin, drag.axis); if (v === null) return; (drag.axis === 0 ? (dx = (v - drag.v0) * f) : (dz = (v - drag.v0) * f)); }
+    // the lead lands on the snap grid; the rest keep their places beside it
+    const sx = dx || drag.slide ? snap(lm.from[0] + dx) - lm.from[0] : 0, sz = dz || drag.slide ? snap(lm.from[1] + dz) - lm.from[1] : 0;
+    for (const m of drag.move) handle(m.key).set([tidy(m.from[0] + sx), tidy(m.from[1] + sz)]);
+  } else if (drag.axis === 1) {
+    const v = V3.axisDrag(r, L.origin, 1); if (v === null || lm.y === null) return;
+    const host = V3.hostTop(plan, kindsInfo, L.piece.at, new Set(selectedPieces().map((p) => p.id)));
+    const yf = P() / lookK(host ? pieceById(host.id).kind : L.piece.kind); // drawn height to the plan's
+    let y = Math.max(0, snap(lm.y + (v - drag.v0) * yf));
+    if (host && Math.abs(y - host.top) <= 0.3) y = host.top; // it lands on the top of what is under it, where the fit check wants it
+    const dy = y - lm.y;
+    for (const m of drag.move) if (m.y !== null) setY(handle(m.key).piece, m.y + dy);
+  }
+  drag.moved = true;
+  draw(); if (sel.length === 1) renderSelected();
+}
+function up3() {
+  const d = drag; drag = null;
+  if (d && d.before && d.moved) { undoStack.push(d.before); redoStack = []; changed(); } else draw();
+}
+/** A drag cut short (the view switched, Esc, undo): everything goes back to where it was, and nothing lands on the undo stack. */
+function cancelDrag() {
+  const d = drag; drag = null;
+  if (d && d.before && d.moved) restore(d.before);
+}
+/** Lifts (or lowers) the selected pieces; none goes below the ground, and a height of 0 is no `y` at all. */
+function liftSelected(dy) {
+  const list = selectedPieces(); if (!list.length) return;
+  remember(); for (const p of list) setY(p, (p.y || 0) + dy); changed();
+}
 
 // --- the mouse -------------------------------------------------------------------------------------------
 canvas.addEventListener('pointerdown', (e) => {
@@ -731,6 +855,13 @@ window.addEventListener('keydown', (e) => {
   if (mod && key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
   else if (mod && key === 'y') { e.preventDefault(); redo(); }
   else if (mod && key === 'd') { e.preventDefault(); duplicateSelected(); }
+  else if (key === 'escape' && drag && drag.moved) cancelDrag();
+  else if (key === 'pageup' || key === 'pagedown') { e.preventDefault(); liftSelected((key === 'pageup' ? 1 : -1) * (e.shiftKey ? 1 : snapStep())); }
+  else if (key.startsWith('arrow') && mode === '3d') { // along the plan's axis nearest to that way on the screen
+    e.preventDefault(); const s = e.shiftKey ? 1 : snapStep(), q = rad(Math.round(cam3.yaw / 90) * 90), fwd = [Math.round(Math.sin(q)), -Math.round(Math.cos(q))], right = [-fwd[1], fwd[0]];
+    const v = key === 'arrowup' ? fwd : key === 'arrowdown' ? [-fwd[0], -fwd[1]] : key === 'arrowright' ? right : [-right[0], -right[1]];
+    nudge(v[0] * s, v[1] * s);
+  }
   else if (key === 'escape') { if (placing) { placing = null; markPalette(); status('Stopped placing.'); } else select([]); }
   else if (key === 'delete' || key === 'backspace') { e.preventDefault(); removeSelected(); }
   else if (key === 'r') turnSelected((e.shiftKey ? -1 : 1) * (e.altKey ? 1 : 15));
@@ -839,7 +970,7 @@ function renderSelected() {
   if (sel.length > 1) {
     const ps = selectedPieces();
     box.append(h('div', { class: 'row' }, h('b', { textContent: `${sel.length} selected` }), h('span', { class: 'dim', textContent: ps.length ? `(${ps.length} pieces)` : '' })), h('div', { class: 'small dim', textContent: sel.map((k) => k.replace(/^piece:/, '')).join(', ') }),
-      h('div', { class: 'row' }, h('button', { textContent: 'Duplicate', onclick: duplicateSelected, disabled: !ps.length }), h('button', { textContent: 'Remove', onclick: removeSelected })), h('div', { class: 'small dim', textContent: 'Drag any of them to move them all; arrows nudge; R turns the pieces.' }));
+      h('div', { class: 'row' }, h('button', { textContent: 'Duplicate', onclick: duplicateSelected, disabled: !ps.length }), h('button', { textContent: 'Remove', onclick: removeSelected })), h('div', { class: 'small dim', textContent: 'Drag any of them (in 3D, an arrow) to move them all; arrows nudge; R turns the pieces; Page Up / Page Down lift them.' }));
     return;
   }
   if (!sel.length) { renderMap(box); return; }
@@ -1041,7 +1172,8 @@ async function load() {
 }
 // For the tools that drive this page (tests, screenshots).
 window.__map = { ready: false, previews: 0, saves: 0, get plan() { return plan; }, get plants() { return plants; }, get rule() { return rule; }, ruleShown, targets, get view() { return view; }, get sel() { return sel; }, get problems() { return pv; }, get job() { return job; }, toScreen: (at) => { const r = canvas.getBoundingClientRect(), [x, y] = toScreen(at); return [r.left + x, r.top + y]; }, turnHandle: () => { const th = turnHandle(); return th ? window.__map.toScreen(th.at) : null; }, select, focusOn, fit, isDirty, setView: (v) => { Object.assign(view, v); draw(); },
-  get mode() { return mode; }, setMode, get cam() { return cam3; }, toScreen3: (pt) => { const r = canvas.getBoundingClientRect(), s = p3(pt); return s ? [r.left + s[0], r.top + s[1]] : null; } };
+  get mode() { return mode; }, setMode, get cam() { return cam3; }, get undos() { return undoStack.length; }, liftSelected,
+  gizmo: () => { const g = gizmo(); if (!g) return null; const r = canvas.getBoundingClientRect(), pg = (s) => (s ? [r.left + s[0], r.top + s[1]] : null); return { key: g.key, at: pg(g.at), x: pg(g.x), y: pg(g.y), z: pg(g.z), ring: g.ring ? g.ring.map(pg) : null }; }, toScreen3: (pt) => { const r = canvas.getBoundingClientRect(), s = p3(pt); return s ? [r.left + s[0], r.top + s[1]] : null; } };
 load();
 </script>
 </body>
