@@ -27,3 +27,12 @@ Follow-ups for the model viewer and review inbox (design: `docs/superpowers/spec
 - [ ] Compare two models side by side (e.g. a TRELLIS test against the hard-surface rebuild).
 - [ ] Show models in the map's 3D view instead of boxes.
 - [ ] `scripts/viewer-check.mjs`: a scripted browser check of the viewer (needs `playwright-core`, like `browser-check.mjs`).
+
+## Asset pipeline (Khairos light cruiser)
+
+- [ ] **Pixal3D on a paid GPU.** The free ZeroGPU quota is used up and no inference provider offers Pixal3D.
+      Duplicate `TencentARC/Pixal3D` as a private Space under `capnCoconut` on an Nvidia L40S (48 GB, $1.80/hr,
+      billed per minute), sleep after 10 min idle; run `pixal2.py` (scratch script: preprocess → generate_3d with
+      `download_files=False` → extract_glb_api) against it; save `light-cruiser/3d-tests/pixal3d.glb`; render it
+      beside TRELLIS.2; pause or delete the Space. About $0.50–$1.00 per test (mostly the first build). Needs a
+      payment method on the Hugging Face account. The cheaper L4 (24 GB, $0.80/hr) may run out of memory.
