@@ -7,6 +7,8 @@ use and walkers' rounds. You can also write the text on doors and things, and pl
 checks the plan against a JSON Schema, writes it atomically and keeps the old file as a backup. A fit
 check warns about pieces standing in each other, things outside the map, blocked doors and similar. A
 **3D view** shows the same plan as boxes, where you lift pieces onto roofs and move them along x, y and z.
+A **model viewer** shows the game's models (GLB): pin what is wrong on a model, add notes and reference images,
+and send it to a Claude Code session that fixes it and reports back (see [Model review](#model-review)).
 
 The editor's core works for any game. Anything specific to one game lives in a **project config file**
 (`map-editor.config.mjs`): where its kinds of piece and their sizes come from, its own compile and
@@ -67,6 +69,9 @@ If 8793 is already in use (another editor, say), pick another port:
 ```sh
 npm start -- --port 8794
 ```
+
+The model viewer is at **http://127.0.0.1:8793/viewer**. The sample has no models: set `models` in a
+project's config (see [Model review](#model-review)) to point it at a folder of `.glb` files.
 
 Everything the example writes goes into `examples/sample/maps/plaza/` and `examples/sample/out/`.
 `git checkout examples/sample` puts it back.
@@ -474,6 +479,8 @@ What it does not do (yet):
   plan's own sizes, so on such maps it is best effort.
 
 ## Model review
+
+![The model viewer: a pin with a note and a reference image on a ship's bow](docs/viewer.png)
 
 The **model viewer** (`http://127.0.0.1:<port>/viewer`; the editor prints its address on start) shows a game's
 models and sends what is wrong with them to a Claude Code session. Open a model, drop **pins** on the spots that
