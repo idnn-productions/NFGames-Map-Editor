@@ -15,7 +15,7 @@
     "./schema": "./src/schema.mjs",
     "./view3d": "./src/view3d.mjs"
   },
-  "files": ["bin/", "src/", "schemas/", "examples/", "README.md", "LICENSE", "NOTICE"],
+  "files": ["bin/", "src/", "schemas/", "skills/", "examples/", "README.md", "LICENSE", "NOTICE"],
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node bin/nfgames-map-editor.mjs --project examples/sample",

@@ -34,4 +34,5 @@ server.on('error', (e) => {
 });
 server.listen(port, HOST, () => {
   console.log(`map editor (${wanted}${dryRun ? ', dry run' : ''}): http://127.0.0.1:${port}/   saves to ${project.rel(project.planFile(wanted))}${project.configFile ? `   config: ${project.rel(project.configFile) || project.configFile}` : '   (no config file: defaults)'}`);
+  console.log(`model viewer: http://127.0.0.1:${port}/viewer${project.modelsDir ? `   models: ${project.rel(project.modelsDir)}` : '   (no "models" folder in the config)'}`);
 });

@@ -8,3 +8,5 @@ examples/sample/out/
 test/out/
 .DS_Store
 Thumbs.db
+# three.js, installed on demand by the model viewer
+vendor/

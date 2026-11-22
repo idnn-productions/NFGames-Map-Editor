@@ -28,6 +28,7 @@ It runs on your machine only: the server listens on `127.0.0.1` and refuses ever
 - [The config file](#the-config-file)
 - [The map file format](#the-map-file-format)
 - [Using the editor](#using-the-editor)
+- [Model review](#model-review)
 - [Save and backups](#save-and-backups)
 - [The fit check](#the-fit-check)
 - [Apply actions](#apply-actions)
@@ -182,6 +183,9 @@ onto these options.
 | `actions` | | the Apply buttons (see [Apply actions](#apply-actions)) |
 | `help` | | `[[what, how], ...]`: the "Which edit needs what" table under Apply |
 | `hints` | | short texts the page shows: `afterSave: { plan, plants, both }` after a save that changed those files, `ring`, `person`, `thing`, `plant`, `round` in the matching Selected panels |
+| `models` | none | the folder whose `.glb` files the [model viewer](#model-review) lists, subfolders included. Must be inside the project |
+| `reviews` | `.review` | the folder review jobs are written to. Must be inside the project |
+| `reviewWorkflows` | Auto, Blender, ComfyUI | the viewer's Workflow list: `[{ id, label, description, enabled, instructions, instructionsFile }]`, or a default's id (`'auto'`). `instructions` is text; `instructionsFile` is a file in the project whose text is added. Both are copied into each job. `enabled: false` shows "(not set up yet)". Blender and ComfyUI are placeholders by default (see `todo.md`) |
 
 ### Hooks
 
@@ -469,6 +473,58 @@ What it does not do (yet):
 - Maps a project draws larger (`display`) are drawn at the same sizes as in the top view; landing uses the
   plan's own sizes, so on such maps it is best effort.
 
+## Model review
+
+The **model viewer** (`http://127.0.0.1:<port>/viewer`; the editor prints its address on start) shows a game's
+models and sends what is wrong with them to a Claude Code session. Open a model, drop **pins** on the spots that
+need fixing, write a note on each (drop or paste up to four reference images onto a pin), choose a **workflow**
+and press **Send to Claude**. The job lands in an inbox folder; a Claude Code session watching it fixes the model
+and reports back, and the job list on the page shows its state.
+
+```js
+// map-editor.config.mjs
+export default {
+  models: 'art/models',          // every .glb under here, subfolders included
+  reviews: '.review',            // where jobs go (the default)
+  reviewWorkflows: ['auto', { id: 'ship-build', label: 'Ship build scripts', instructionsFile: 'art/ships/BUILD.md' }],
+};
+```
+
+**three.js is not shipped with the editor.** The first time, the viewer offers **Install three.js**: the editor
+downloads one pinned version (`src/vendor.mjs`: version and SHA-512) from the npm registry, refuses it unless its
+bytes match the pinned hash, and keeps only the files the viewer needs in `vendor/three-<version>/` (git-ignored).
+Nothing is fetched at any other time, and no CDN is used.
+
+| Do | What happens |
+|---|---|
+| Click a model on the left | it opens and is framed. Over 200 MB asks first |
+| **📍 Pin** (or **P**), then click the model | a numbered pin at that point, with a note. It records the point and the surface's direction in the model's own frame (glTF, metres, Y up), the mesh, the material, the texture coordinate under it, the view, and a screenshot |
+| Drag a pin | moves it over the surface (and takes a new screenshot) |
+| **View** on a pin | flies back to the view it was placed from |
+| Drop or paste images on a pin | reference images (PNG, JPEG, WebP; at most 4), scaled to 2048 px at most |
+| **Send to Claude** | writes the job; pins and notes are kept as a draft in the browser until then |
+
+**Workflows.** **Auto**: Claude decides how to fix it (the project's build script when there is one, else Blender,
+else the GLB). **Blender** and **ComfyUI** are listed but not set up yet.
+
+**A job** is a folder `<reviews>/<UTC time>-<model>/`: `job.json` (the model's path, hash and time, the note,
+the workflow with its instructions, and the pins), `overview.jpg`, `pin-N.jpg`, `pin-N-ref-M.png|jpg|webp`, and
+`status.json` once a session takes it: `{ "state": "working" | "needs-input" | "done" | "failed", "summary",
+"question"?, "updatedAt", "changedFiles" }`. No `status.json` means queued. A job is written to `<id>.tmp` and
+renamed, so a watcher never sees half of one. When a job is done and the model file changed, the page offers
+**Reload model**. When jobs wait more than two minutes, it says no session seems to be watching.
+
+**The Claude Code side.** Copy the skill into the game project once:
+
+```sh
+mkdir -p <game>/.claude/skills && cp -r <editor>/skills/model-review <game>/.claude/skills/
+```
+
+Then, in a Claude Code session in the game project, say **"watch the review inbox"**. The session runs
+`node <editor>/bin/review-watch.mjs --project <game>` with its Monitor tool. That prints `NEW JOB <reviews>/<id>`
+once per waiting job, and each line wakes the session. A Monitor watch lasts at most 30 minutes; the skill
+restarts it. Jobs wait on disk while nobody watches, so nothing is lost.
+
 ## Save and backups
 
 Save (the button, or Ctrl S) sends the plan and, if the map has one, the planting plan. The server then
@@ -568,6 +624,10 @@ The editor reads and writes files on your machine, so it accepts requests only f
 - **Its page and its API, nothing else.** It serves `/`, its `/api/...` routes, and an empty favicon. Any
   other path is a 404, and no file from the project is ever served directly. Responses are marked
   `no-store`, `nosniff` and `X-Frame-Options: DENY`. Request bodies over 2 MB are refused.
+- **The model viewer.** `/vendor/` serves only the pinned three.js version's allow-listed files, and only after an
+  install whose download matched the pinned SHA-512. Models are read only from the real `models` folder (symlinks
+  out of it refused), and only `.glb` files. Jobs are written only to server-named folders and files under
+  `reviews`; images are checked by their bytes. `POST /api/review` takes up to 24 MB; everything else keeps 2 MB.
 - **Fixed commands.** Apply actions run only what the config lists, with `shell: false`. The action's id
   is looked up as the config's own key, and the only value from the request that reaches a command is
   the checked map name, as one whole argument.
@@ -606,7 +666,11 @@ the config (defaults, kit, actions that are not fixed lists refused), the fit ch
 and the server over HTTP. The server tests include: refused Hosts, Origins and content types; traversal
 names; no file served; a save that writes the file in its format and keeps `layout.prev.json`; a save
 refused after the file changed on disk; `plants.json`; unknown actions refused; a real action run; and
-`--dry-run`.
+`--dry-run`. The model viewer's tests cover listing and confining models (`test/models.test.mjs`), the three.js
+install (`test/vendor.test.mjs`: tar reader, allow-list, a hash mismatch or failed download installs nothing,
+only allow-listed files served), jobs (`test/reviews.test.mjs`: server-made names, image signatures, refused jobs
+write nothing, states, workflows), the routes (`test/viewer-server.test.mjs`) and the watcher
+(`test/review-watch.test.mjs`).
 
 ```sh
 npm run check:browser    # the page in headless Chrome, against a copy of the sample project
