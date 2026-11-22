@@ -7,6 +7,7 @@ import { dirname, join, resolve, isAbsolute, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { NAME, formatPlan, formatPlants, writeKeeping, fileStamp } from './plan.mjs';
 import { checkFile } from './schema.mjs';
+import { normaliseWorkflows } from './reviews.mjs';
 
 export const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const BUILT_IN_SCHEMAS = { layout: join(EDITOR_ROOT, 'schemas', 'map.schema.json'), plants: join(EDITOR_ROOT, 'schemas', 'map-plants.schema.json') };
@@ -61,6 +62,12 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
     } else configFile = null;
   }
   const at = (p) => (isAbsolute(p) ? p : join(root, p));
+
+  // the model viewer: where the .glb files are, and where review jobs go (both inside the project)
+  const inside = (p, what) => { const abs = resolve(root, p), r = relative(root, abs); if (r.startsWith('..') || isAbsolute(r)) fail(`${what} must be a folder inside the project: ${p}`); return abs; };
+  const modelsDir = options.models ? inside(options.models, '"models"') : null;
+  const reviewsDir = inside(options.reviews || '.review', '"reviews"');
+  const reviewWorkflows = normaliseWorkflows(options.reviewWorkflows, root);
 
   // where the maps are: the config's, or the first of maps/ and data/maps/ that exists
   const mapsDir = options.maps ? at(options.maps) : [join(root, 'maps'), join(root, 'data', 'maps')].find((d) => existsSync(d)) || join(root, 'maps');
@@ -138,6 +145,7 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
 
   return {
     root, configFile, mapsDir, schemaFile, plantsSchemaFile, ctx, options,
+    modelsDir, reviewsDir, reviewWorkflows,
     port: options.port || DEFAULT_PORT, defaultMap: options.defaultMap || null,
     mapDir, planFile, plantsFile, readPlan, readPlants, listMaps, knownMap, rel,
     planErrors, plantsErrors, kinds, presets, presetOf, actions, overlays, plants: plantsCfg, reserved,
