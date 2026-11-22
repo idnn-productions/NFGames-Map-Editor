@@ -10,13 +10,16 @@
 // API, no other file. Child processes are started with a fixed list of arguments from the project's config (and a
 // checked map name): nothing from a request reaches a shell.
 import { createServer } from 'node:http';
-import { readFileSync, statSync } from 'node:fs';
+import { createReadStream, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { EDITOR_ROOT } from './project.mjs';
 import { plantEditing } from './plan.mjs';
 import { view3d } from './view3d.mjs';
 import { checkFit, checkPlants } from './check.mjs';
 import { createJobs } from './jobs.mjs';
+import { listModels, resolveModel } from './models.mjs';
+import { createReview, listReviews, publicWorkflows, LIMITS } from './reviews.mjs';
+import { installThree, vendorBase, vendorFile, vendorState } from './vendor.mjs';
 
 const MAX_BODY = 2 * 1024 * 1024;
 export const HOST = '127.0.0.1';
@@ -28,6 +31,9 @@ export const writeAllowed = (headers, port) => hostAllowed(headers.host, port) &
 
 /** editor.html with the plant edits it shares with the server (plan.mjs plantEditing) and the 3D view's maths (view3d.mjs) written into it. */
 export const page = () => readFileSync(join(EDITOR_ROOT, 'src', 'editor.html'), 'utf8').replace('/*@plantEditing*/ null', () => plantEditing.toString()).replace('/*@view3d*/ null', () => view3d.toString());
+
+/** viewer.html with the import map for the pinned three.js written into it (served from /vendor once installed). */
+export const viewerPage = () => readFileSync(join(EDITOR_ROOT, 'src', 'viewer.html'), 'utf8').replace('/*@importmap*/', () => JSON.stringify({ imports: { three: `${vendorBase()}build/three.module.js`, 'three/addons/': `${vendorBase()}examples/jsm/` } }));
 
 /** The plan compiled (when the project compiles) and checked, for the page: nothing is written. */
 export async function preview(project, name, plan, plants = undefined) {
@@ -50,7 +56,7 @@ export async function preview(project, name, plan, plants = undefined) {
 }
 
 /** The server for `project`. `port` is the one it will listen on (the Host check needs it). */
-export function createEditor(project, { port = project.port, defaultMap = null, dryRun = false } = {}) {
+export function createEditor(project, { port = project.port, defaultMap = null, dryRun = false, editorRoot = EDITOR_ROOT, fetchImpl = fetch } = {}) {
   const jobs = createJobs(project, { dryRun });
   project.ctx.dryRun = dryRun;
   const fallback = () => defaultMap || project.defaultMap || project.listMaps()[0] || null;
@@ -59,18 +65,33 @@ export function createEditor(project, { port = project.port, defaultMap = null, 
     try {
       if (!hostAllowed(req.headers.host, port)) return send(403, { error: `local only: open http://127.0.0.1:${port}/` });
       const url = new URL(req.url, 'http://x'), path = url.pathname;
-      const body = async () => {
-        let text = '';
-        for await (const part of req) { text += part; if (text.length > MAX_BODY) throw Object.assign(new Error('too big'), { code: 413 }); }
-        return JSON.parse(text);
+      const body = async (limit = MAX_BODY) => {
+        const parts = []; let size = 0;
+        for await (const part of req) { size += part.length; if (size > limit) { req.resume(); throw Object.assign(new Error('too big'), { code: 413 }); } parts.push(part); }
+        return JSON.parse(Buffer.concat(parts).toString('utf8'));
       };
       if (req.method === 'GET' && (path === '/' || path === '/index.html')) return send(200, page(), 'text/html; charset=utf-8');
       if (req.method === 'GET' && path === '/favicon.ico') { res.writeHead(204); return res.end(); }
+      if (req.method === 'GET' && path === '/viewer') return send(200, viewerPage(), 'text/html; charset=utf-8');
+      if (req.method === 'GET' && path.startsWith('/vendor/')) { const f = vendorFile(editorRoot, path); return f ? send(200, readFileSync(f.file), f.type) : send(404, { error: 'not here' }); }
       if (req.method === 'GET' && path === '/api/maps') return send(200, { maps: project.listMaps(), default: fallback() });
       if (req.method === 'GET' && path === '/api/job') { const job = jobs.current(), from = Math.max(0, Number(url.searchParams.get('from')) || 0); return send(200, job ? { ...job, log: job.log.slice(from), next: job.log.length } : { state: 'idle', log: '', next: 0 }); }
       if (!path.startsWith('/api/')) return send(404, { error: 'not here' });
       if (req.method !== 'GET' && req.method !== 'POST') return send(405, { error: 'GET or POST' });
       if (req.method === 'POST' && !writeAllowed(req.headers, port)) return send(403, { error: 'a write must come from this page, as JSON' });
+
+      // the model viewer: none of this is about a map
+      if (req.method === 'GET' && path === '/api/viewer') return send(200, { three: vendorState(editorRoot), models: project.modelsDir ? project.rel(project.modelsDir) : null, reviews: project.rel(project.reviewsDir), workflows: publicWorkflows(project.reviewWorkflows), title: project.options.title || null });
+      if (req.method === 'POST' && path === '/api/vendor/install') { try { return send(200, await installThree(editorRoot, { fetchImpl })); } catch (e) { return send(502, { error: e.message }); } }
+      if (req.method === 'GET' && path === '/api/models') return send(200, { models: project.modelsDir ? listModels(project.modelsDir) : [] });
+      if (req.method === 'GET' && path === '/api/model') {
+        const file = resolveModel(project.modelsDir, url.searchParams.get('path'));
+        if (!file) return send(404, { error: 'no such model' });
+        res.writeHead(200, { 'Content-Type': 'model/gltf-binary', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' });
+        return createReadStream(file).pipe(res);
+      }
+      if (req.method === 'POST' && path === '/api/review') { const job = await body(LIMITS.body); try { return send(200, createReview(project, job)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
+      if (req.method === 'GET' && path === '/api/reviews') return send(200, { reviews: listReviews(project) });
 
       // everything below is about one map, named in the query: a plain folder name under the maps folder, or the default
       const name = project.knownMap(url.searchParams.get('map') ?? fallback());
