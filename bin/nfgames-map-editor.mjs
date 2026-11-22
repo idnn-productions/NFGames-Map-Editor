@@ -8,6 +8,8 @@
 //   map               the map the page opens first (default: the config's `defaultMap`, else the first map)
 import { loadProject } from '../src/project.mjs';
 import { createEditor, HOST } from '../src/server.mjs';
+import { HOME, addRecent, trustConfig } from '../src/home.mjs';
+import { join } from 'node:path';
 
 const USAGE = 'usage: nfgames-map-editor [map] [--project <dir>] [--config <file>] [--port <n>] [--dry-run]';
 const args = process.argv.slice(2), value = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
@@ -22,17 +24,19 @@ try { project = await loadProject({ root: value('--project') || process.cwd(), c
 const port = Number(value('--port') || process.env.MAP_EDIT_PORT || project.port);
 if (!Number.isInteger(port) || port < 1 || port > 65535) { console.error(`map editor: not a port: ${value('--port') || process.env.MAP_EDIT_PORT}`); process.exit(2); }
 const dryRun = args.includes('--dry-run');
-const maps = project.listMaps(), wanted = loose[0] || project.defaultMap || maps[0];
-if (!wanted || !project.knownMap(wanted)) {
-  console.error(`map editor: ${wanted ? `no map called ${JSON.stringify(wanted)}` : 'no maps yet'} in ${project.mapsDir} (maps: ${maps.join(', ') || 'none'}). A map is <maps>/<name>/layout.json.`);
+const maps = project.listMaps(), wanted = loose[0] || project.defaultMap || maps[0] || null;
+if (wanted && !project.knownMap(wanted)) {
+  console.error(`map editor: no map called ${JSON.stringify(wanted)} in ${project.mapsDir} (maps: ${maps.join(', ') || 'none'}). A map is <maps>/<name>/layout.json.`);
   process.exit(1);
 }
+// the project it starts on is trusted (its config has run already) and goes to the recent list
+try { const state = join(HOME, '.nfgames-editor'); trustConfig(state, project.root); addRecent(state, project.root); } catch { /* not essential */ }
 const server = createEditor(project, { port, defaultMap: wanted, dryRun });
 server.on('error', (e) => {
   console.error(e.code === 'EADDRINUSE' ? `map editor: port ${port} is in use (another editor?). Start this one with --port ${port + 1}.` : `map editor: ${e.message}`);
   process.exit(1);
 });
 server.listen(port, HOST, () => {
-  console.log(`map editor (${wanted}${dryRun ? ', dry run' : ''}): http://127.0.0.1:${port}/   saves to ${project.rel(project.planFile(wanted))}${project.configFile ? `   config: ${project.rel(project.configFile) || project.configFile}` : '   (no config file: defaults)'}`);
+  console.log(`map editor (${wanted || 'no maps yet'}${dryRun ? ', dry run' : ''}): http://127.0.0.1:${port}/${wanted ? `   saves to ${project.rel(project.planFile(wanted))}` : ''}${project.configFile ? `   config: ${project.rel(project.configFile) || project.configFile}` : '   (no config file: defaults)'}`);
   console.log(`model viewer: http://127.0.0.1:${port}/viewer${project.modelsDir ? `   models: ${project.rel(project.modelsDir)}` : '   (no "models" folder in the config)'}`);
 });

@@ -11,8 +11,8 @@
 // checked map name): nothing from a request reaches a shell.
 import { createServer } from 'node:http';
 import { createReadStream, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
-import { EDITOR_ROOT } from './project.mjs';
+import { basename, join } from 'node:path';
+import { CONFIG_NAME, EDITOR_ROOT, loadProject } from './project.mjs';
 import { plantEditing } from './plan.mjs';
 import { view3d } from './view3d.mjs';
 import { checkFit, checkPlants } from './check.mjs';
@@ -20,6 +20,7 @@ import { createJobs } from './jobs.mjs';
 import { listModels, resolveModel } from './models.mjs';
 import { createReview, listReviews, publicWorkflows, LIMITS } from './reviews.mjs';
 import { installThree, vendorBase, vendorFile, vendorState } from './vendor.mjs';
+import { HOME, addRecent, browse, configTrust, insideHome, recentProjects, trustConfig } from './home.mjs';
 
 const MAX_BODY = 2 * 1024 * 1024;
 export const HOST = '127.0.0.1';
@@ -30,10 +31,10 @@ export const hostAllowed = (host, port) => host === `127.0.0.1:${port}` || host 
 export const writeAllowed = (headers, port) => hostAllowed(headers.host, port) && headers.origin === `http://${headers.host}` && String(headers['content-type'] || '').startsWith('application/json');
 
 /** editor.html with the plant edits it shares with the server (plan.mjs plantEditing) and the 3D view's maths (view3d.mjs) written into it. */
-export const page = () => readFileSync(join(EDITOR_ROOT, 'src', 'editor.html'), 'utf8').replace('/*@plantEditing*/ null', () => plantEditing.toString()).replace('/*@view3d*/ null', () => view3d.toString());
+export const page = () => readFileSync(join(EDITOR_ROOT, 'src', 'editor.html'), 'utf8').replace('/*@plantEditing*/ null', () => plantEditing.toString()).replace('/*@view3d*/ null', () => view3d.toString()).replace('<!--@nav-->', () => readFileSync(join(EDITOR_ROOT, 'src', 'nav.html'), 'utf8'));
 
 /** viewer.html with the import map for the pinned three.js written into it (served from /vendor once installed). */
-export const viewerPage = () => readFileSync(join(EDITOR_ROOT, 'src', 'viewer.html'), 'utf8').replace('/*@importmap*/', () => JSON.stringify({ imports: { three: `${vendorBase()}build/three.module.js`, 'three/addons/': `${vendorBase()}examples/jsm/` } }));
+export const viewerPage = () => readFileSync(join(EDITOR_ROOT, 'src', 'viewer.html'), 'utf8').replace('/*@importmap*/', () => JSON.stringify({ imports: { three: `${vendorBase()}build/three.module.js`, 'three/addons/': `${vendorBase()}examples/jsm/` } })).replace('<!--@nav-->', () => readFileSync(join(EDITOR_ROOT, 'src', 'nav.html'), 'utf8'));
 
 /** The plan compiled (when the project compiles) and checked, for the page: nothing is written. */
 export async function preview(project, name, plan, plants = undefined) {
@@ -57,10 +58,25 @@ export async function preview(project, name, plan, plants = undefined) {
 }
 
 /** The server for `project`. `port` is the one it will listen on (the Host check needs it). */
-export function createEditor(project, { port = project.port, defaultMap = null, dryRun = false, editorRoot = EDITOR_ROOT, fetchImpl = fetch } = {}) {
-  const jobs = createJobs(project, { dryRun });
+export function createEditor(initial, { port = initial.port, defaultMap = null, dryRun = false, editorRoot = EDITOR_ROOT, fetchImpl = fetch, home = HOME, stateDir = join(HOME, '.nfgames-editor') } = {}) {
+  let project = initial, jobs = createJobs(project, { dryRun }), startMap = defaultMap;
   project.ctx.dryRun = dryRun;
-  const fallback = () => defaultMap || project.defaultMap || project.listMaps()[0] || null;
+  const fallback = () => startMap || project.defaultMap || project.listMaps()[0] || null;
+  /** Opens another project folder (inside home). A config not yet trusted is not run: { needsTrust, config }. */
+  async function switchProject(root, { trust = false } = {}) {
+    const dir = insideHome(home, root);
+    if (!dir) throw Object.assign(new Error('only folders in your home folder can be opened'), { code: 400 });
+    const running = jobs.current();
+    if (running && running.state === 'running') throw Object.assign(new Error(`wait for ${running.kind} to finish`), { code: 409 });
+    const t = configTrust(stateDir, dir);
+    if (t === 'ask' && !trust) return { needsTrust: true, config: join(dir, CONFIG_NAME) };
+    if (t === 'ask') trustConfig(stateDir, dir);
+    let next;
+    try { next = await loadProject({ root: dir }); } catch (e) { throw Object.assign(new Error(e.message), { code: 400 }); }
+    project = next; jobs = createJobs(project, { dryRun }); project.ctx.dryRun = dryRun; startMap = null;
+    addRecent(stateDir, dir);
+    return { ok: true, root: dir, maps: project.listMaps() };
+  }
   const server = createServer(async (req, res) => {
     const send = (code, body, type = 'application/json') => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' }); res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body)); };
     try {
@@ -81,7 +97,10 @@ export function createEditor(project, { port = project.port, defaultMap = null, 
       if (req.method !== 'GET' && req.method !== 'POST') return send(405, { error: 'GET or POST' });
       if (req.method === 'POST' && !writeAllowed(req.headers, port)) return send(403, { error: 'a write must come from this page, as JSON' });
 
-      // the model viewer: none of this is about a map
+      // the model viewer and the open project: none of this is about a map
+      if (req.method === 'GET' && path === '/api/projects') return send(200, { current: { root: project.root, name: basename(project.root), title: project.options.title || null, maps: project.listMaps().length }, recent: recentProjects(stateDir), home: insideHome(home, home) });
+      if (req.method === 'GET' && path === '/api/browse') { try { return send(200, browse(home, url.searchParams.get('path') || home)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
+      if (req.method === 'POST' && path === '/api/project') { const b = await body(); try { return send(200, await switchProject(b && b.root, { trust: !!b && b.trust === true })); } catch (e) { return send(e.code || 500, { error: e.message }); } }
       if (req.method === 'GET' && path === '/api/viewer') return send(200, { three: vendorState(editorRoot), models: project.modelsDir ? project.rel(project.modelsDir) : null, reviews: project.rel(project.reviewsDir), workflows: publicWorkflows(project.reviewWorkflows), title: project.options.title || null });
       if (req.method === 'POST' && path === '/api/vendor/install') { try { return send(200, await installThree(editorRoot, { fetchImpl })); } catch (e) { return send(502, { error: e.message }); } }
       if (req.method === 'GET' && path === '/api/models') return send(200, { models: project.modelsDir ? listModels(project.modelsDir) : [] });
@@ -146,6 +165,8 @@ export function createEditor(project, { port = project.port, defaultMap = null, 
       return send(404, { error: 'not here' });
     } catch (e) { send(e.code === 413 ? 413 : e instanceof SyntaxError ? 400 : 500, { error: String(e.message || e) }); }
   });
-  server.jobs = jobs;
+  Object.defineProperty(server, 'jobs', { get: () => jobs });
+  Object.defineProperty(server, 'project', { get: () => project });
+  server.switchProject = switchProject;
   return server;
 }
