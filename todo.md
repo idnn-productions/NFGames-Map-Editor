@@ -26,6 +26,7 @@ Follow-ups for the model viewer and review inbox (design: `docs/superpowers/spec
 - [ ] Before and after: show `pin-N-after.jpg` next to the pin's own screenshot in the job list.
 - [ ] Compare two models side by side (e.g. a TRELLIS test against the hard-surface rebuild).
 - [ ] Show models in the map's 3D view instead of boxes.
+- [ ] New map from the editor (a project with no maps, like Khairos, can only be browsed and reviewed).
 - [ ] `scripts/viewer-check.mjs`: a scripted browser check of the viewer (needs `playwright-core`, like `browser-check.mjs`).
 
 ## Asset pipeline (Khairos light cruiser)

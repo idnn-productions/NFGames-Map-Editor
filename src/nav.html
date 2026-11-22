@@ -1,0 +1,69 @@
+<style>
+#nfnav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; }
+#nfnav a { color: inherit; opacity: .7; text-decoration: none; padding: 2px 7px; border-radius: 5px; }
+#nfnav a:hover { opacity: 1; } #nfnav a.here { opacity: 1; background: rgba(255, 179, 102, .16); color: #ffb366; }
+#nfnav .proj { opacity: .7; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; }
+#nfnav button { font: inherit; cursor: pointer; padding: 2px 8px; border-radius: 5px; border: 1px solid #ffffff2a; background: #ffffff10; color: inherit; }
+#nfDialog { width: min(640px, 92vw); padding: 0; border: 1px solid #2c3240; border-radius: 10px; background: #1c2029; color: #d8dee9; font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
+#nfDialog::backdrop { background: rgba(0, 0, 0, .55); }
+#nfDialog header { padding: 10px 14px; border-bottom: 1px solid #2c3240; display: flex; gap: 8px; align-items: center; } #nfDialog header b { flex: 1; }
+#nfDialog .body { padding: 10px 14px; overflow: auto; max-height: 56vh; }
+#nfDialog .crumbs { margin-bottom: 8px; word-break: break-all; } #nfDialog .crumbs a { color: #9fb4d4; cursor: pointer; }
+#nfDialog ul { list-style: none; margin: 0 0 10px; padding: 0; }
+#nfDialog li { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
+#nfDialog li:hover { background: #252a35; } #nfDialog li .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#nfDialog .tag { font-size: 11px; padding: 0 6px; border-radius: 8px; background: #33291c; color: #ffb366; } #nfDialog .tag.m { background: #1c3330; color: #5fc9c0; }
+#nfDialog footer { padding: 10px 14px; border-top: 1px solid #2c3240; display: flex; gap: 8px; align-items: center; } #nfDialog footer .msg { flex: 1; font-size: 12px; }
+#nfDialog .bad { color: #ff7a7a; } #nfDialog .dim { color: #8a93a6; }
+#nfDialog button { font: inherit; cursor: pointer; padding: 4px 10px; border-radius: 6px; border: 1px solid #2c3240; background: #252a35; color: inherit; }
+#nfDialog button.primary { background: #ffb366; color: #1a1206; border-color: #ffb366; font-weight: 600; }
+#nfDialog h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8a93a6; margin: 4px 0 6px; }
+</style>
+<nav id="nfnav"><a href="/" data-page="editor">Map editor</a><a href="/viewer" data-page="viewer">Model viewer</a><span class="proj" id="nfProj"></span><button id="nfOpen" title="Open another project folder">📁 Open project…</button></nav>
+<dialog id="nfDialog">
+  <header><b>Open a project folder</b><button id="nfClose" title="Close">✕</button></header>
+  <div class="body"><div id="nfRecent"></div><h3>Browse</h3><div class="crumbs" id="nfCrumbs"></div><ul id="nfList"></ul></div>
+  <footer><span class="msg dim" id="nfMsg"></span><button id="nfUp">Up</button><button class="primary" id="nfGo">Open this folder</button></footer>
+</dialog>
+<script type="module">
+// The bar both pages share: links between the map editor and the model viewer, the open project, and "Open
+// project…", a browser of the folders under your home folder. Opening one switches the project for both pages.
+const q = (id) => document.getElementById(id);
+const node = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+const here = location.pathname.startsWith('/viewer') ? 'viewer' : 'editor';
+for (const a of document.querySelectorAll('#nfnav a')) a.classList.toggle('here', a.dataset.page === here);
+let at = null, trustFor = null;
+const msg = (text, cls = 'dim') => { q('nfMsg').className = `msg ${cls}`; q('nfMsg').textContent = text; };
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const info = await (await fetch('/api/projects')).json();
+q('nfProj').textContent = `· ${info.current.title || info.current.name}`; q('nfProj').title = info.current.root;
+
+async function show(path) {
+  const r = await fetch(`/api/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`), b = await r.json();
+  if (!r.ok) { msg(b.error, 'bad'); if (path) await show(null); return; }
+  at = b; trustFor = null; q('nfGo').textContent = 'Open this folder';
+  const rel = b.path.slice(b.home.length).split('/').filter(Boolean);
+  q('nfCrumbs').replaceChildren(node('a', { textContent: '~', onclick: () => show(b.home) }), ...rel.flatMap((part, i) => [' / ', node('a', { textContent: part, onclick: () => show(`${b.home}/${rel.slice(0, i + 1).join('/')}`) })]));
+  q('nfList').replaceChildren(...(b.entries.length ? b.entries.map((e) => node('li', { title: e.path, onclick: () => show(e.path) }, '📁', node('span', { className: 'n', textContent: e.name }),
+    ...(e.project ? [node('span', { className: 'tag', textContent: 'project' })] : []), ...(e.models ? [node('span', { className: 'tag m', textContent: plural(e.models, 'model') })] : []))) : [node('li', { className: 'dim', textContent: 'no folders here' })]));
+  q('nfUp').disabled = !b.parent;
+  msg(b.project ? 'This folder is a project.' : b.models ? `${plural(b.models, 'model')} here.` : 'Any folder opens: one without a config uses the defaults.');
+}
+async function open(root, trust = false) {
+  if (window.__map && window.__map.isDirty && window.__map.isDirty() && !confirm('This map has unsaved changes. Switch project and lose them?')) return;
+  msg('opening…');
+  const r = await fetch('/api/project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root, trust }) }), b = await r.json().catch(() => ({}));
+  if (!r.ok) { msg(b.error || `${r.status}`, 'bad'); return; }
+  if (b.needsTrust) { trustFor = root; msg(`${b.config.replace(info.home, '~')} is code the editor will run. Open only projects you trust.`, 'bad'); q('nfGo').textContent = 'Run its config and open'; return; }
+  window.__nfSwitching = true;
+  location.href = here === 'viewer' ? '/viewer' : '/';
+}
+q('nfOpen').onclick = async () => {
+  q('nfRecent').replaceChildren(...(info.recent.length ? [node('h3', { textContent: 'Recent' }), node('ul', {}, ...info.recent.map((p) => node('li', { title: p, onclick: () => open(p) }, '★', node('span', { className: 'n', textContent: p.replace(info.home, '~') }))))] : []));
+  q('nfDialog').showModal();
+  await show(info.current.root.startsWith(info.home) ? info.current.root : null);
+};
+q('nfClose').onclick = () => q('nfDialog').close();
+q('nfUp').onclick = () => at && at.parent && show(at.parent);
+q('nfGo').onclick = () => (trustFor ? open(trustFor, true) : at && open(at.path));
+</script>

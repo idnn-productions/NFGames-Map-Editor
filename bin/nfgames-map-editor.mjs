@@ -6,7 +6,7 @@
 //   --port <n>        the port on 127.0.0.1 (default: the config's `port`, else MAP_EDIT_PORT, else 8793)
 //   --dry-run         Apply actions' heavy steps only print what they would run
 //   map               the map the page opens first (default: the config's `defaultMap`, else the first map)
-import { loadProject } from '../src/project.mjs';
+import { CONFIG_NAME, loadProject } from '../src/project.mjs';
 import { createEditor, HOST } from '../src/server.mjs';
 import { HOME, addRecent, trustConfig } from '../src/home.mjs';
 import { join } from 'node:path';
@@ -30,7 +30,8 @@ if (wanted && !project.knownMap(wanted)) {
   process.exit(1);
 }
 // the project it starts on is trusted (its config has run already) and goes to the recent list
-try { const state = join(HOME, '.nfgames-editor'); trustConfig(state, project.root); addRecent(state, project.root); } catch { /* not essential */ }
+// (only the config file that actually ran: not the project's own when --config named another)
+try { const state = join(HOME, '.nfgames-editor'); if (project.configFile && project.configFile === join(project.root, CONFIG_NAME)) trustConfig(state, project.root); addRecent(state, project.root); } catch { /* not essential */ }
 const server = createEditor(project, { port, defaultMap: wanted, dryRun });
 server.on('error', (e) => {
   console.error(e.code === 'EADDRINUSE' ? `map editor: port ${port} is in use (another editor?). Start this one with --port ${port + 1}.` : `map editor: ${e.message}`);

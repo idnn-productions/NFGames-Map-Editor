@@ -49,7 +49,7 @@ main.pinning #view { cursor: crosshair; }
 </style>
 </head>
 <body>
-<header><h1>Model review</h1><span class="dim" id="project"></span><span class="grow"></span><a href="/">map editor</a></header>
+<header><h1>Model review</h1><!--@nav--><span class="grow"></span></header>
 <aside id="left"><input id="filter" placeholder="filter models" autocomplete="off"><div id="models" class="dim">loading…</div></aside>
 <main id="main">
   <canvas id="view"></canvas>
@@ -182,6 +182,7 @@ async function openModel(m, { keepCamera = false } = {}) {
   model = gltf.scene; scene.add(model); // the scene root stays at identity, so world coordinates are the model's own
   if (wire) setWire(true);
   modelPath = m.path; drawModelList();
+  history.replaceState(null, '', `/viewer?model=${encodeURIComponent(m.path)}`);
   if (!keepCamera) frame();
   $('overlayBody').replaceChildren();
   draft = (await loadDraft(modelPath)) || { note: '', workflow: $('workflow').value, pins: [] };
@@ -352,10 +353,11 @@ $('send').onclick = send;
 $('zoom').onclick = () => { $('zoom').style.display = 'none'; };
 info = await api('/api/viewer');
 document.title = `${info.title ? `${info.title}: ` : ''}model review`;
-$('project').textContent = info.models ? `${info.models}/` : '';
 for (const w of info.workflows) $('workflow').append(el('option', { value: w.id, textContent: w.enabled ? w.label : `${w.label} (not set up yet)`, disabled: !w.enabled, title: w.description }));
 if (info.three.installed) await startThree(); else showInstall();
 await listModels();
+const want = new URLSearchParams(location.search).get('model'), first = want && models.find((x) => x.path === want);
+if (first && T) await openModel(first);
 pollJobs();
 </script>
 </body>

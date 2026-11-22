@@ -39,6 +39,10 @@ describe('the folder browser', () => {
     trustConfig(state, game); assert.equal(configTrust(state, game), 'trusted');
     writeFileSync(join(game, 'map-editor.config.mjs'), 'export default { title: "changed" };\n');
     assert.equal(configTrust(state, game), 'ask');
+    trustConfig(state, game);
+    // another folder whose config links to this trusted one is not trusted
+    mkdirSync(join(home, 'copycat')); symlinkSync(join(game, 'map-editor.config.mjs'), join(home, 'copycat', 'map-editor.config.mjs'));
+    assert.equal(configTrust(state, join(home, 'copycat')), 'ask');
   });
   it('keeps ten recent projects, newest first, only those that still exist', () => {
     for (let i = 0; i < 12; i++) { mkdirSync(join(home, `p${i}`)); addRecent(state, join(home, `p${i}`)); }

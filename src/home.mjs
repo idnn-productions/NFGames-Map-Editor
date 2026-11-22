@@ -1,7 +1,9 @@
 // The folder browser, and the projects the editor may switch to: folders under the user's home folder (hidden ones
 // left out), as names and a few markers only, never contents. A project's config is code the editor runs, so the
 // first time a folder's config would run, and whenever the file changes, the user is asked; the answer is kept
-// with the file's hash in ~/.nfgames-editor/trusted.json. Recent projects: ~/.nfgames-editor/recent.json.
+// in ~/.nfgames-editor/trusted.json, keyed on the project folder and the config file together, with the file's hash.
+// What is trusted is the folder, as with an editor's workspace trust: a config may import other files of its project,
+// and a change to those does not ask again. Recent projects: ~/.nfgames-editor/recent.json.
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -39,19 +41,21 @@ export function browse(home, path = home) {
 const readJson = (file, fallback) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return fallback; } };
 const writeJson = (file, value) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`); };
 const sha = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
+/** Trust belongs to this project folder with this config file: a link to another project's trusted config is not trusted here. */
+const trustKey = (root, file) => `${realpathSync(root)}\n${realpathSync(file)}`;
 
 /** 'none' (no config), 'trusted' (this exact file was trusted before) or 'ask'. */
 export function configTrust(stateDir, root) {
   const file = join(root, CONFIG_NAME);
   if (!existsSync(file)) return 'none';
-  return readJson(join(stateDir, 'trusted.json'), {})[realpathSync(file)] === sha(file) ? 'trusted' : 'ask';
+  return readJson(join(stateDir, 'trusted.json'), {})[trustKey(root, file)] === sha(file) ? 'trusted' : 'ask';
 }
 /** Remembers that the user trusts this project's config, as it is now. */
 export function trustConfig(stateDir, root) {
   const file = join(root, CONFIG_NAME);
   if (!existsSync(file)) return;
   const all = readJson(join(stateDir, 'trusted.json'), {});
-  all[realpathSync(file)] = sha(file);
+  all[trustKey(root, file)] = sha(file);
   writeJson(join(stateDir, 'trusted.json'), all);
 }
 export const recentProjects = (stateDir) => readJson(join(stateDir, 'recent.json'), []).filter((p) => typeof p === 'string' && existsSync(p));

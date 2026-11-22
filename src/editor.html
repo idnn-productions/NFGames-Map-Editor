@@ -61,10 +61,12 @@
   .keys { color: var(--dim); font-size: 12px; } .keys b { color: var(--ink); font-weight: 600; }
   table.what { border-collapse: collapse; font-size: 12px; width: 100%; } table.what td { padding: 2px 4px; border-bottom: 1px solid var(--line); vertical-align: top; } table.what td:last-child { color: var(--dim); }
   [hidden] { display: none !important; }
+  #nfnav { margin: -4px 0 10px; }
 </style>
 </head>
 <body>
 <aside id="left">
+  <!--@nav-->
   <h1>Add a piece</h1>
   <p class="keys" id="palHelp">Pick one, then click the map where it goes. It stays picked (<b>Esc</b> to stop).</p>
   <div id="palette"></div>
@@ -921,7 +923,7 @@ window.addEventListener('keydown', (e) => {
   else if (key === 'f') fit();
   else if (key.startsWith('arrow')) { e.preventDefault(); const s = e.shiftKey ? 1 : snapStep(); nudge(key === 'arrowleft' ? -s : key === 'arrowright' ? s : 0, key === 'arrowup' ? -s : key === 'arrowdown' ? s : 0); }
 });
-window.addEventListener('beforeunload', (e) => { if (plan && isDirty()) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', (e) => { if (plan && isDirty() && !window.__nfSwitching) { e.preventDefault(); e.returnValue = ''; } });
 window.addEventListener('resize', resize);
 
 // --- the panels --------------------------------------------------------------------------------------------
@@ -990,7 +992,7 @@ function buildLayers() {
 function renderProblems() {
   const box = $('problems'); box.textContent = '';
   for (const text of pv.errors) box.append(h('li', { class: 'error' }, h('b', { textContent: 'schema ' }), text));
-  for (const p of pv.problems) box.append(h('li', { title: 'click to show it', onclick: () => { if (p.sel && p.sel.length) select(p.sel.filter((k) => handle(k))); focusOn(p.at, 9); } }, h('b', { textContent: p.kind + ' ' }), p.text));
+  for (const p of pv.problems) box.append(h('li', { title: 'click to show it', onclick: () => { if (p.sel && p.sel.length) select(p.sel.filter((k) => handle(k))); if (p.at) focusOn(p.at, 9); } }, h('b', { textContent: p.kind + ' ' }), p.text));
   if (!pv.errors.length && !pv.problems.length) box.append(h('li', { class: 'dim', textContent: 'Everything sits right.' }));
   $('probCount').textContent = pv.errors.length ? `${pv.errors.length} that stop a save` + (pv.problems.length ? `, ${pv.problems.length} warnings` : '') : pv.problems.length ? `${pv.problems.length} warnings (a save still goes through)` : '';
 }
@@ -1032,7 +1034,7 @@ function renderSelected() {
   const place = (set = x.set, at = x.at) => row('x, z', num(at[0], snapStep(), (v) => set([v, handle(key).at[1]])), num(at[1], snapStep(), (v) => set([handle(key).at[0], v])));
   if (type === 'piece') {
     const p = x.piece, k = info(p.kind), g = toGame(drawAt(p)), [w, d] = footprint(p), seat = pv.seated[p.id], pre = presetOf(p);
-    box.append(h('div', { class: 'row' }, h('b', { textContent: p.id }), tagOf(k.cls), h('span', { class: 'dim', textContent: p.kind })),
+    box.append(h('div', { class: 'row' }, h('b', { textContent: p.id }), tagOf(k.cls), h('span', { class: 'dim', textContent: p.kind }), ...(k.model ? [h('a', { href: `/viewer?model=${encodeURIComponent(k.model)}`, textContent: 'View model', title: 'Open this model in the model viewer', style: 'margin-left:auto;color:#5fc9c0' })] : [])),
       note((pre && pre.note ? pre.note : classOf(k.cls).note) + (k.unknown ? ' (No size is known for this kind: drawn as 2 x 2 m.)' : '')),
       place(),
       row('turn °', num(p.rot || 0, 15, (v) => { p.rot = v; }), h('span', { class: 'dim small', textContent: '0 faces south (+Z), 90 east' })),
@@ -1205,6 +1207,8 @@ async function loadRulePlants() {
 }
 
 async function load() {
+  const listed = await fetch('/api/maps').then((r) => r.json()).catch(() => ({ maps: [] }));
+  if (!listed.maps.length) { $('title').textContent = 'No maps yet'; status('This project has no maps yet (a map is <maps>/<name>/layout.json). Its models are in the Model viewer.'); $('palette').replaceChildren(h('p', { class: 'small dim', textContent: 'No map is open.' })); window.__map.ready = true; return; }
   const r = await fetch(api('state')), body = await r.json();
   if (!r.ok) { status(body.error || 'could not load the map', 'bad'); return; }
   S = body; UI = body.ui; D = UI.display; plan = body.plan; kindsInfo = body.kinds; savedJson = JSON.stringify(plan);

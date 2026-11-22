@@ -8,7 +8,9 @@ checks the plan against a JSON Schema, writes it atomically and keeps the old fi
 check warns about pieces standing in each other, things outside the map, blocked doors and similar. A
 **3D view** shows the same plan as boxes, where you lift pieces onto roofs and move them along x, y and z.
 A **model viewer** shows the game's models (GLB): pin what is wrong on a model, add notes and reference images,
-and send it to a Claude Code session that fixes it and reports back (see [Model review](#model-review)).
+and send it to a Claude Code session that fixes it and reports back (see [Model review](#model-review)). Both pages
+share a bar with links between them and **Open project…**, which browses your home folder for another project to open,
+and a project's models appear in the palette as kinds of piece by themselves.
 
 The editor's core works for any game. Anything specific to one game lives in a **project config file**
 (`map-editor.config.mjs`): where its kinds of piece and their sizes come from, its own compile and
@@ -27,6 +29,7 @@ It runs on your machine only: the server listens on `127.0.0.1` and refuses ever
 - [Install](#install)
 - [Quick start with the example](#quick-start-with-the-example)
 - [Running it against your own project](#running-it-against-your-own-project)
+- [Opening a project](#opening-a-project)
 - [The config file](#the-config-file)
 - [The map file format](#the-map-file-format)
 - [Using the editor](#using-the-editor)
@@ -132,6 +135,28 @@ With no config file the editor still works:
   plus any `sizes` a plan lists itself. A kind with no known size is drawn as a 2 x 2 m mark;
 - the built-in fit check runs; there are no Apply buttons, extra layers or status panels.
 
+## Opening a project
+
+The editor and the model viewer share a bar: **Map editor** | **Model viewer**, the open project's name, and
+**📁 Open project…**. Both pages always show the same project, the one the editor's server has open; `--project`
+sets the first.
+
+**Open project…** browses the folders under your **home folder** (hidden folders such as `~/.ssh` are left out). It
+shows folder names and two markers, never file contents: **project** (the folder has a `map-editor.config.mjs`, a
+`maps/` or a `data/maps/`) and **N models** (`.glb` files directly in it). Recent projects are listed at the top
+(`~/.nfgames-editor/recent.json`). Any folder opens; one with no config uses the defaults: maps from `maps/` (or
+`data/maps/`), models from `models/` if it has one, else from the folder itself.
+
+**Trusting a config.** A `map-editor.config.mjs` is code the editor runs. The first time you open a folder with one, the
+dialog names the file and asks before running it (**Run its config and open**). The answer is kept in
+`~/.nfgames-editor/trusted.json`, for that folder and that file, with the file's hash: if the config changes, it asks
+again. What you trust is the folder, as with an editor's workspace trust: a config may import other files of its
+project, and changing those does not ask again. The project the editor is started on is trusted, since its config has
+already run.
+
+A project with **no maps** opens too: the editor says so, and the model viewer works as usual. Opening is refused while
+an Apply job runs, and a config that fails keeps the project that was open. Unsaved map changes are asked about first.
+
 ## The config file
 
 `map-editor.config.mjs` in the project root is an ES module. Its default export is either an object,
@@ -188,7 +213,8 @@ onto these options.
 | `actions` | | the Apply buttons (see [Apply actions](#apply-actions)) |
 | `help` | | `[[what, how], ...]`: the "Which edit needs what" table under Apply |
 | `hints` | | short texts the page shows: `afterSave: { plan, plants, both }` after a save that changed those files, `ring`, `person`, `thing`, `plant`, `round` in the matching Selected panels |
-| `models` | none | the folder whose `.glb` files the [model viewer](#model-review) lists, subfolders included. Must be inside the project |
+| `models` | `models/`, else the project's folder | the folder whose `.glb` files the [model viewer](#model-review) lists and the palette offers (subfolders included, `node_modules` and hidden folders skipped). Must be inside the project. `false` for none |
+| `modelKinds` | `true` | `false`: the models folder's files are not offered as kinds of piece |
 | `reviews` | `.review` | the folder review jobs are written to. Must be inside the project |
 | `reviewWorkflows` | Auto, Blender, ComfyUI | the viewer's Workflow list: `[{ id, label, description, enabled, instructions, instructionsFile }]`, or a default's id (`'auto'`). `instructions` is text; `instructionsFile` is a file in the project whose text is added. Both are copied into each job. `enabled: false` shows "(not set up yet)". Blender and ComfyUI are placeholders by default (see `todo.md`) |
 
@@ -216,6 +242,18 @@ ctx = { root, editorRoot, mapsDir, mapDir(name), planFile(name), plantsFile(name
 | action hooks | see [Apply actions](#apply-actions) | |
 
 ### Kinds and kit.json
+
+**Models as kinds.** Every `.glb` under the project's `models` folder is a kind in the palette, with no `kit.json`
+entry needed. It is named `model:<file name>` (lower case, other characters as `_`, an `m` in front of a leading
+digit; where two files would share a name, their folders are added: `model:ships_crate`, `model:ruins_crate`). Its
+footprint comes from the model's own bounds, read from the GLB's header without loading the model (glTF metres, Y up,
+the editor's frame), and its box sits where the model is when the model's origin is not at its middle. Models are
+listed under **Models · <folder>**, in the class `model` (teal). Each file is read once per version. A `kit.json`
+entry of the same name wins (a `size` there without `boxes` uses the whole footprint), so a footprint, `door` or
+`solid` can be set by hand. A file that cannot be read is a kind of unknown size (2 x 2 m) with a `model` problem
+naming it. A model piece's Selected panel has **View model**, which opens it in the model viewer. In the 3D view
+models are still drawn as boxes.
+
 
 A **kind** is a kind of piece (`kit:house`, `hero:tower`, or a plain name), with its footprint:
 
@@ -631,6 +669,9 @@ The editor reads and writes files on your machine, so it accepts requests only f
 - **Its page and its API, nothing else.** It serves `/`, its `/api/...` routes, and an empty favicon. Any
   other path is a 404, and no file from the project is ever served directly. Responses are marked
   `no-store`, `nosniff` and `X-Frame-Options: DENY`. Request bodies over 2 MB are refused.
+- **Opening projects.** `/api/browse` lists folder names under the real home folder only (no hidden folders, symlinks
+  only when they land inside home, no file contents). `POST /api/project` (Origin and JSON checks) opens only folders
+  under home, and runs a folder's config only once you have trusted it (see [Opening a project](#opening-a-project)).
 - **The model viewer.** `/vendor/` serves only the pinned three.js version's allow-listed files, and only after an
   install whose download matched the pinned SHA-512. Models are read only from the real `models` folder (symlinks
   out of it refused), and only `.glb` files. Jobs are written only to server-named folders and files under
@@ -677,7 +718,9 @@ refused after the file changed on disk; `plants.json`; unknown actions refused; 
 install (`test/vendor.test.mjs`: tar reader, allow-list, a hash mismatch or failed download installs nothing,
 only allow-listed files served), jobs (`test/reviews.test.mjs`: server-made names, image signatures, refused jobs
 write nothing, states, workflows), the routes (`test/viewer-server.test.mjs`) and the watcher
-(`test/review-watch.test.mjs`).
+(`test/review-watch.test.mjs`). Opening projects and model kinds: GLB bounds (`test/glb.test.mjs`), model kind names,
+sizes, the cache and the kit's precedence (`test/modelkinds.test.mjs`), the folder browser, trust and recent projects
+(`test/home.test.mjs`), and switching over HTTP (`test/switch.test.mjs`).
 
 ```sh
 npm run check:browser    # the page in headless Chrome, against a copy of the sample project
