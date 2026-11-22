@@ -1,1 +1,362 @@
-<!doctype html><title>model viewer</title><script type="importmap">/*@importmap*/</script>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>model review</title>
+<script type="importmap">/*@importmap*/</script>
+<style>
+:root { color-scheme: dark; --bg: #14171d; --panel: #1c2029; --line: #2c3240; --text: #d8dee9; --dim: #8a93a6; --accent: #ffb366; --ok: #6fcf97; --bad: #ff7a7a; }
+* { box-sizing: border-box; } [hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
+body { display: grid; grid-template-columns: 260px 1fr 340px; grid-template-rows: 40px 1fr; height: 100vh; }
+header { grid-column: 1 / 4; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 14px; margin: 0; font-weight: 600; } header .grow { flex: 1; } header a { color: var(--dim); }
+aside { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px; }
+#right { border-right: 0; border-left: 1px solid var(--line); }
+main { position: relative; overflow: hidden; }
+#view { display: block; width: 100%; height: 100%; }
+button, select, input, textarea { font: inherit; color: var(--text); background: #252a35; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+button { cursor: pointer; } button:disabled { opacity: .45; cursor: default; } button.on { border-color: var(--accent); color: var(--accent); }
+button.primary { background: var(--accent); color: #1a1206; border-color: var(--accent); font-weight: 600; }
+textarea { width: 100%; resize: vertical; min-height: 48px; } select { width: 100%; }
+.dim { color: var(--dim); } .bad { color: var(--bad); } .ok { color: var(--ok); }
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 14px 0 6px; }
+#filter { width: 100%; margin-bottom: 8px; }
+.group { margin: 8px 0 2px; color: var(--dim); font-size: 11px; }
+.model { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model:hover { background: #252a35; } .model.current { background: #33291c; color: var(--accent); }
+.pin { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 8px 0; }
+.pin.drop { border-color: var(--accent); }
+.pin .head { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.pin .num { background: var(--accent); color: #1a1206; border-radius: 50%; width: 20px; height: 20px; display: grid; place-items: center; font-weight: 700; font-size: 11px; flex: none; }
+.pin .where { flex: 1; font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.refs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.refs figure { margin: 0; position: relative; }
+.refs img { width: 56px; height: 56px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); cursor: zoom-in; }
+.refs button { position: absolute; top: -7px; right: -7px; padding: 0 5px; font-size: 11px; border-radius: 50%; }
+.job { border-top: 1px solid var(--line); padding: 6px 0; }
+.state { font-size: 11px; padding: 1px 6px; border-radius: 8px; border: 1px solid var(--line); }
+.state.done { color: var(--ok); border-color: var(--ok); } .state.failed, .state.unknown { color: var(--bad); border-color: var(--bad); }
+.state.working, .state.needs-input { color: var(--accent); border-color: var(--accent); }
+#overlay { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; color: var(--dim); text-align: center; padding: 20px; }
+#overlay > div { pointer-events: auto; max-width: 440px; } #overlay h2 { font-size: 14px; color: var(--text); text-transform: none; letter-spacing: 0; }
+#toolbar { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; } #toolbar select { width: auto; }
+#status { position: absolute; bottom: 8px; left: 10px; font-size: 12px; }
+#zoom { position: fixed; inset: 0; background: rgba(0, 0, 0, .8); display: none; place-items: center; z-index: 9; cursor: zoom-out; }
+#zoom img { max-width: 90vw; max-height: 90vh; }
+main.pinning #view { cursor: crosshair; }
+</style>
+</head>
+<body>
+<header><h1>Model review</h1><span class="dim" id="project"></span><span class="grow"></span><a href="/">map editor</a></header>
+<aside id="left"><input id="filter" placeholder="filter models" autocomplete="off"><div id="models" class="dim">loading…</div></aside>
+<main id="main">
+  <canvas id="view"></canvas>
+  <div id="toolbar" hidden>
+    <button id="pinMode" title="Pin mode (P): click the model to drop a pin; drag a pin to move it">📍 Pin</button>
+    <button id="resetView" title="Frame the whole model">Reset view</button>
+    <select id="lighting" title="Lighting"><option value="studio">Studio</option><option value="space">Dark space</option></select>
+    <button id="wire" title="Wireframe">Wire</button>
+  </div>
+  <div id="status" class="dim"></div>
+  <div id="overlay"><div id="overlayBody"></div></div>
+</main>
+<aside id="right">
+  <h2>Pins</h2><div id="pins" class="dim">Open a model, then use 📍 Pin (P).</div>
+  <h2>Note</h2><textarea id="note" placeholder="What is wrong overall (optional)"></textarea>
+  <h2>Workflow</h2><select id="workflow"></select>
+  <p id="warn" class="bad"></p>
+  <p><button class="primary" id="send" disabled>Send to Claude</button> <span id="sendState" class="dim"></span></p>
+  <h2>Jobs</h2><div id="jobs" class="dim">none yet</div>
+</aside>
+<div id="zoom"><img alt="reference image"></div>
+<script type="module">
+// The model viewer: a game's .glb files, pins with notes and reference images, and Send, which writes a review job
+// for a Claude Code session (see the README, "Model review"). three.js is installed on demand from the Install button.
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); for (const k of kids) e.append(k); return e; };
+const api = async (path, options) => { const r = await fetch(path, options), j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || `${r.status} ${r.statusText}`); return j; };
+const post = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const say = (text, cls = 'dim') => { $('status').className = cls; $('status').textContent = text; };
+const round = (v) => Math.round(v * 1e4) / 1e4;
+const MB = 1024 * 1024;
+
+// state
+let info, T, scene, camera, renderer, controls, loader, envTexture, key, ray, ndc;
+let model = null, modelPath = null, models = [], pinMode = false, wire = false, saveTimer = null, pollTimer = null;
+let draft = { note: '', workflow: 'auto', pins: [] }; // a pin: { position, normal, mesh, material, uv, camera, screenshot, note, refs: [data URL] }
+const markers = [];                                    // a sprite per draft pin (in order), then the sent ones
+const sent = new Map();                                // job id → { model, positions }: greyed pins until the job finishes
+
+// ---- drafts, one per model, in IndexedDB (images make them too big for localStorage)
+const db = await new Promise((done, fail) => { const r = indexedDB.open('model-review', 1); r.onupgradeneeded = () => r.result.createObjectStore('drafts'); r.onsuccess = () => done(r.result); r.onerror = () => fail(r.error); });
+const idb = (mode, fn) => new Promise((done, fail) => { const t = db.transaction('drafts', mode), req = fn(t.objectStore('drafts')); t.oncomplete = () => done(req.result); t.onerror = () => fail(t.error); });
+const loadDraft = (path) => idb('readonly', (s) => s.get(path));
+const clearDraft = (path) => idb('readwrite', (s) => s.delete(path));
+function saveDraft() {
+  if (!modelPath) return;
+  clearTimeout(saveTimer);
+  const path = modelPath, copy = JSON.parse(JSON.stringify(draft));
+  saveTimer = setTimeout(() => idb('readwrite', (s) => s.put(copy, path)).catch((e) => say(`draft not kept: ${e.message}`, 'bad')), 300);
+}
+
+// ---- three.js missing: the Install button
+function showInstall() {
+  const btn = el('button', { className: 'primary', textContent: `Install three.js ${info.three.version}` });
+  const msg = el('p', { textContent: `The viewer draws models with three.js, which does not come with the editor. Install downloads three ${info.three.version} (${(info.three.size / MB).toFixed(1)} MB) from the npm registry, checks it against its pinned SHA-512, and keeps only the files the viewer needs, in the editor's vendor/ folder.` });
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = 'Installing…';
+    try { await post('/api/vendor/install', {}); location.reload(); } catch (e) { btn.disabled = false; btn.textContent = 'Try again'; msg.className = 'bad'; msg.textContent = `Not installed: ${e.message}`; }
+  };
+  $('overlayBody').replaceChildren(el('h2', { textContent: 'three.js is not installed' }), msg, btn);
+}
+
+// ---- the 3D view
+async function startThree() {
+  const base = info.three.base;
+  T = await import('three');
+  const [{ OrbitControls }, { GLTFLoader }, { DRACOLoader }, { KTX2Loader }, { MeshoptDecoder }, { RoomEnvironment }] = await Promise.all([
+    import('three/addons/controls/OrbitControls.js'), import('three/addons/loaders/GLTFLoader.js'), import('three/addons/loaders/DRACOLoader.js'),
+    import('three/addons/loaders/KTX2Loader.js'), import('three/addons/libs/meshopt_decoder.module.js'), import('three/addons/environments/RoomEnvironment.js')]);
+  renderer = new T.WebGLRenderer({ canvas: $('view'), antialias: true, preserveDrawingBuffer: true }); // keeps frames for screenshots
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.toneMapping = T.ACESFilmicToneMapping;
+  scene = new T.Scene();
+  camera = new T.PerspectiveCamera(45, 1, 0.01, 1e5); camera.position.set(4, 3, 6);
+  controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true;
+  envTexture = new T.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+  key = new T.DirectionalLight(0xffffff, 1.5); key.position.set(5, 8, 5); scene.add(key);
+  setLighting('studio');
+  loader = new GLTFLoader()
+    .setDRACOLoader(new DRACOLoader().setDecoderPath(`${base}examples/jsm/libs/draco/gltf/`))
+    .setKTX2Loader(new KTX2Loader().setTranscoderPath(`${base}examples/jsm/libs/basis/`).detectSupport(renderer))
+    .setMeshoptDecoder(MeshoptDecoder);
+  ray = new T.Raycaster(); ndc = new T.Vector2();
+  new ResizeObserver(resize).observe($('main')); resize();
+  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+  $('toolbar').hidden = false;
+  $('overlayBody').replaceChildren(el('p', { textContent: 'Pick a model on the left.' }));
+  wireView();
+}
+function resize() { const m = $('main'); renderer.setSize(m.clientWidth, m.clientHeight, false); camera.aspect = m.clientWidth / Math.max(1, m.clientHeight); camera.updateProjectionMatrix(); }
+function setLighting(which) {
+  scene.environment = envTexture;
+  if (which === 'space') { scene.background = new T.Color(0x05070b); scene.environmentIntensity = 0.25; key.intensity = 3.5; }
+  else { scene.background = new T.Color(0x2a2f38); scene.environmentIntensity = 1; key.intensity = 1.5; }
+}
+function setWire(on) { wire = on; $('wire').classList.toggle('on', on); model?.traverse((o) => { for (const m of [].concat(o.material || [])) m.wireframe = on; }); }
+function setPinMode(on) { pinMode = on; $('pinMode').classList.toggle('on', on); $('main').classList.toggle('pinning', on); }
+function dispose(root) { root.traverse((o) => { o.geometry?.dispose(); for (const m of [].concat(o.material || [])) { for (const v of Object.values(m)) if (v?.isTexture) v.dispose(); m.dispose(); } }); }
+function frame() {
+  const box = new T.Box3().setFromObject(model), size = box.getSize(new T.Vector3()), centre = box.getCenter(new T.Vector3()), r = Math.max(size.x, size.y, size.z) || 1;
+  controls.target.copy(centre);
+  camera.position.copy(centre).add(new T.Vector3(1, 0.6, 1).normalize().multiplyScalar(r * 1.6));
+  camera.near = r / 1000; camera.far = r * 1000; camera.updateProjectionMatrix(); controls.update();
+}
+
+// ---- models
+async function listModels() {
+  if (!info.models) { $('models').textContent = 'No models folder: add models: \'<folder>\' to map-editor.config.mjs.'; return; }
+  models = (await api('/api/models')).models;
+  drawModelList();
+}
+function drawModelList() {
+  const q = $('filter').value.trim().toLowerCase(), box = $('models'), shown = models.filter((m) => m.path.toLowerCase().includes(q));
+  if (!shown.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : `no .glb files in ${info.models}/`; return; }
+  const kids = []; let group = null;
+  for (const m of shown) {
+    const dir = m.path.includes('/') ? m.path.slice(0, m.path.lastIndexOf('/')) : '';
+    if (dir !== group) { group = dir; kids.push(el('div', { className: 'group', textContent: dir ? `${dir}/` : `${info.models}/` })); }
+    kids.push(el('button', { className: `model${m.path === modelPath ? ' current' : ''}`, textContent: m.path.slice(dir ? dir.length + 1 : 0), title: `${m.path} · ${(m.size / MB).toFixed(1)} MB`, onclick: () => openModel(m) }));
+  }
+  box.className = ''; box.replaceChildren(...kids);
+}
+async function openModel(m, { keepCamera = false } = {}) {
+  if (!T) return;
+  if (m.size > 200 * MB && !confirm(`${m.path} is ${(m.size / MB).toFixed(0)} MB. Load it?`)) return;
+  say(`loading ${m.path}…`);
+  let gltf;
+  try { gltf = await loader.loadAsync(`/api/model?path=${encodeURIComponent(m.path)}`); } catch (e) { say(`could not load ${m.path}: ${e.message}`, 'bad'); return; }
+  if (model) { scene.remove(model); dispose(model); }
+  model = gltf.scene; scene.add(model); // the scene root stays at identity, so world coordinates are the model's own
+  if (wire) setWire(true);
+  modelPath = m.path; drawModelList();
+  if (!keepCamera) frame();
+  $('overlayBody').replaceChildren();
+  draft = (await loadDraft(modelPath)) || { note: '', workflow: $('workflow').value, pins: [] };
+  $('note').value = draft.note || '';
+  if (draft.workflow && [...$('workflow').options].some((o) => o.value === draft.workflow && !o.disabled)) $('workflow').value = draft.workflow;
+  rebuildMarkers(); drawPins(); updateSend();
+  let tris = 0; model.traverse((o) => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  say(`${m.path} · ${Math.round(tris).toLocaleString()} triangles`);
+}
+
+// ---- pins
+function markerTexture(n, grey) {
+  const c = el('canvas', { width: 64, height: 64 }), g = c.getContext('2d');
+  g.fillStyle = grey ? '#7a808c' : '#ffb366'; g.beginPath(); g.arc(32, 32, 28, 0, Math.PI * 2); g.fill();
+  g.lineWidth = 4; g.strokeStyle = '#1a1206'; g.stroke();
+  g.fillStyle = '#1a1206'; g.font = 'bold 30px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(n), 32, 34);
+  const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace; return t;
+}
+function makeMarker(n, at, grey = false) {
+  const s = new T.Sprite(new T.SpriteMaterial({ map: markerTexture(n, grey), depthTest: false, sizeAttenuation: false, toneMapped: false }));
+  s.scale.set(0.045, 0.045, 1); s.renderOrder = 10; s.position.fromArray(at); s.userData = { n, sent: grey }; scene.add(s); return s;
+}
+function rebuildMarkers() {
+  for (const s of markers.splice(0)) { scene.remove(s); s.material.map.dispose(); s.material.dispose(); }
+  draft.pins.forEach((p, i) => markers.push(makeMarker(i + 1, p.position)));
+  for (const j of sent.values()) if (j.model === modelPath) j.positions.forEach((at, i) => markers.push(makeMarker(i + 1, at, true)));
+}
+function aim(e) { const r = renderer.domElement.getBoundingClientRect(); ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); ray.setFromCamera(ndc, camera); }
+function hitModel(e) { aim(e); return ray.intersectObject(model, true).find((h) => h.object.isMesh && h.object.visible) || null; }
+function hitMarker(e) { aim(e); const h = ray.intersectObjects(markers.filter((m) => !m.userData.sent), false)[0]; return h ? markers.indexOf(h.object) : -1; }
+function describeHit(h) {
+  const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new T.Vector3(0, 1, 0);
+  const mats = [].concat(h.object.material), mat = mats[h.face?.materialIndex ?? 0] || mats[0];
+  return { position: h.point.toArray().map(round), normal: n.toArray().map(round), mesh: h.object.name || null, material: mat?.name || null, uv: h.uv ? [round(h.uv.x), round(h.uv.y)] : null };
+}
+const camState = () => ({ position: camera.position.toArray().map(round), target: controls.target.toArray().map(round), fov: camera.fov });
+function screenshot(maxWidth = 1280) {
+  renderer.render(scene, camera);
+  const src = renderer.domElement, k = Math.min(1, maxWidth / src.width), c = el('canvas', { width: Math.round(src.width * k), height: Math.round(src.height * k) });
+  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+function capture(i) { const s = markers[i]; s.scale.set(0.075, 0.075, 1); const shot = screenshot(); s.scale.set(0.045, 0.045, 1); return shot; } // the pin drawn larger
+function addPin(h) {
+  draft.pins.push({ ...describeHit(h), camera: camState(), note: '', refs: [], screenshot: null });
+  const i = draft.pins.length - 1;
+  rebuildMarkers(); draft.pins[i].screenshot = capture(i);
+  drawPins(); saveDraft(); updateSend();
+  $('pins').querySelectorAll('textarea')[i]?.focus();
+}
+function focusPin(i) {
+  const p = draft.pins[i]; if (!p) return;
+  const from = [camera.position.clone(), controls.target.clone()], to = [new T.Vector3().fromArray(p.camera.position), new T.Vector3().fromArray(p.camera.target)], t0 = performance.now();
+  const step = (now) => { const k = Math.min(1, (now - t0) / 450), e = k * k * (3 - 2 * k); camera.position.lerpVectors(from[0], to[0], e); controls.target.lerpVectors(from[1], to[1], e); controls.update(); if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+}
+function wireView() {
+  const cv = renderer.domElement; let down = null, dragging = -1;
+  cv.addEventListener('pointerdown', (e) => {
+    if (!model || e.button !== 0) return;
+    down = { x: e.clientX, y: e.clientY };
+    const i = hitMarker(e);
+    if (i >= 0) { dragging = i; controls.enabled = false; cv.setPointerCapture(e.pointerId); }
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (dragging < 0) return;
+    const h = hitModel(e); if (!h) return;
+    Object.assign(draft.pins[dragging], describeHit(h)); markers[dragging].position.fromArray(draft.pins[dragging].position);
+  });
+  cv.addEventListener('pointerup', (e) => {
+    const moved = !!down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4; down = null;
+    if (dragging >= 0) { const i = dragging; dragging = -1; controls.enabled = true; if (moved) { draft.pins[i].camera = camState(); draft.pins[i].screenshot = capture(i); drawPins(); saveDraft(); } else focusPin(i); return; }
+    if (pinMode && !moved && model) { const h = hitModel(e); if (h) addPin(h); }
+  });
+  $('pinMode').onclick = () => setPinMode(!pinMode);
+  addEventListener('keydown', (e) => { if (e.target.closest('textarea, input, select')) return; if (e.key === 'p' || e.key === 'P') setPinMode(!pinMode); if (e.key === 'Escape') setPinMode(false); });
+  $('resetView').onclick = () => model && frame();
+  $('lighting').onchange = (e) => setLighting(e.target.value);
+  $('wire').onclick = () => setWire(!wire);
+}
+async function shrink(file) { // at most 2048 px on the long side; PNG when it has transparency, else JPEG
+  const bmp = await createImageBitmap(file), k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));
+  const c = el('canvas', { width: Math.round(bmp.width * k), height: Math.round(bmp.height * k) }), g = c.getContext('2d');
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  let alpha = false;
+  if (file.type !== 'image/jpeg') { const d = g.getImageData(0, 0, c.width, c.height).data; for (let i = 3; i < d.length; i += 4) if (d[i] < 255) { alpha = true; break; } }
+  return alpha ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.9);
+}
+function zoom(src) { $('zoom').querySelector('img').src = src; $('zoom').style.display = 'grid'; }
+function drawPins() {
+  const box = $('pins');
+  if (!model) return;
+  if (!draft.pins.length) { box.className = 'dim'; box.textContent = 'No pins. Use 📍 Pin (P) and click the model.'; return; }
+  box.className = '';
+  box.replaceChildren(...draft.pins.map((p, i) => {
+    const note = el('textarea', { value: p.note, placeholder: 'What is wrong here? Drop or paste reference images.' });
+    note.oninput = () => { p.note = note.value; saveDraft(); };
+    const take = async (files) => {
+      for (const f of files) {
+        if (!/^image\/(png|jpeg|webp)$/.test(f.type)) { say(`${f.name || 'that file'}: only PNG, JPEG or WebP`, 'bad'); continue; }
+        if (p.refs.length >= 4) { say('at most 4 reference images per pin', 'bad'); break; }
+        p.refs.push(await shrink(f));
+      }
+      drawPins(); saveDraft();
+    };
+    const refs = el('div', { className: 'refs' }, ...p.refs.map((src, j) => el('figure', {},
+      el('img', { src, alt: `reference ${j + 1}`, onclick: () => zoom(src) }),
+      el('button', { textContent: '×', title: 'Remove', onclick: () => { p.refs.splice(j, 1); drawPins(); saveDraft(); } }))));
+    const card = el('div', { className: 'pin' },
+      el('div', { className: 'head' }, el('span', { className: 'num', textContent: i + 1 }), el('span', { className: 'where', textContent: [p.mesh, p.material].filter(Boolean).join(' · ') || 'surface', title: `at ${p.position.join(', ')}` }),
+        el('button', { textContent: 'View', onclick: () => focusPin(i) }),
+        el('button', { textContent: 'Delete', onclick: () => { draft.pins.splice(i, 1); rebuildMarkers(); drawPins(); saveDraft(); updateSend(); } })),
+      note, refs);
+    card.addEventListener('dragover', (e) => { e.preventDefault(); card.classList.add('drop'); });
+    card.addEventListener('dragleave', () => card.classList.remove('drop'));
+    card.addEventListener('drop', (e) => { e.preventDefault(); card.classList.remove('drop'); take([...e.dataTransfer.files]); });
+    note.addEventListener('paste', (e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); take(files); } });
+    return card;
+  }));
+}
+
+// ---- send, and the jobs
+function updateSend() { $('send').disabled = !model || (!draft.pins.length && !draft.note.trim()); }
+async function send() {
+  const btn = $('send'); btn.disabled = true; $('sendState').textContent = 'sending…';
+  const job = { model: modelPath, note: draft.note, workflow: $('workflow').value, overview: screenshot(),
+    pins: draft.pins.map((p) => ({ note: p.note, position: p.position, normal: p.normal, mesh: p.mesh, material: p.material, uv: p.uv, camera: p.camera, screenshot: p.screenshot, refs: p.refs })) };
+  const size = JSON.stringify(job).length;
+  if (size > 23.5 * MB) { $('sendState').textContent = `too big (${(size / MB).toFixed(1)} MB of 24): remove some reference images`; btn.disabled = false; return; }
+  try {
+    const { id } = await post('/api/review', job);
+    sent.set(id, { model: modelPath, positions: draft.pins.map((p) => p.position) });
+    await clearDraft(modelPath);
+    draft = { note: '', workflow: job.workflow, pins: [] }; $('note').value = '';
+    rebuildMarkers(); drawPins(); updateSend();
+    $('sendState').textContent = `sent: ${id}`; pollJobs();
+  } catch (e) { $('sendState').textContent = ''; say(`not sent (your pins are kept): ${e.message}`, 'bad'); btn.disabled = false; }
+}
+async function pollJobs() {
+  clearTimeout(pollTimer);
+  try {
+    const { reviews } = await api('/api/reviews');
+    drawJobs(reviews);
+    for (const j of reviews) if (sent.has(j.id) && (j.state === 'done' || j.state === 'failed')) { sent.delete(j.id); if (T) rebuildMarkers(); }
+  } catch { /* the editor may be restarting: the next poll tries again */ }
+  pollTimer = setTimeout(pollJobs, 3000);
+}
+function drawJobs(reviews) {
+  const queued = reviews.filter((j) => j.state === 'queued'), oldest = queued.length ? Math.min(...queued.map((j) => Date.parse(j.createdAt))) : null;
+  $('warn').textContent = oldest && Date.now() - oldest > 120000 ? 'No Claude session seems to be watching. In your terminal, say "watch the review inbox". Jobs stay queued until then.' : '';
+  const box = $('jobs');
+  if (!reviews.length) { box.className = 'dim'; box.textContent = 'none yet'; return; }
+  box.className = '';
+  box.replaceChildren(...reviews.slice(0, 20).map((j) => {
+    const kids = [el('div', {}, el('span', { className: `state ${j.state}`, textContent: j.state }), ' ', el('span', { textContent: j.model || j.id }), el('span', { className: 'dim', textContent: ` · ${j.pins} pin${j.pins === 1 ? '' : 's'}${j.workflow ? ` · ${j.workflow}` : ''}` }))];
+    if (j.summary) kids.push(el('div', { textContent: j.summary }));
+    if (j.question) kids.push(el('div', { className: 'bad', textContent: `Question: ${j.question}` }));
+    if (j.state === 'done' && j.modelChanged && j.model === modelPath) kids.push(el('button', { textContent: 'Reload model', onclick: async () => { await listModels(); const m = models.find((x) => x.path === j.model); if (m) openModel(m, { keepCamera: true }); } }));
+    return el('div', { className: 'job', title: j.id }, ...kids);
+  }));
+}
+
+// ---- start
+$('filter').oninput = drawModelList;
+$('note').oninput = () => { draft.note = $('note').value; saveDraft(); updateSend(); };
+$('workflow').onchange = () => { draft.workflow = $('workflow').value; saveDraft(); };
+$('send').onclick = send;
+$('zoom').onclick = () => { $('zoom').style.display = 'none'; };
+info = await api('/api/viewer');
+document.title = `${info.title ? `${info.title}: ` : ''}model review`;
+$('project').textContent = info.models ? `${info.models}/` : '';
+for (const w of info.workflows) $('workflow').append(el('option', { value: w.id, textContent: w.enabled ? w.label : `${w.label} (not set up yet)`, disabled: !w.enabled, title: w.description }));
+if (info.three.installed) await startThree(); else showInstall();
+await listModels();
+pollJobs();
+</script>
+</body>
+</html>
