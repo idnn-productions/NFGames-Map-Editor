@@ -50,6 +50,7 @@ export async function preview(project, name, plan, plants = undefined) {
     problems.push(...checkFit(plan, kinds));
     if (plants && project.plants) problems.push(...checkPlants(plants, plan, kinds, { plantKinds: project.plants.kinds, clearance: project.plants.clearance, tall: project.plants.tall, tallClearance: project.plants.tallClearance }));
   }
+  for (const m of project.modelProblems ? project.modelProblems() : []) problems.push({ kind: 'model', text: `${m.file}: ${m.error} (drawn as 2 x 2 m)`, sel: [], at: null });
   if (hooks.check) problems.push(...((await hooks.check({ plan, plants: plants ?? null, built, name, kinds }, ctx)) || []));
   const status = hooks.status ? (await hooks.status({ plan, plants: plants ?? null, built, name }, ctx)) || [] : null;
   return { errors, problems, seated: (built && built.seated) || {}, overlays: (built && built.overlays) || null, status, log: (built && built.log) || [] };

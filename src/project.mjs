@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { NAME, formatPlan, formatPlants, writeKeeping, fileStamp } from './plan.mjs';
 import { checkFile } from './schema.mjs';
 import { normaliseWorkflows } from './reviews.mjs';
+import { createModelKinds } from './modelkinds.mjs';
 
 export const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const BUILT_IN_SCHEMAS = { layout: join(EDITOR_ROOT, 'schemas', 'map.schema.json'), plants: join(EDITOR_ROOT, 'schemas', 'map-plants.schema.json') };
@@ -18,6 +19,7 @@ export const DEFAULT_PORT = 8793;
 const DEFAULT_CLASSES = {
   piece: { tag: 'piece', colour: '#e9dccb', legend: 'a piece', note: '' },
   mark: { tag: 'mark', colour: '#e58af0', legend: 'a mark: no model, or no known size', note: 'A kind with no known footprint: drawn as 2 x 2 m.' },
+  model: { tag: 'model', colour: '#5fc9c0', legend: 'a model from the models folder', note: 'Sized from the model\'s bounds. A kit.json entry of the same name overrides it.' },
 };
 const DEFAULT_HINTS = { afterSave: { plan: '', plants: '', both: '' }, ring: '', person: 'Who they are and what they say is not in the map.', thing: '', plant: '', round: '' };
 
@@ -35,7 +37,7 @@ export function readKit(file) {
 /** A kind as the editor uses it: every field there, boxes defaulting to the whole footprint. */
 export function normaliseKind(k = {}) {
   const size = Array.isArray(k.size) && k.size.length >= 2 ? [k.size[0], k.size[1], k.size[2] ?? 1] : null;
-  if (!size) return { size: [2, 2, 2], boxes: [[0, 0, 2, 2]], cls: k.cls || 'mark', unknown: true, solid: false, door: k.door || null, group: k.group || null, hidden: !!k.hidden };
+  if (!size) return { size: [2, 2, 2], boxes: [[0, 0, 2, 2]], cls: k.cls || 'mark', unknown: true, solid: false, door: k.door || null, group: k.group || null, hidden: !!k.hidden, label: k.label, ...(k.model ? { model: k.model } : {}) };
   return {
     ...k, size,
     boxes: Array.isArray(k.boxes) ? k.boxes.map((b) => b.slice(0, 4)) : [[0, 0, size[0], size[1]]],
@@ -55,7 +57,7 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
     configFile = config ? resolve(config) : join(root, CONFIG_NAME);
     if (config && !existsSync(configFile)) fail(`no such file: ${configFile}`);
     if (existsSync(configFile)) {
-      const mod = await import(pathToFileURL(configFile).href);
+      const mod = await import(`${pathToFileURL(configFile).href}?v=${statSync(configFile).mtimeMs}`); // a changed config is read again
       options = mod.default ?? {};
       if (isFn(options)) options = await options({ root, editorRoot: EDITOR_ROOT });
       if (!options || typeof options !== 'object') fail(`${configFile} must export an object (or a function returning one) as its default`);
@@ -65,7 +67,8 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
 
   // the model viewer: where the .glb files are, and where review jobs go (both inside the project)
   const inside = (p, what) => { const abs = resolve(root, p), r = relative(root, abs); if (r.startsWith('..') || isAbsolute(r)) fail(`${what} must be a folder inside the project: ${p}`); return abs; };
-  const modelsDir = options.models ? inside(options.models, '"models"') : null;
+  const modelsDir = options.models === false || options.models === null ? null : options.models ? inside(options.models, '"models"') : existsSync(join(root, 'models')) ? join(root, 'models') : root;
+  const modelKindsOn = options.modelKinds !== false, modelKinds = createModelKinds(modelKindsOn ? modelsDir : null);
   const reviewsDir = inside(options.reviews || '.review', '"reviews"');
   const reviewWorkflows = normaliseWorkflows(options.reviewWorkflows, root);
 
@@ -134,6 +137,8 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
     let raw = {};
     if (isFn(options.kinds)) raw = (await options.kinds({ name, plan }, ctx)) || {};
     else { const kit = options.kit === undefined ? 'kit.json' : options.kit; if (kit) raw = readKit(at(kit)); }
+    // the models folder's .glb files, under the kit's entries of the same name (a kit size without boxes drops the model's box)
+    for (const [kind, k] of Object.entries(modelKinds().kinds)) { const own = raw[kind] || {}; raw = { ...raw, [kind]: { ...k, ...own } }; if (own.size && !own.boxes) delete raw[kind].boxes; }
     const out = {};
     for (const [kind, k] of Object.entries(raw)) out[kind] = normaliseKind(k);
     for (const [kind, size] of Object.entries((plan && plan.sizes) || {})) out[kind] = normaliseKind({ ...(raw[kind] || {}), size, boxes: undefined });
@@ -145,7 +150,7 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
 
   return {
     root, configFile, mapsDir, schemaFile, plantsSchemaFile, ctx, options,
-    modelsDir, reviewsDir, reviewWorkflows,
+    modelsDir, reviewsDir, reviewWorkflows, modelProblems: () => modelKinds().problems,
     port: options.port || DEFAULT_PORT, defaultMap: options.defaultMap || null,
     mapDir, planFile, plantsFile, readPlan, readPlants, listMaps, knownMap, rel,
     planErrors, plantsErrors, kinds, presets, presetOf, actions, overlays, plants: plantsCfg, reserved,

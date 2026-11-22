@@ -13,7 +13,7 @@ export function listModels(dir) {
     let entries;
     try { entries = readdirSync(at, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (out.length >= MAX_MODELS || e.name.startsWith('.') || e.isSymbolicLink()) continue;
+      if (out.length >= MAX_MODELS || e.name.startsWith('.') || e.name === 'node_modules' || e.isSymbolicLink()) continue;
       const full = join(at, e.name);
       if (e.isDirectory()) walk(full);
       else if (e.isFile() && isGlb(e.name)) { const s = statSync(full); out.push({ path: relative(dir, full).split(sep).join('/'), size: s.size, mtime: Math.round(s.mtimeMs) }); }
