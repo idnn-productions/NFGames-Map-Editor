@@ -56,5 +56,30 @@ export function createJobs(project, { dryRun = false } = {}) {
     next(0);
     return mine;
   }
-  return { current, start };
+  /** Runs a plugin's steps as the one job: each step { label, run(log) } or { label, command: [program, ...args], cwd }. */
+  function runSteps({ kind, label, steps }, { onDone = () => {} } = {}) {
+    if (job && job.state === 'running') throw Object.assign(new Error(`busy: ${job.kind} is running`), { code: 409 });
+    const mine = job = { id: ++count, kind, label, map: null, state: 'running', step: 0, steps: steps.map((s) => s.label), startedAt: Date.now(), endedAt: null, log: '', dryRun: false };
+    const add = (text) => { mine.log += text; if (mine.log.length > MAX_LOG) mine.log = mine.log.slice(-KEEP_LOG); };
+    const end = (state, text) => { mine.state = state; mine.endedAt = Date.now(); add(text); try { onDone(mine); } catch { /* a listener's problem */ } return mine; };
+    const command = (s) => new Promise((ok, no) => {
+      const [file, ...args] = s.command;
+      const child = spawn(file, args, { cwd: s.cwd || project.root, shell: false, windowsHide: true });
+      child.stdout.on('data', (d) => add(String(d))); child.stderr.on('data', (d) => add(String(d)));
+      child.on('error', no); child.on('close', (code) => (code === 0 ? ok() : no(new Error(`exit ${code}`))));
+    });
+    const done = (async () => {
+      for (let i = 0; i < steps.length; i++) {
+        const s = steps[i]; mine.step = i; add(`\n== ${s.label}\n`);
+        try {
+          if (typeof s.run === 'function') await s.run((t) => add(String(t)));
+          else if (Array.isArray(s.command) && s.command.length && s.command.every((x) => typeof x === 'string')) await command(s);
+          else throw new Error('a step is { label, run } or { label, command: [program, ...args] }');
+        } catch (e) { return end('failed', `\n== ${label} stopped at "${s.label}": ${e.message}\n`); }
+      }
+      return end('done', `\n== ${label}: done in ${((Date.now() - mine.startedAt) / 1000).toFixed(1)} s\n`);
+    })();
+    return { job: mine, done };
+  }
+  return { current, start, runSteps };
 }
