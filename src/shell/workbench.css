@@ -3,7 +3,10 @@
 #wb.no-side { --side-w: 0px; } #wb.no-inspector { --inspector-w: 0px; } #wb.no-bottom { --bottom-h: 0px; }
 #wb.no-side #side, #wb.no-inspector #inspector, #wb.no-bottom #bottom { display: none; }
 #top { grid-column: 1 / 5; grid-row: 1; display: flex; align-items: center; gap: var(--nf-s3); padding: 0 var(--nf-s3); background: var(--nf-panel); border-bottom: 1px solid var(--nf-line); }
-#top .brand { color: var(--nf-accent); white-space: nowrap; } #top #nfnav { flex: none; }
+#top { white-space: nowrap; overflow: hidden; } #top .brand { color: var(--nf-accent); } #top #nfnav { flex: none; }
+#top .status-zone { display: flex; gap: var(--nf-s3); align-items: center; flex: none; font-size: 12px; }
+#top .jobs { color: var(--nf-dim); } #top .jobs.on { color: var(--nf-accent); }
+.home { max-width: 640px; padding: 32px var(--nf-s4); } .home h1 { font-size: 22px; margin: 0 0 6px; } .home .actions { display: flex; gap: var(--nf-s2); margin-top: var(--nf-s4); }
 #top .search { flex: 1; max-width: 520px; margin: 0 auto; text-align: left; font: inherit; color: var(--nf-dim); background: var(--nf-raised); border: 1px solid var(--nf-line); border-radius: var(--nf-radius); padding: 4px 10px; cursor: pointer; }
 #activity { grid-column: 1; grid-row: 2 / 4; display: flex; flex-direction: column; justify-content: space-between; background: var(--nf-panel); border-right: 1px solid var(--nf-line); padding: 4px 0; }
 .act { display: block; width: 100%; font-size: 18px; padding: 8px 0; background: none; border: 0; color: var(--nf-dim); cursor: pointer; border-left: 2px solid transparent; }
@@ -41,3 +44,8 @@
 .service header { display: flex; align-items: center; gap: 8px; } .service header b { flex: 1; }
 .light { width: 9px; height: 9px; border-radius: 50%; background: var(--nf-error); display: inline-block; } .light.on { background: var(--nf-ok); }
 .service .need { display: flex; gap: 8px; align-items: center; margin: 6px 0; } .service .need span { flex: 1; }
+.layout { display: flex; gap: 2px; flex: none; padding-left: var(--nf-s2); border-left: 1px solid var(--nf-line); }
+.layout button { width: 28px; height: 26px; display: grid; place-items: center; background: none; border: 0; border-radius: 5px; color: var(--nf-dim); cursor: pointer; }
+.layout button:hover { color: var(--nf-text); background: var(--nf-raised); } .layout button[aria-pressed=true] { color: var(--nf-accent); }
+.region-body.flush { padding: 0; } .region-body > .lent { height: 100%; }
+.act-sep { width: 22px; border: 0; border-top: 1px solid var(--nf-line); margin: 4px auto; } .layout-sep { width: 1px; margin: 4px 2px; background: var(--nf-line); }

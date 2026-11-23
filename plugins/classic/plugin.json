@@ -1,19 +1,15 @@
 {
   "id": "nfgames.classic",
-  "name": "Classic tools",
-  "version": "1.0.0",
+  "name": "Core Tools",
+  "version": "1.1.0",
   "engines": { "nfgames": "^1.0.0" },
   "web": "web/index.js",
   "contributes": {
-    "tools": [
-      { "id": "map", "title": "Map editor (classic)", "icon": "🗺" },
-      { "id": "viewer", "title": "Model viewer (classic)", "icon": "🧊" }
-    ],
-    "editors": [{ "id": "frame", "title": "Classic page" }],
+    "editors": [{ "id": "frame", "title": "Page" }],
     "commands": [
-      { "id": "open-map", "title": "Open the map editor (classic)" },
-      { "id": "open-viewer", "title": "Open the model viewer (classic)" }
+      { "id": "open-map", "title": "Open the map editor" },
+      { "id": "open-viewer", "title": "Open the model viewer" }
     ]
   },
-  "activation": ["onTool:map", "onTool:viewer", "onEditor:frame", "onCommand:open-map", "onCommand:open-viewer"]
+  "activation": ["onEditor:frame", "onCommand:open-map", "onCommand:open-viewer"]
 }

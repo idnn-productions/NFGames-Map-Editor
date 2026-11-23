@@ -132,11 +132,15 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
         return JSON.parse(Buffer.concat(parts).toString('utf8'));
       };
       if (req.method === 'GET' && (path === '/' || path === '/index.html')) return send(200, shellPage(), 'text/html; charset=utf-8');
-      if (req.method === 'GET' && path === '/map') return send(200, page(), 'text/html; charset=utf-8');
+      // the map editor and the model viewer are tabs of the workbench: a browser opening one at the top goes to the
+      // workbench with that tab open (?alone keeps the bare page, for scripts); the workbench's own frames get the page
+      const topLevel = req.headers['sec-fetch-dest'] === 'document' && !url.searchParams.has('alone');
+      const asTab = (view) => { res.writeHead(302, { Location: `/?view=${view}`, 'Cache-Control': 'no-store' }); res.end(); };
+      if (req.method === 'GET' && path === '/map') return topLevel ? asTab('map') : send(200, page(), 'text/html; charset=utf-8');
       { const m = req.method === 'GET' && /^\/shell\/(.+)$/.exec(path);
         if (m) { const f = shellFile(m[1]); return f ? send(200, readFileSync(f), TYPES[extname(f)] || 'application/octet-stream') : send(404, { error: 'not here' }); } }
       if (req.method === 'GET' && path === '/favicon.ico') { res.writeHead(204); return res.end(); }
-      if (req.method === 'GET' && path === '/viewer') return send(200, viewerPage(), 'text/html; charset=utf-8');
+      if (req.method === 'GET' && path === '/viewer') return topLevel ? asTab('viewer') : send(200, viewerPage(), 'text/html; charset=utf-8');
       if (req.method === 'GET' && path.startsWith('/vendor/')) { const f = vendorFile(editorRoot, path); return f ? send(200, readFileSync(f.file), f.type) : send(404, { error: 'not here' }); }
       { const m = req.method === 'GET' && /^\/p\/([a-z0-9.-]+)\/(.+)$/.exec(path);
         if (m) { let rest; try { rest = decodeURIComponent(m[2]); } catch { rest = ''; } const f = rest.includes('\0') ? null : plugins.asset(m[1], rest); return f ? send(200, readFileSync(f), TYPES[extname(f)] || 'application/octet-stream') : send(404, { error: 'not here' }); } }

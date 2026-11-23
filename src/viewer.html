@@ -10,8 +10,8 @@
 * { box-sizing: border-box; } [hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
 body { display: grid; grid-template-columns: 260px 1fr 340px; grid-template-rows: 40px 1fr; height: 100vh; }
-/* inside the workbench (a classic tool's frame) the workbench's top bar is the only one */
-body.framed { grid-template-rows: 1fr; } body.framed > header { display: none; }
+/* inside the workbench (a tab) the workbench's top bar is the only one */
+body.framed { grid-template-rows: 1fr; } body.framed > header { display: none; } body.lent { grid-template-columns: 1fr 340px; }
 header { grid-column: 1 / 4; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 header h1 { font-size: 14px; margin: 0; font-weight: 600; } header .grow { flex: 1; } header a { color: var(--dim); }
 aside { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px; }
@@ -51,7 +51,7 @@ main.pinning #view { cursor: crosshair; }
 </style>
 </head>
 <body>
-<header><h1>Model review</h1><!--@nav--><span class="grow"></span></header>
+<header><h1>Model review</h1><span class="grow"></span></header>
 <aside id="left"><input id="filter" placeholder="filter models" autocomplete="off"><div id="models" class="dim">loading…</div></aside>
 <main id="main">
   <canvas id="view"></canvas>
@@ -60,6 +60,7 @@ main.pinning #view { cursor: crosshair; }
     <button id="resetView" title="Frame the whole model">Reset view</button>
     <select id="lighting" title="Lighting"><option value="studio">Studio</option><option value="space">Dark space</option></select>
     <button id="wire" title="Wireframe">Wire</button>
+    <button id="gridBtn" title="The floor grid (the same switch as the map's grid)">Grid</button>
   </div>
   <div id="status" class="dim"></div>
   <div id="overlay"><div id="overlayBody"></div></div>
@@ -73,10 +74,14 @@ main.pinning #view { cursor: crosshair; }
   <h2>Jobs</h2><div id="jobs" class="dim">none yet</div>
 </aside>
 <div id="zoom"><img alt="reference image"></div>
+<script src="/shell/lend.js"></script>
+<script src="/shell/grid.js"></script>
 <script type="module">
 // The model viewer: a game's .glb files, pins with notes and reference images, and Send, which writes a review job
 // for a Claude Code session (see the README, "Model review"). three.js is installed on demand from the Install button.
-const $ = (id) => document.getElementById(id);
+// in the workbench, the model list is lent to its side panel: look there too
+const panel = window.top !== window ? nfLendPanel(document.getElementById('left'), { title: 'Model viewer', css: '#left { padding: 10px; }' }) : null;
+const $ = (id) => document.getElementById(id) || (panel && panel.byId(id));
 if (window.top !== window) document.body.classList.add('framed');
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); for (const k of kids) e.append(k); return e; };
 const api = async (path, options) => { const r = await fetch(path, options), j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || `${r.status} ${r.statusText}`); return j; };
@@ -131,6 +136,7 @@ async function startThree() {
   envTexture = new T.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
   key = new T.DirectionalLight(0xffffff, 1.5); key.position.set(5, 8, 5); scene.add(key);
   setLighting('studio');
+  placeGrid(); nfGrid.onChange(showGrid); showGrid(nfGrid.get());
   loader = new GLTFLoader()
     .setDRACOLoader(new DRACOLoader().setDecoderPath(`${base}examples/jsm/libs/draco/gltf/`))
     .setKTX2Loader(new KTX2Loader().setTranscoderPath(`${base}examples/jsm/libs/basis/`).detectSupport(renderer))
@@ -148,6 +154,19 @@ function setLighting(which) {
   if (which === 'space') { scene.background = new T.Color(0x05070b); scene.environmentIntensity = 0.25; key.intensity = 3.5; }
   else { scene.background = new T.Color(0x2a2f38); scene.environmentIntensity = 1; key.intensity = 1.5; }
 }
+// the floor grid: under the model, its cells a round size (1, 2 or 5 times a power of ten) about a tenth of the model,
+// reaching well past it; it follows the one switch every grid shares (shell/grid.js)
+let grid = null;
+function placeGrid(box = null) {
+  if (grid) { scene.remove(grid); grid.geometry.dispose(); grid.material.dispose(); }
+  const size = box ? box.getSize(new T.Vector3()) : new T.Vector3(2, 2, 2), centre = box ? box.getCenter(new T.Vector3()) : new T.Vector3();
+  const r = Math.max(size.x, size.z, size.y * 0.5) || 1, raw = r / 10, p = 10 ** Math.floor(Math.log10(raw)), cell = [1, 2, 5, 10].map((k) => k * p).find((c) => c >= raw);
+  grid = new T.GridHelper(cell * 60, 60, 0x6b7385, 0x3a4150);
+  grid.material.transparent = true; grid.material.opacity = 0.7; grid.material.depthWrite = false;
+  grid.position.set(centre.x, box ? box.min.y : 0, centre.z); grid.renderOrder = -1;
+  grid.visible = nfGrid.get(); scene.add(grid);
+}
+function showGrid(on) { if (grid) grid.visible = on; $('gridBtn').classList.toggle('on', on); }
 function setWire(on) { wire = on; $('wire').classList.toggle('on', on); model?.traverse((o) => { for (const m of [].concat(o.material || [])) m.wireframe = on; }); }
 function setPinMode(on) { pinMode = on; $('pinMode').classList.toggle('on', on); $('main').classList.toggle('pinning', on); }
 function dispose(root) { root.traverse((o) => { o.geometry?.dispose(); for (const m of [].concat(o.material || [])) { for (const v of Object.values(m)) if (v?.isTexture) v.dispose(); m.dispose(); } }); }
@@ -184,6 +203,7 @@ async function openModel(m, { keepCamera = false } = {}) {
   if (model) { scene.remove(model); dispose(model); }
   model = gltf.scene; scene.add(model); // the scene root stays at identity, so world coordinates are the model's own
   if (wire) setWire(true);
+  placeGrid(new T.Box3().setFromObject(model));
   modelPath = m.path; drawModelList();
   history.replaceState(null, '', `/viewer?model=${encodeURIComponent(m.path)}`);
   if (!keepCamera) frame();
@@ -265,6 +285,7 @@ function wireView() {
   $('resetView').onclick = () => model && frame();
   $('lighting').onchange = (e) => setLighting(e.target.value);
   $('wire').onclick = () => setWire(!wire);
+  $('gridBtn').onclick = () => nfGrid.toggle();
 }
 async function shrink(file) { // at most 2048 px on the long side; PNG when it has transparency, else JPEG
   const bmp = await createImageBitmap(file), k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));

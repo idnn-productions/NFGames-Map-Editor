@@ -1,9 +1,12 @@
 <style>
-#nfnav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; }
-#nfnav a { color: inherit; opacity: .7; text-decoration: none; padding: 2px 7px; border-radius: 5px; }
-#nfnav a:hover { opacity: 1; } #nfnav a.here { opacity: 1; background: rgba(255, 179, 102, .16); color: #ffb366; }
-#nfnav .proj { opacity: .7; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; }
-#nfnav button { font: inherit; cursor: pointer; padding: 2px 8px; border-radius: 5px; border: 1px solid #ffffff2a; background: #ffffff10; color: inherit; }
+#nfnav { display: flex; align-items: center; gap: 12px; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif; }
+#nfnav .views { display: flex; gap: 2px; padding: 2px; background: #14171d; border: 1px solid #2c3240; border-radius: 7px; }
+#nfnav .view { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; font: inherit; color: #b9c1d0; background: none; border: 0; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+#nfnav .view:hover { color: #fff; } #nfnav .view.on { background: #33291c; color: #ffb366; font-weight: 600; }
+#nfnav .view .dot { width: 6px; height: 6px; border-radius: 50%; background: #ffb366; display: none; } #nfnav .view.dirty .dot { display: inline-block; }
+#nfnav .proj { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; max-width: 220px; font: inherit; color: inherit; background: none; border: 1px solid #2c3240; border-radius: 6px; cursor: pointer; }
+#nfnav .proj:hover { border-color: #3a4150; } #nfnav .proj span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#nfnav svg { flex: none; }
 #nfDialog { width: min(640px, 92vw); padding: 0; border: 1px solid #2c3240; border-radius: 10px; background: #1c2029; color: #d8dee9; font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
 #nfDialog::backdrop { background: rgba(0, 0, 0, .55); }
 #nfDialog header { padding: 10px 14px; border-bottom: 1px solid #2c3240; display: flex; gap: 8px; align-items: center; } #nfDialog header b { flex: 1; }
@@ -19,26 +22,34 @@
 #nfDialog button.primary { background: #ffb366; color: #1a1206; border-color: #ffb366; font-weight: 600; }
 #nfDialog h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8a93a6; margin: 4px 0 6px; }
 </style>
-<nav id="nfnav"><a href="/" data-page="workbench">Workbench</a><a href="/map" data-page="editor">Map editor</a><a href="/viewer" data-page="viewer">Model viewer</a><span class="proj" id="nfProj"></span><button id="nfOpen" title="Open another project folder">📁 Open project…</button></nav>
+<nav id="nfnav" aria-label="Views">
+  <div class="views" role="group">
+    <button class="view" data-view="home" aria-pressed="false"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 7.5 8 2.5l6 5"/><path d="M3.5 6.5V13.5h9V6.5"/><path d="M6.5 13.5V10h3v3.5"/></svg>Home</button>
+    <button class="view" data-view="map" aria-pressed="false"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M1.5 4 5.5 2.5 10.5 4 14.5 2.5V12L10.5 13.5 5.5 12 1.5 13.5Z"/><path d="M5.5 2.5V12M10.5 4v9.5"/></svg>Map editor<i class="dot" title="unsaved changes"></i></button>
+    <button class="view" data-view="viewer" aria-pressed="false"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.5 14 5v6l-6 3.5L2 11V5Z"/><path d="M2 5l6 3.5L14 5M8 8.5v6"/></svg>Model viewer</button>
+  </div>
+  <button class="proj" id="nfOpen" title="Open another project folder"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#8a93a6" stroke-width="1.5" aria-hidden="true"><path d="M1.5 4.5V12a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3h-4a1 1 0 0 0-1 1.5Z"/></svg><span id="nfProj"></span><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#8a93a6" stroke-width="1.5" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg></button>
+</nav>
 <dialog id="nfDialog">
   <header><b>Open a project folder</b><button id="nfClose" title="Close">✕</button></header>
   <div class="body"><div id="nfRecent"></div><h3>Browse</h3><div class="crumbs" id="nfCrumbs"></div><ul id="nfList"></ul></div>
   <footer><span class="msg dim" id="nfMsg"></span><button id="nfUp">Up</button><button class="primary" id="nfGo">Open this folder</button></footer>
 </dialog>
 <script type="module">
-// The bar both pages share: links between the map editor and the model viewer, the open project, and "Open
-// project…", a browser of the folders under your home folder. Opening one switches the project for both pages.
+// The workbench's bar: the views (Home, Map editor, Model viewer), the open project, and "Open project…", a browser of
+// the folders under your home folder. The workbench switches the views (it hears 'nf:view' and marks the one shown);
+// a page outside the workbench sends a view to the workbench instead. Opening a project switches it for every view.
 const q = (id) => document.getElementById(id);
 const node = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
 // inside the workbench (a classic tool's frame) the workbench's own bar is enough
 if (window.top !== window) q('nfnav').hidden = true;
-const here = location.pathname.startsWith('/viewer') ? 'viewer' : location.pathname.startsWith('/map') ? 'editor' : 'workbench';
-for (const a of document.querySelectorAll('#nfnav a')) a.classList.toggle('here', a.dataset.page === here);
+const inWorkbench = !!q('wb');
+for (const b of document.querySelectorAll('#nfnav .view')) b.onclick = () => (inWorkbench ? document.dispatchEvent(new CustomEvent('nf:view', { detail: b.dataset.view })) : (location.href = `/?view=${b.dataset.view}`));
 let at = null, trustFor = null;
 const msg = (text, cls = 'dim') => { q('nfMsg').className = `msg ${cls}`; q('nfMsg').textContent = text; };
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const info = await (await fetch('/api/projects')).json();
-q('nfProj').textContent = `· ${info.current.title || info.current.name}`; q('nfProj').title = info.current.root;
+q('nfProj').textContent = info.current.title || info.current.name; q('nfProj').title = info.current.root;
 
 async function show(path) {
   const r = await fetch(`/api/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`), b = await r.json();
@@ -52,13 +63,16 @@ async function show(path) {
   msg(b.project ? 'This folder is a project.' : b.models ? `${plural(b.models, 'model')} here.` : 'Any folder opens: one without a config uses the defaults.');
 }
 async function open(root, trust = false) {
-  if (window.__map && window.__map.isDirty && window.__map.isDirty() && !confirm('This map has unsaved changes. Switch project and lose them?')) return;
+  // the map may be here or in one of the workbench's frames (same origin)
+  const views = [window, ...[...document.querySelectorAll('iframe')].map((f) => f.contentWindow)];
+  const dirty = views.some((w) => { try { return !!(w && w.__map && w.__map.isDirty && w.__map.isDirty()); } catch { return false; } });
+  if (dirty && !confirm('This map has unsaved changes. Switch project and lose them?')) return;
   msg('opening…');
   const r = await fetch('/api/project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ root, trust }) }), b = await r.json().catch(() => ({}));
   if (!r.ok) { msg(b.error || `${r.status}`, 'bad'); return; }
   if (b.needsTrust) { trustFor = root; msg(`${b.config.replace(info.home, '~')} is code the editor will run. Open only projects you trust.`, 'bad'); q('nfGo').textContent = 'Run its config and open'; return; }
-  window.__nfSwitching = true;
-  location.href = here === 'viewer' ? '/viewer' : here === 'editor' ? '/map' : '/';
+  for (const w of views) try { if (w) w.__nfSwitching = true; } catch { /* another origin */ }
+  location.href = '/';
 }
 q('nfOpen').onclick = async () => {
   q('nfRecent').replaceChildren(...(info.recent.length ? [node('h3', { textContent: 'Recent' }), node('ul', {}, ...info.recent.map((p) => node('li', { title: p, onclick: () => open(p) }, '★', node('span', { className: 'n', textContent: p.replace(info.home, '~') }))))] : []));

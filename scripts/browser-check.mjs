@@ -54,7 +54,7 @@ try {
   const page = await context.newPage(), errors = [];
   page.on('pageerror', (e) => errors.push(String((e && e.stack) || e)));
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`[${m.type()}] ${m.text()}`); });
-  await page.goto(new URL('map', url).href);
+  await page.goto(new URL('map?alone', url).href);
   await page.waitForFunction(() => window.__map && window.__map.ready, null, { timeout: 30000 });
   await page.waitForTimeout(400);
   const state = await page.evaluate(() => ({ pieces: window.__map.plan.pieces.length, errors: window.__map.problems.errors.length, problems: window.__map.problems.problems.length, palette: document.querySelectorAll('#palette button').length, layers: document.querySelectorAll('#layers input').length, actions: document.querySelectorAll('#actions button').length }));

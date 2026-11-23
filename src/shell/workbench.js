@@ -91,36 +91,98 @@ async function doRefresh() {
 // ---- core commands
 const core = (id, title, fn, keys = null) => { commands.declare(id, { title, keys, category: 'Workbench' }); commands.handle(id, fn); };
 core('core/palette', 'Search commands', () => openPalette(), 'Mod+K');
-core('core/toggle-side', 'Toggle the side panel', () => $('wb').classList.toggle('no-side'));
-core('core/toggle-inspector', 'Toggle the inspector', () => $('wb').classList.toggle('no-inspector'));
-core('core/toggle-bottom', 'Toggle the bottom panel', () => $('wb').classList.toggle('no-bottom'));
+core('core/toggle-side', 'Toggle the side panel', () => togglePanel('side'), 'Mod+B');
+core('core/toggle-inspector', 'Toggle the inspector', () => togglePanel('inspector'), 'Mod+I');
+core('core/toggle-bottom', 'Toggle the bottom panel', () => togglePanel('bottom'), 'Mod+J');
+core('core/toggle-grid', 'Toggle the grids (map and model viewer)', () => window.nfGrid.toggle(), 'Mod+G');
 core('core/plugins', 'Plugins: manage', () => documents.open({ title: 'Plugins', editor: 'core/plugins', uri: 'plugins' }));
 core('core/settings', 'Settings', () => documents.open({ title: 'Settings', editor: 'core/settings', uri: 'settings' }));
 core('core/services', 'Services', () => documents.open({ title: 'Services', editor: 'core/services', uri: 'services' }));
 core('core/close-document', 'Close the document', () => { const d = documents.active(); if (d) documents.close(d.id); }, 'Alt+W');
 core('core/open-project', 'Open project…', () => document.getElementById('nfOpen')?.click());
+core('core/home', 'Home', () => documents.open({ title: 'Home', editor: 'core/home', uri: 'home' }));
+
+// ---- the views in the top bar: Home, and today's map editor and model viewer, each a tab of the workbench
+const VIEWS = { home: 'core/home', map: 'nfgames.classic/open-map', viewer: 'nfgames.classic/open-viewer' };
+const viewOf = (d) => (!d ? null : d.uri === '/map' ? 'map' : d.uri === '/viewer' ? 'viewer' : d.editor === 'core/home' ? 'home' : null);
+function showView(view) { if (VIEWS[view]) commands.execute(VIEWS[view]).catch((e) => toast(e.message, 'error')); }
+function renderViews() {
+  const shown = viewOf(documents.active()), dirty = new Set(documents.list().filter((d) => d.dirty).map(viewOf));
+  for (const b of document.querySelectorAll('#nfnav .view')) { const on = b.dataset.view === shown; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.classList.toggle('dirty', dirty.has(b.dataset.view)); }
+}
+document.addEventListener('nf:view', (e) => showView(e.detail));
+
+// ---- which panels show: the side panel (tools), the inspector and the bottom panel (Jobs, Problems, Output), each
+// hidden or shown from the bar's buttons, its key or the palette, and remembered in this browser
+const PANELS = [
+  { key: 'side', title: 'Tools panel', cmd: 'core/toggle-side', icon: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M5.5 2.5v11"/>' },
+  { key: 'bottom', title: 'Jobs, Problems and Output', cmd: 'core/toggle-bottom', icon: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M1.5 9.5h13"/>' },
+  { key: 'inspector', title: 'Inspector', cmd: 'core/toggle-inspector', icon: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10.5 2.5v11"/>' },
+];
+const LAYOUT_KEY = 'nfgames.workbench.hidden';
+function togglePanel(key, hide = !$('wb').classList.contains(`no-${key}`)) {
+  $('wb').classList.toggle(`no-${key}`, hide);
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(PANELS.map((p) => p.key).filter((k) => $('wb').classList.contains(`no-${k}`)))); } catch { /* not kept: fine */ }
+  renderLayout();
+}
+function renderLayout() {
+  const g = h('button', { title: `${window.nfGrid.get() ? 'Hide' : 'Show'} the grids in every view (${showKeys(parseKeys('Mod+G', { mac }), { mac })})`, onclick: () => window.nfGrid.toggle() });
+  g.setAttribute('aria-label', 'Grids'); g.setAttribute('aria-pressed', String(window.nfGrid.get()));
+  g.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 5.5h13M1.5 10.5h13M5.5 1.5v13M10.5 1.5v13"/></svg>';
+  $('layout').replaceChildren(g, h('span', { className: 'layout-sep' }), ...PANELS.map((p) => {
+    const shown = !$('wb').classList.contains(`no-${p.key}`), c = commands.list().find((x) => x.id === p.cmd);
+    const b = h('button', { title: `${shown ? 'Hide' : 'Show'} the ${p.title.toLowerCase()}${c && c.keys ? ` (${showKeys(parseKeys(c.keys, { mac }), { mac })})` : ''}`, onclick: () => togglePanel(p.key) });
+    b.setAttribute('aria-label', p.title); b.setAttribute('aria-pressed', String(shown));
+    b.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">${p.icon}</svg>`;
+    return b;
+  }));
+}
+try { for (const k of JSON.parse(localStorage.getItem(LAYOUT_KEY) || '[]')) if (PANELS.some((p) => p.key === k)) $('wb').classList.add(`no-${k}`); } catch { /* none kept */ }
+renderLayout();
+window.nfGrid.onChange(renderLayout);
 
 // ---- rendering
 function render() { renderActivity(); renderSide(); renderDocs(); renderInspector(); renderBottom(); renderStatus(); }
 
 function renderActivity() {
-  const btn = (t) => h('button', { className: `act${activeTool === t.key ? ' on' : ''}`, textContent: t.icon, title: t.title, onclick: () => setTool(activeTool === t.key ? null : t.key) });
-  $('activityTools').replaceChildren(...model.tools.map(btn));
+  // the shown tool's button hides or shows the side panel; another tool's shows it with that tool
+  const btn = (t) => h('button', { className: `act${activeTool === t.key ? ' on' : ''}`, textContent: t.icon, title: t.title, onclick: () => (activeTool === t.key ? togglePanel('side') : setTool(t.key)) });
+  // the views first (the same as the top bar's): lit while shown; the shown one's button hides or shows the side panel
+  const shown = !activeTool && viewOf(documents.active());
+  const view = (key, icon, title) => h('button', { className: `act${shown === key ? ' on' : ''}`, textContent: icon, title, onclick: () => (shown === key ? togglePanel('side') : (activeTool = null, togglePanel('side', false), showView(key))) });
+  $('activityTools').replaceChildren(view('map', '🗺', 'Map editor'), view('viewer', '🧊', 'Model viewer'), ...(model.tools.length ? [h('hr', { className: 'act-sep' })] : []), ...model.tools.map(btn));
   $('activityCore').replaceChildren(btn({ key: 'core/services', icon: '🔌', title: 'Services' }), btn({ key: 'core/plugins', icon: '🧩', title: 'Plugins' }), btn({ key: 'core/settings', icon: '⚙', title: 'Settings' }));
 }
 async function setTool(key) {
   activeTool = key; renderActivity();
   if (key === 'core/plugins' || key === 'core/settings' || key === 'core/services') { activeTool = null; renderActivity(); return commands.execute(key); }
   const t = model.tools.find((x) => x.key === key);
-  if (t) { $('wb').classList.remove('no-side'); renderSide(); try { await ensure(t.plugin); } catch { return; } }
+  if (t) { togglePanel('side', false); renderSide(); try { await ensure(t.plugin); } catch { return; } }
   renderSide();
 }
+// The side panel shows the selected item: a tool picked in the rail, else the shown tab's own panel (the map editor's
+// pieces, Show, Legend and Keys; the model viewer's models), which its page lends while the tab is shown.
 let sideCleanup = null;
+function tabPanel() {
+  const d = documents.active(), m = d && mounted.get(d.id), f = m && m.el.querySelector('iframe');
+  try { return (f && f.contentWindow && f.contentWindow.__nfPanel) || null; } catch { return null; }
+}
 function renderSide() {
   if (typeof sideCleanup === 'function') sideCleanup(); sideCleanup = null;
   const t = model.tools.find((x) => x.key === activeTool), body = $('sideBody');
-  $('sideTitle').textContent = t ? t.title : 'Tools';
-  if (!t) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: model.tools.length ? 'Pick a tool on the left.' : 'No tools yet: add plugins (🧩).' })); return; }
+  $('sideTitle').textContent = t ? t.title : 'Tools'; body.classList.remove('flush');
+  const lent = !t && tabPanel();
+  if (lent) {
+    $('sideTitle').textContent = lent.title; body.classList.add('flush');
+    const host = h('div', { className: 'lent' }); body.replaceChildren(host);
+    try { lent.mount(host); sideCleanup = () => { try { lent.unmount(); } catch { /* its tab is gone */ } }; } catch (e) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: `${lent.title}: ${e.message}` })); }
+    return;
+  }
+  if (!t) {
+    const d = documents.active(); if (d) $('sideTitle').textContent = d.title;
+    body.replaceChildren(h('p', { className: 'nf-muted', textContent: d ? `${d.title} has nothing to show here.${model.tools.length ? ' Tools are on the left.' : ''}` : model.tools.length ? 'Pick a tool on the left.' : 'Pick a view in the bar above.' }));
+    return;
+  }
   const factory = tools.get(t.key);
   if (!factory) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: loaded.has(t.plugin) ? `${t.title} has no side panel.` : 'Loading…' })); return; }
   body.replaceChildren(); try { sideCleanup = factory(body, {}); } catch (e) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: `${t.title} failed: ${e.message}` })); }
@@ -142,6 +204,7 @@ async function mountDoc(d) {
   if (d.editor === 'core/plugins') { m.cleanup = renderPluginsScreen(el); return; }
   if (d.editor === 'core/settings') { m.cleanup = renderSettingsScreen(el); return; }
   if (d.editor === 'core/services') { m.cleanup = renderServicesScreen(el); return; }
+  if (d.editor === 'core/home') { renderHomeScreen(el); return; }
   const owner = d.editor.split('/')[0];
   if (!editors.has(d.editor)) { el.append(h('p', { className: 'nf-empty', textContent: 'Loading…' })); try { await ensure(owner); } catch { return; } }
   const factory = editors.get(d.editor);
@@ -149,7 +212,21 @@ async function mountDoc(d) {
   if (!factory) { el.append(h('p', { className: 'nf-empty', textContent: `No editor ${d.editor}.` })); return; }
   try { m.cleanup = factory(el, d); } catch (e) { el.append(h('p', { className: 'nf-empty', textContent: `${d.editor} failed: ${e.message}` })); }
 }
-documents.on(() => { renderDocs(); renderStatus(); });
+// a newly shown tab takes the side panel back from a rail tool: the panel follows what is selected
+let shownDoc = null;
+documents.on(() => {
+  renderDocs(); renderStatus(); renderViews();
+  const now = documents.active()?.id ?? null;
+  if (now !== shownDoc) { shownDoc = now; activeTool = null; renderActivity(); renderSide(); }
+});
+document.addEventListener('nf:panel', () => { if (!activeTool) renderSide(); });
+// Home: a place to start, for now
+async function renderHomeScreen(el) {
+  const p = (await json('/api/projects').catch(() => ({ current: {} }))).current;
+  el.append(h('div', { className: 'home' }, h('h1', { textContent: p.title || p.name || 'Home' }), h('p', { className: 'nf-muted', textContent: p.root || '' }),
+    h('p', { textContent: 'Pick a view in the bar above, a tool on the left, or press ⌘K.' }),
+    h('div', { className: 'actions' }, h('button', { className: 'nf-btn', textContent: 'Map editor', onclick: () => showView('map') }), h('button', { className: 'nf-btn', textContent: 'Model viewer', onclick: () => showView('viewer') }))));
+}
 
 let inspectorCleanups = [];
 function renderInspector() {
@@ -321,8 +398,8 @@ addEventListener('keydown', (e) => {
 // ---- live updates
 onEvent('plugins/changed', () => refreshPlugins());
 onEvent('plugins/failed', ({ id, message }) => { log(`${id}: ${message}`); toast(`${id} was turned off: ${message}`, 'error'); unload(id); refreshPlugins(); });
-onEvent('jobs/started', ({ label }) => { $('jobInd').textContent = `● ${label}`; if (bottomTab === 'core/jobs') renderBottom(); });
-onEvent('jobs/done', ({ label, state }) => { $('jobInd').textContent = ''; toast(`${label}: ${state}`, state === 'done' ? '' : 'error'); if (bottomTab === 'core/jobs') renderBottom(); });
+onEvent('jobs/started', ({ label }) => { $('jobInd').textContent = `● ${label}`; $('jobInd').classList.add('on'); if (bottomTab === 'core/jobs') renderBottom(); });
+onEvent('jobs/done', ({ label, state }) => { $('jobInd').textContent = 'No jobs'; $('jobInd').classList.remove('on'); toast(`${label}: ${state}`, state === 'done' ? '' : 'error'); if (bottomTab === 'core/jobs') renderBottom(); });
 // reload only when the editor now has another project than this page shows (a stale event must never loop)
 let shownRoot = null;
 onEvent('project/changed', ({ root }) => { if (root && root !== shownRoot) location.reload(); });
@@ -333,6 +410,9 @@ onEvent('services/done', ({ title, ok, error }) => { log(`${title}: ${ok ? 'done
 // ---- start
 shownRoot = (await json('/api/projects').catch(() => ({ current: {} }))).current.root || null;
 await refreshPlugins();
+// /?view=map (where /map and /viewer send a browser) opens that view's tab; Home otherwise
+{ const asked = new URLSearchParams(location.search).get('view'); showView(VIEWS[asked] ? asked : 'home'); if (asked) history.replaceState(null, '', '/'); }
+renderViews();
 refreshAgent(); setInterval(refreshAgent, 15000);
 for (const r of (await json('/api/services/requests').catch(() => ({ requests: [] }))).requests) confirmAgentRequest(r);
 window.__workbench = { callService, commands, selection, documents, get plugins() { return plugins; }, ensure, unload, openPalette, problems };

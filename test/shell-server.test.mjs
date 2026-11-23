@@ -29,6 +29,15 @@ describe('the workbench over HTTP', () => {
     assert.equal(shell.headers.get('x-frame-options'), 'SAMEORIGIN');
     assert.match(await (await ask('/map')).text(), /Add a piece/);
   });
+  it('a browser opening /map or /viewer at the top goes to the workbench with that tab; frames and ?alone get the page', async () => {
+    const top = { headers: { 'Sec-Fetch-Dest': 'document' }, redirect: 'manual' };
+    for (const view of ['map', 'viewer']) {
+      const r = await ask(`/${view}`, top);
+      assert.equal(r.status, 302, view); assert.equal(r.headers.get('location'), `/?view=${view}`);
+      assert.equal((await ask(`/${view}`, { headers: { 'Sec-Fetch-Dest': 'iframe' }, redirect: 'manual' })).status, 200, view);
+      assert.equal((await ask(`/${view}?alone`, top)).status, 200, view);
+    }
+  });
   it('serves the shell\'s own files, nothing hidden or outside', async () => {
     const r = await ask('/shell/core/keys.js'); assert.equal(r.status, 200); assert.match(r.headers.get('content-type'), /javascript/);
     for (const bad of ['/shell/../server.mjs', '/shell/%2e%2e/server.mjs', '/shell/.hidden', '/shell/nope.js']) assert.equal((await ask(bad)).status, 404, bad);
