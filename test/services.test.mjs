@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHost } from '../src/host.mjs';
-import { sampleCopy, writePlugin, REPO } from './helpers.mjs';
+import { sampleCopy, writePlugin, REPO, fakeCommand, WINDOWS } from './helpers.mjs';
 
 const SERVICE = `export function activate(api) {
   api.services.provide('words', 'shout', async ({ text }, { secret }) => ({ text: String(text).toUpperCase() + '!', keyLength: secret('TOKEN').length }));
@@ -30,7 +30,7 @@ if (/STOP HALFWAY/.test(prompt)) { console.error('the image tool gave up'); proc
 
 describe('services', () => {
   const port = 21393 + (process.pid % 500), origin = `http://127.0.0.1:${port}`;
-  let top, copy, host, path0;
+  let top, copy, host, restorePath;
   const ask = (p) => fetch(`${origin}${p}`).then((r) => r.json());
   const post = (p, body) => fetch(`${origin}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
   const until = async (fn, ms = 6000) => { for (let t = 0; t < ms; t += 100) { const v = await fn(); if (v) return v; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timed out'); };
@@ -42,12 +42,11 @@ describe('services', () => {
         actions: [{ id: 'shout', title: 'Shout', cost: { estimate: 0.01 } }, { id: 'poem', title: 'Poem', cost: { estimate: 0.6 } }] }] } }, { 'server.mjs': SERVICE });
     mkdirSync(join(builtinDir, 'codex-image'), { recursive: true });
     for (const f of ['plugin.json', 'server.mjs']) writeFileSync(join(builtinDir, 'codex-image', f), readFileSync(join(REPO, 'plugins', 'codex-image', f)));
-    mkdirSync(join(top, 'bin')); writeFileSync(join(top, 'bin', 'codex'), CODEX); chmodSync(join(top, 'bin', 'codex'), 0o755);
-    path0 = process.env.PATH; process.env.PATH = `${join(top, 'bin')}:${path0}`;
+    restorePath = fakeCommand(join(top, 'bin'), 'codex', CODEX);
     host = await createHost({ root: copy.root, port, pluginDirs: { builtinDir, userDir: join(top, 'user'), packagesDir: join(top, 'packages') }, stateDir: join(top, 'state'), home: top, securityBin: null, requestInterval: 100 });
     await host.listen();
   });
-  after(async () => { process.env.PATH = path0; await new Promise((d) => host.server.close(d)); copy.done(); rmSync(top, { recursive: true, force: true }); });
+  after(async () => { restorePath(); await new Promise((d) => host.server.close(d)); copy.done(); rmSync(top, { recursive: true, force: true }); });
 
   it('the session file is written without following a link planted in the project', async () => {
     const { symlinkSync, lstatSync } = await import('node:fs');
@@ -56,7 +55,7 @@ describe('services', () => {
     const dir = join(top, 'planted', '.review'); mkdirSync(dir, { recursive: true }); symlinkSync(victim, join(dir, '.session.json'));
     const loop = createRequestLoop({ reviewsDir: dir, services: {}, events: { emit() {} } }); loop.stop();
     assert.equal(readFileSync(victim, 'utf8'), 'keep me'); assert.ok(!lstatSync(join(dir, '.session.json')).isSymbolicLink());
-    assert.equal(lstatSync(join(dir, '.session.json')).mode & 0o777, 0o600);
+    if (!WINDOWS) assert.equal(lstatSync(join(dir, '.session.json')).mode & 0o777, 0o600);   // Windows keeps no such modes
   });
   it('lists services with what they need; the key stays in the editor', async () => {
     const { services, vault } = await ask('/api/services');

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createVault } from '../src/vault.mjs';
 import { createSpend } from '../src/spend.mjs';
+import { WINDOWS } from './helpers.mjs';
 
 // a stand-in for /usr/bin/security -i: one command on stdin, items kept in a JSON file beside it
 const FAKE = `#!/usr/bin/env node
@@ -22,7 +23,7 @@ describe('the vault', () => {
   before(() => { dir = mkdtempSync(join(tmpdir(), 'nfgames-vault-')); writeFileSync(join(dir, 'security'), FAKE); chmodSync(join(dir, 'security'), 0o755); });
   after(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('the Keychain: keys go in on stdin as hex, never on a command line', () => {
+  it('the Keychain: keys go in on stdin as hex, never on a command line', { skip: WINDOWS && 'the Keychain is the Mac\'s, and its stand-in here is a script Windows cannot run' }, () => {
     const v = createVault({ stateDir: join(dir, 'state'), securityBin: join(dir, 'security') });
     assert.equal(v.where, 'the macOS Keychain');
     assert.equal(v.get('a.b.TOKEN'), null);
@@ -34,7 +35,7 @@ describe('the vault', () => {
   it('elsewhere: a file only its owner can read', () => {
     const v = createVault({ stateDir: join(dir, 'state2'), securityBin: null });
     v.set('x.y.KEY', 'secret'); assert.equal(v.get('x.y.KEY'), 'secret');
-    assert.equal(statSync(join(dir, 'state2', 'secrets.json')).mode & 0o777, 0o600);
+    if (!WINDOWS) assert.equal(statSync(join(dir, 'state2', 'secrets.json')).mode & 0o777, 0o600);   // Windows keeps no such modes: the file is under the user's own profile
   });
 });
 

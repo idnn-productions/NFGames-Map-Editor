@@ -25,7 +25,8 @@ describe('the model viewer over HTTP', () => {
     server = createEditor(project, { port, defaultMap: 'plaza', editorRoot, fetchImpl });
     await new Promise((done) => server.listen(port, '127.0.0.1', done));
   });
-  after(async () => { await new Promise((done) => server.close(done)); copy.done(); rmSync(editorRoot, { recursive: true, force: true }); });
+  // a review refused for its size leaves its upload's connection open, and close() alone would wait for it for ever
+  after(async () => { server.closeAllConnections(); await new Promise((done) => server.close(done)); copy.done(); rmSync(editorRoot, { recursive: true, force: true }); });
 
   it('serves the viewer page with the import map written in', async () => {
     const r = await ask('/viewer');

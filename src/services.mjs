@@ -4,7 +4,12 @@
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
-export const onPath = (command, env = process.env) => typeof command === 'string' && /^[A-Za-z0-9._-]+$/.test(command) && (env.PATH || '').split(delimiter).some((d) => d && existsSync(join(d, command)));
+/** The file names a command can have on disk. On Windows a program is <name>.exe or <name>.com: those are what a process
+ *  started without a shell can run (jobs never use one), so a .cmd or .bat shim, or npm's extensionless script, does not
+ *  count as installed. */
+export const commandFiles = (command, platform = process.platform) => (platform === 'win32' ? [`${command}.exe`, `${command}.com`] : [command]);
+export const onPath = (command, env = process.env, platform = process.platform) => typeof command === 'string' && /^[A-Za-z0-9._-]+$/.test(command)
+  && (env.PATH ?? env.Path ?? '').split(delimiter).some((d) => d && commandFiles(command, platform).some((f) => existsSync(join(d, f))));
 export const keyName = (plugin, service, name) => `${plugin}.${service}.${name}`;
 const fail = (code, text) => { throw Object.assign(new Error(text), { code }); };
 

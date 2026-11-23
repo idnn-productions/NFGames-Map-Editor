@@ -4,7 +4,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { createHost } from '../src/host.mjs';
 import { sampleCopy, writePlugin } from './helpers.mjs';
 
@@ -38,7 +38,7 @@ export function activate(api) {
     assert.equal(j.api, '1.1.0'); assert.equal(j.plugins.find((p) => p.id === 'nfgames.hello').state, 'ready');
   });
   it('serves a plugin\'s routes under its id, with the usual checks', async () => {
-    assert.deepEqual(await (await ask('/api/p/nfgames.hello/hi')).json(), { hi: copy.root.split('/').pop() });
+    assert.deepEqual(await (await ask('/api/p/nfgames.hello/hi')).json(), { hi: basename(copy.root) });
     assert.deepEqual(await (await post('/api/p/nfgames.hello/echo', { a: 1 })).json(), { a: 1 });
     assert.equal((await post('/api/p/nfgames.hello/echo', {}, { 'Content-Type': 'application/json', Origin: 'http://evil.example' })).status, 403);
     assert.equal((await ask('/api/p/nobody.here/hi')).status, 404);

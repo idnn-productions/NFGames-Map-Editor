@@ -6,7 +6,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, re
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHost } from '../src/host.mjs';
-import { REPO, sampleCopy, PNG_1PX } from './helpers.mjs';
+import { REPO, sampleCopy, PNG_1PX, fakeCommand, WINDOWS } from './helpers.mjs';
 
 // a stand-in for the codex CLI: writes as many PNGs as the prompt asks for, where it says (each one different)
 const CODEX = `#!/usr/bin/env node
@@ -24,7 +24,7 @@ if (/STOP HALFWAY/.test(prompt)) process.exit(2);`;
 
 describe('the model maker', () => {
   const port = 22393 + (process.pid % 500), origin = `http://127.0.0.1:${port}`, P = '/api/p/nfgames.model-maker';
-  let top, copy, host, path0;
+  let top, copy, host, restorePath;
   const get = (p) => fetch(`${origin}${P}${p}`).then(async (r) => ({ status: r.status, body: await r.json() }));
   const post = (p, body, base = P) => fetch(`${origin}${base}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
   const ok = async (p, body) => { const r = await post(p, body); assert.equal(r.status, 200, `${p}: ${JSON.stringify(r.body)}`); return r.body; };
@@ -39,12 +39,11 @@ describe('the model maker', () => {
     top = realpathSync(mkdtempSync(join(tmpdir(), 'nfgames-maker-'))); copy = sampleCopy();
     const builtinDir = join(top, 'builtin');
     for (const p of ['codex-image', 'model-maker']) cpSync(join(REPO, 'plugins', p), join(builtinDir, p), { recursive: true });
-    mkdirSync(join(top, 'bin')); writeFileSync(join(top, 'bin', 'codex'), CODEX); chmodSync(join(top, 'bin', 'codex'), 0o755);
-    path0 = process.env.PATH; process.env.PATH = `${join(top, 'bin')}:${path0}`;
+    restorePath = fakeCommand(join(top, 'bin'), 'codex', CODEX);
     host = await createHost({ root: copy.root, port, pluginDirs: { builtinDir, userDir: join(top, 'user'), packagesDir: join(top, 'packages') }, stateDir: join(top, 'state'), home: top, securityBin: null });
     await host.listen();
   });
-  after(async () => { process.env.PATH = path0; await new Promise((d) => host.server.close(d)); copy.done(); rmSync(top, { recursive: true, force: true }); });
+  after(async () => { restorePath(); await new Promise((d) => host.server.close(d)); copy.done(); rmSync(top, { recursive: true, force: true }); });
 
   it('no drafts at first; a new one is listed, with the project\'s style kept', async () => {
     assert.deepEqual((await get('/drafts')).body, { drafts: [], style: '' });

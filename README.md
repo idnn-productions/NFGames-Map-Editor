@@ -614,7 +614,9 @@ back to step ②, and `views/` is removed until you approve again, so the files 
 **Delete draft** removes the draft's folder and leaves the generated rounds.
 
 The editor runs one job at a time: while a map's Apply action or another generation runs, Generate says what is
-running and does nothing else. With no `codex` on the PATH the Generate buttons are off and say why.
+running and does nothing else. With no `codex` on the PATH the Generate buttons are off and say why. On Windows that means `codex.exe` (the Codex
+installer puts its folder on the PATH; start the editor from a terminal opened after installing): an npm `.cmd` shim does
+not count, because the editor starts programs without a shell and Windows cannot run a shim that way.
 
 ## Plugins
 
@@ -816,6 +818,11 @@ A config file is code, so it runs with your rights. Only use configs you trust, 
 ```sh
 npm test                 # node:test, no dependencies: a few seconds
 ```
+
+The tests run on macOS, Linux and Windows. On Windows one is skipped (the macOS Keychain) and two leave out a check
+that a file is readable by its owner only, which Windows has no file modes for. Tests that need a program on the PATH
+(a stand-in `codex`) get one from `fakeCommand` in `test/helpers.mjs`, which makes a script elsewhere and a real
+`.exe` on Windows.
 
 These cover the 3D view's maths (`test/view3d.test.mjs`: the camera, picking, axis drags, and that what a
 piece lands on is what the fit check accepts), the plan's text format (byte-for-byte round trips, one changed line per move, key order),

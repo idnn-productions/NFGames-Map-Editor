@@ -1,11 +1,36 @@
 // What the tests share: the sample project, copied to a temporary folder when a test writes.
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 export const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+/** Windows keeps no owner-only file modes and cannot run a `#!` script: tests of those say so with this. */
+export const WINDOWS = process.platform === 'win32';
+
+/**
+ * Puts a stand-in for the program `name` first on the PATH: `source` is a Node script (CommonJS; it may start with a
+ * `#!` line) that reads process.argv as [node, script, ...arguments]. Returns a function that undoes it.
+ *
+ * Elsewhere that is the script itself, made executable. Windows cannot start a script without a shell, and the editor
+ * never uses one, so there the stand-in is a real program: node itself under the name <name>.exe, with a preload
+ * (NODE_OPTIONS, inherited by what the tests start) that runs the script kept beside it and exits before node looks
+ * at its own arguments. A node started under any other name finds no script beside it and carries on as usual.
+ */
+export function fakeCommand(dir, name, source) {
+  mkdirSync(dir, { recursive: true });
+  const before = { PATH: process.env.PATH, NODE_OPTIONS: process.env.NODE_OPTIONS };
+  if (!WINDOWS) { writeFileSync(join(dir, name), source); chmodSync(join(dir, name), 0o755); }
+  else {
+    try { linkSync(process.execPath, join(dir, `${name}.exe`)); } catch { copyFileSync(process.execPath, join(dir, `${name}.exe`)); }
+    writeFileSync(join(dir, `${name}.stub.cjs`), source);
+    writeFileSync(join(dir, 'preload.cjs'), "const path = require('path'), stub = path.join(path.dirname(process.execPath), path.basename(process.execPath, '.exe') + '.stub.cjs');\nif (require('fs').existsSync(stub)) { process.argv.splice(1, 0, stub); require(stub); process.exit(); }\n");
+    process.env.NODE_OPTIONS = `--require "${join(dir, 'preload.cjs').replaceAll('\\', '/')}"${before.NODE_OPTIONS ? ` ${before.NODE_OPTIONS}` : ''}`;
+  }
+  process.env.PATH = `${dir}${delimiter}${before.PATH}`;
+  return () => { process.env.PATH = before.PATH; if (before.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = before.NODE_OPTIONS; };
+}
 export const SAMPLE = join(REPO, 'examples', 'sample');
 export const samplePlan = () => JSON.parse(readFileSync(join(SAMPLE, 'maps', 'plaza', 'layout.json'), 'utf8'));
 export const samplePlants = () => JSON.parse(readFileSync(join(SAMPLE, 'maps', 'plaza', 'plants.json'), 'utf8'));
