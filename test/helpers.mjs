@@ -1,5 +1,5 @@
 // What the tests share: the sample project, copied to a temporary folder when a test writes.
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,4 +70,12 @@ export function boxScene(items, extra = {}) {
     nodes: items.map((it, i) => ({ mesh: i, ...(it.node || {}) })),
     meshes: items.map((_, i) => ({ primitives: [{ attributes: { POSITION: i } }] })),
     accessors: items.map((it) => ({ componentType: 5126, count: 8, type: 'VEC3', min: it.min, max: it.max })), ...extra };
+}
+
+/** Writes a plugin folder: plugin.json from `manifest` (name, version and engines filled in), plus { relPath: text } files. */
+export function writePlugin(dir, manifest, files = {}) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'plugin.json'), JSON.stringify({ name: manifest.id, version: '1.0.0', engines: { nfgames: '^1.0.0' }, ...manifest }, null, 2));
+  for (const [rel, text] of Object.entries(files)) { mkdirSync(dirname(join(dir, rel)), { recursive: true }); writeFileSync(join(dir, rel), text); }
+  return dir;
 }
