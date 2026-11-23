@@ -18,6 +18,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadProject } from '../src/project.mjs';
 import { createEditor } from '../src/server.mjs';
+import { fakeCommand } from '../test/helpers.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2), value = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
@@ -330,16 +331,15 @@ try {
 
   // New model, with a stand-in for the codex CLI (our own server only): describe it, generate, pick a concept, make
   // and pick the views, approve; the draft's folder then holds concept.png and the four views, and reopens on step 3
-  if (server && process.platform !== 'win32') {
-    const bin = mkdtempSync(join(tmpdir(), 'nfgames-check-bin-')), path0 = process.env.PATH;
-    writeFileSync(join(bin, 'codex'), `#!/usr/bin/env node
+  if (server) {
+    const bin = mkdtempSync(join(tmpdir(), 'nfgames-check-bin-'));
+    const restorePath = fakeCommand(bin, 'codex', `#!/usr/bin/env node
 const fs = require('fs'), path = require('path'), a = process.argv.slice(2);
 const prompt = a.find((x, i) => i > 0 && /^Use your image generation tool/.test(x));
 const m = /into \\.\\/(\\S+)\\/ named/.exec(prompt), n = Number(/make (\\d+) image/.exec(prompt)[1]);
 const dir = path.join(a[a.indexOf('-C') + 1], m[1]); fs.mkdirSync(dir, { recursive: true });
 for (let i = 1; i <= n; i++) fs.writeFileSync(path.join(dir, 'image-' + i + '.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
-`); chmodSync(join(bin, 'codex'), 0o755);
-    process.env.PATH = `${bin}${delimiter}${path0}`;
+`);
     const wb = await context.newPage();
     wb.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`new model: ${m.text()}`); });
     wb.on('pageerror', (e) => errors.push(`new model: ${e}`));
@@ -354,13 +354,35 @@ for (let i = 1; i <= n; i++) fs.writeFileSync(path.join(dir, 'image-' + i + '.pn
       await wb.locator('.mm-btn.primary', { hasText: 'Generate' }).click();
       await wb.waitForSelector('.mm-grid .mm-pic', { timeout: 20000 });
       if ((await wb.locator('.mm-grid .mm-pic').count()) !== 2) fail('New model: two concept candidates were asked for');
-      await wb.locator('.mm-grid .mm-pic').first().click();
+      // an image opens large, steps to its neighbour, closes with Esc; picking is its own control
+      await wb.locator('.mm-grid .mm-pic .mm-open').first().click();
+      await wb.waitForSelector('.mm-large');
+      const shown = await wb.locator('.mm-large-img').getAttribute('src');
+      await wb.locator('.mm-large-next').click();
+      if ((await wb.locator('.mm-large-img').getAttribute('src')) === shown) fail('New model: → in the large view shows the next image');
+      await wb.keyboard.press('Escape');
+      if (await wb.locator('.mm-large').count()) fail('New model: Esc closes the large view');
+      if (await wb.locator('.mm-pic.on').count()) fail('New model: looking at an image does not pick it');
+      // notes on an image send it back: a new round, revised from it
+      await wb.locator('.mm-grid .mm-pic .mm-open').first().click();
+      if (!(await wb.locator('.mm-notes-send').isDisabled())) fail('New model: nothing to send back before a note is written');
+      await wb.locator('.mm-notes-add').click();
+      await wb.locator('.mm-large-img').click({ position: { x: 20, y: 20 } });
+      await wb.locator('.mm-notes-pin textarea').fill('no antenna');
+      if ((await wb.locator('.mm-large-stage .mm-pin').count()) !== 1) fail('New model: a click on the image in notes mode drops a pin');
+      await wb.locator('.mm-notes-send').click();
+      await wb.waitForFunction(() => !document.querySelector('.mm-large') && document.querySelector('.mm-from') && !document.querySelector('.mm-wait'), null, { timeout: 20000 });
+      if (!/no antenna/.test(await wb.locator('.mm-from').first().textContent())) fail('New model: a revised round shows the notes it was made from');
+      await wb.locator('.mm-grid .mm-pic .mm-open').first().click();
+      await wb.locator('.mm-large-pick').click();
+      await wb.waitForSelector('.mm-pic.on');
+      if (await wb.locator('.mm-large').count()) fail('New model: picking in the large view closes it');
       await wb.locator('.mm-btn', { hasText: 'Use this one' }).click();
       await wb.waitForSelector('.mm-views');
       await wb.locator('.mm-btn.primary', { hasText: 'Generate views' }).click();
       await wb.waitForFunction(() => document.querySelectorAll('.mm-view .mm-grid').length === 4 && !document.querySelector('.mm-wait'), null, { timeout: 40000 });
       if (!(await wb.locator('.mm-btn', { hasText: 'Approve views' }).isDisabled())) fail('New model: the views cannot be approved before each has a pick');
-      for (let i = 0; i < 4; i++) { await wb.locator('.mm-view').nth(i).locator('.mm-pic').first().click(); await wb.waitForFunction((n) => document.querySelectorAll('.mm-view .mm-pic.on').length === n, i + 1); }
+      for (let i = 0; i < 4; i++) { await wb.locator('.mm-view').nth(i).locator('.mm-pick').first().click(); await wb.waitForFunction((n) => document.querySelectorAll('.mm-view .mm-pic.on').length === n, i + 1); }
       await wb.locator('.mm-btn', { hasText: 'Approve views' }).click();
       await wb.waitForSelector('.mm-btn:disabled:has-text("Generate model")');
       const kept = join(root, '.nfgames', 'drafts', 'check-lantern');
@@ -374,7 +396,7 @@ for (let i = 1; i <= n; i++) fs.writeFileSync(path.join(dir, 'image-' + i + '.pn
       await wb.waitForSelector('.mm-step.on');
       if (!/Model/.test(await wb.locator('.mm-step.on').textContent())) fail('New model: an approved draft reopens on its Model step');
     } catch (e) { fail(`New model: ${e.message}`); }
-    await wb.close(); process.env.PATH = path0; rmSync(bin, { recursive: true, force: true });
+    await wb.close(); restorePath(); rmSync(bin, { recursive: true, force: true });
   }
 
   if (errors.length) fail(`console errors:\n  ${errors.join('\n  ')}`); else console.log('console: no errors or warnings');

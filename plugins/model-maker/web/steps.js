@@ -3,6 +3,8 @@
 // The server part keeps the draft and its rules; this draws it and runs each generation through the image service.
 import { h, toast, confirmDialog } from '/shell/ui.js';
 import { shrink } from './shrink.js';
+import { openLarge } from './large.js';
+import { notesPanel } from './notes.js';
 
 const SERVICE = 'nfgames.codex-image/image', ALL_VIEWS = ['front', 'back', 'left', 'right', 'three-quarter', 'top'];
 const STEPS = [['concept', '① Concept'], ['views', '② Views'], ['model', '③ Model']];
@@ -13,6 +15,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   let draft = null, prompts = {}, step = 'concept', connected = true, gone = false;
   const form = { name: '', description: '', style: '', count: 4, prompt: {}, viewCount: {} };   // what is typed, kept across redraws
   const running = new Set(), notes = {};   // steps generating in this tab; what went wrong, per step
+  let closeLarge = null;   // the large view, while one is open
 
   // ---- talking to the server
   const take = (r) => { draft = r.draft; prompts = r.prompts || prompts; return r; };
@@ -34,14 +37,17 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
 
   // ---- generating
   /** One round of a step: started on the server, run by the image service, settled with what was saved. */
-  async function generate(where, prompt, count) {
+  const generate = (where, prompt, count) => run(where, () => call('/draft/round', { step: where, prompt, count }));
+  /** A round made from one image and the user's notes on it. */
+  const revise = (where, image, sent) => { const going = run(where, () => call('/draft/revise', { step: where, image, ...sent })); if (closeLarge) closeLarge(); return going; };
+  async function run(where, start) {
     if (running.has(where)) return;
     running.add(where); delete notes[where]; draw();
     try {
       // the editor is busy (a map's Apply, another generation): say so, and start nothing
       const job = await runningJob();
       if (job) { notes[where] = `The editor is busy (${job.label || job.kind || 'a job'} is running). Try again when it is done.`; return; }
-      const { round, input } = await call('/draft/round', { step: where, prompt, count });
+      const { round, input } = await start();
       draw();
       let error = null;
       try { await api.services.call(SERVICE, 'generate', input); } catch (e) { error = e.message; }
@@ -99,16 +105,32 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   const field = (key, tag, props = {}) => h(tag, { ...props, value: form[key], oninput: (e) => { form[key] = e.target.value; }, onchange: () => saveFields() });
   field.key = (e, key) => { e.dataset.key = key; return e; };
   const btn = (text, onclick, { cls = '', disabled = false, title = '' } = {}) => h('button', { className: `mm-btn ${cls}`, textContent: text, onclick, disabled, title });
-  const pic = (path, { on = false, onclick = null, title = '' } = {}) => h('button', { className: `mm-pic${on ? ' on' : ''}${onclick ? '' : ' still'}`, onclick, title }, h('img', { src: src(path), alt: title || 'generated image', loading: 'lazy' }));
+  /** Opens images large, at the one with this path. An image of a step that can be picked can also be sent back with notes. */
+  function large(group, path) {
+    if (closeLarge) closeLarge();
+    closeLarge = openLarge({ host: el, images: group, index: Math.max(0, group.findIndex((g) => g.path === path)),
+      onPick: async (image) => { const g = group.find((x) => x.path === image); try { delete notes[g.step]; await g.pick(image); } catch (e) { notes[g.step] = e.message; } draw(); },
+      extra: (image, { stage, img }) => (image.pickable ? notesPanel({ stage, img, disabled: !connected ? 'Image generation is not connected.' : running.size ? 'Wait for the round that is being generated.' : '', onSend: (sent) => { revise(image.step, image.path, sent); } }) : null) });
+  }
+  /** An image tile: a click opens it large, among `group` (or alone). `pick`, when it can be picked, is the corner control. */
+  const pic = (path, { on = false, pick = null, title = '', group = null } = {}) => h('div', { className: `mm-pic${on ? ' on' : ''}` },
+    h('button', { className: 'mm-open', type: 'button', title: title || 'Look closer', onclick: () => large(group || [{ path, src: src(path), caption: title }], path) }, h('img', { src: src(path), alt: title || 'generated image', loading: 'lazy' })),
+    pick ? h('button', { className: `mm-pick${on ? ' on' : ''}`, type: 'button', textContent: on ? '✓ Picked' : 'Pick', title: on ? 'This is the pick' : 'Pick this one', onclick: pick }) : null);
   const whyNot = () => (connected ? null : h('p', { className: 'mm-bad' }, 'Image generation is not connected. ', btn('Open Services', () => api.commands.execute('core/services'))));
   /** A step's rounds: the newest as a grid to pick from, the earlier ones under a fold. */
   function rounds(where, list, picked, onPick, old = []) {
     const out = [], [latest, ...earlier] = [...list].reverse();
-    const one = (r, small, pickable = true) => [
-      r.state === 'pending' ? h('p', { className: 'mm-wait', textContent: 'Generating…' }) : null,
-      r.state === 'failed' ? h('p', { className: 'mm-bad', textContent: r.error || 'It failed.' }) : null,
-      r.images.length ? h('div', { className: `mm-grid${small ? ' small' : ''}` }, ...r.images.map((i) => (pickable ? pic(i, { on: i === picked, onclick: act(where, () => onPick(i)), title: 'Pick this one' }) : pic(i, { title: 'Made from an earlier concept' })))) : null,
-    ];
+    const one = (r, small, pickable = true) => {
+      const what = `${where}, round ${r.id.slice(1)}${pickable ? '' : ' (from an earlier concept)'}`;
+      const group = r.images.map((i) => ({ path: i, src: src(i), caption: what, pickable, picked: i === picked, step: where, pick: onPick }));
+      return [
+        r.from ? h('div', { className: 'mm-from' }, h('img', { src: src(r.from), alt: 'the image this round revises', loading: 'lazy' }),
+          h('div', {}, h('p', { className: 'mm-note', textContent: 'revised from this, with:' }), h('ul', {}, ...(r.pins || []).map((p, n) => h('li', { textContent: `${n + 1}: ${p.note}` })), r.note ? h('li', { textContent: r.note }) : null))) : null,
+        r.state === 'pending' ? h('p', { className: 'mm-wait', textContent: 'Generating…' }) : null,
+        r.state === 'failed' ? h('p', { className: 'mm-bad', textContent: r.error || 'It failed.' }) : null,
+        r.images.length ? h('div', { className: `mm-grid${small ? ' small' : ''}` }, ...r.images.map((i) => pic(i, { on: pickable && i === picked, group, title: what, pick: pickable ? act(where, () => onPick(i)) : null }))) : null,
+      ];
+    };
     if (latest) out.push(...one(latest, where !== 'concept'));
     if (earlier.length || old.length) out.push(h('details', {}, h('summary', { textContent: `earlier rounds (${earlier.length + old.length})` }), ...earlier.flatMap((r) => one(r, true)),
       ...(old.length ? [h('p', { className: 'mm-note', textContent: 'Made from an earlier concept (kept to look at, not to pick):' }), ...[...old].reverse().flatMap((r) => one(r, true, false))] : [])));
@@ -120,7 +142,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', multiple: true, hidden: true, onchange: (e) => addRefs([...e.target.files]) });
     const drop = h('div', { className: 'mm-drop', ondragover: (e) => { e.preventDefault(); drop.classList.add('over'); }, ondragleave: () => drop.classList.remove('over'), ondrop: (e) => { e.preventDefault(); drop.classList.remove('over'); addRefs([...e.dataTransfer.files]); } },
       h('div', { className: 'mm-row' }, btn('+ add image', () => file.click(), { disabled: refs.length >= 8 }), h('span', { className: 'mm-note', textContent: refs.length ? `${refs.length} of 8` : 'Optional: drop, paste or pick images to go by (up to 8).' }), file),
-      refs.length ? h('div', { className: 'mm-grid small', style: 'margin-top:8px' }, ...refs.map((r) => h('div', { className: 'mm-pic still' }, h('img', { src: src(r), alt: 'reference' }), h('button', { className: 'x', textContent: '✕', title: 'Remove', onclick: act('concept', () => call('/draft/unref', { ref: r })) })))) : null);
+      refs.length ? h('div', { className: 'mm-grid small', style: 'margin-top:8px' }, ...refs.map((r) => { const tile = pic(r, { title: 'reference', group: refs.map((x) => ({ path: x, src: src(x), caption: 'reference' })) }); tile.append(h('button', { className: 'x', textContent: '✕', title: 'Remove', onclick: act('concept', () => call('/draft/unref', { ref: r })) })); return tile; })) : null);
     return [
       h('label', { textContent: 'Name' }), field.key(field('name', 'input', { type: 'text', placeholder: 'brass lantern' }), 'name'),
       h('label', { textContent: 'Describe it' }), field.key(field('description', 'textarea', { placeholder: 'a small brass street lantern, worn, with hexagonal glass…' }), 'description'),
@@ -158,7 +180,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   function model() {
     const v = draft.views;
     return [h('h2', { textContent: draft.name }), h('p', { className: 'mm-note', textContent: `Saved in .nfgames/drafts/${draft.slug}/: concept.png and views/${v.list.join('.png, views/')}.png` }),
-      h('div', { className: 'mm-grid small' }, pic(draft.concept.approved, { title: 'concept' }), ...v.list.map((x) => pic(v.picks[x], { title: x }))),
+      h('div', { className: 'mm-grid small' }, ...[['concept', draft.concept.approved], ...v.list.map((x) => [x, v.picks[x]])].map(([title, path], i, all) => pic(path, { title, group: all.map(([t, q]) => ({ path: q, src: src(q), caption: t })) }))),
       h('div', { className: 'mm-row', style: 'margin-top:16px' }, btn('Generate model', null, { cls: 'primary', disabled: true }), h('span', { className: 'mm-note', textContent: 'Model generation comes in a later update.' }))];
   }
   function draw() {
@@ -167,10 +189,11 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     if (!can[step]) step = can.views && step === 'model' ? 'views' : 'concept';
     // what is being typed keeps the cursor across a redraw
     const active = el.contains(document.activeElement) ? document.activeElement : null, key = active && active.dataset.key, at = active && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
+    const over = [...el.children].filter((c) => c.classList.contains('mm-large'));   // the large view stays open across a redraw
     el.replaceChildren(h('div', { className: 'mm', onpaste: (e) => { const files = [...(e.clipboardData?.files || [])]; if (step === 'concept' && files.length) { e.preventDefault(); addRefs(files); } } },
       h('div', { className: 'mm-steps' }, ...STEPS.flatMap(([id, title], i) => [i ? h('span', { className: 'line' }) : null, h('button', { className: `mm-step${step === id ? ' on' : ''}`, textContent: title, disabled: !can[id], onclick: () => { step = id; draw(); } })]),
         h('span', { className: 'grow' }), draft ? btn('Delete draft', () => remove().catch((e) => toast(e.message, 'error')), { cls: 'danger' }) : null),
-      ...(step === 'concept' ? concept() : step === 'views' ? views() : model())));
+      ...(step === 'concept' ? concept() : step === 'views' ? views() : model())), ...over);
     if (key) { const again = el.querySelector(`[data-key="${CSS.escape(key)}"]`); if (again) { again.focus(); if (at) try { again.setSelectionRange(at[0], at[1]); } catch { /* a number field */ } } }
   }
 
@@ -192,5 +215,5 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     if (then && then.refs) { for (const data of then.refs) await call('/draft/ref', { name: 'reference', data }).catch((e) => { notes.concept = e.message; }); draw(); }
     if (then && then.generate) { form.count = then.count || form.count; generate('concept', conceptPrompt(), form.count); }
   })();
-  return () => { gone = true; clearInterval(watch); for (const s of subs) s.dispose(); };
+  return () => { gone = true; if (closeLarge) closeLarge(); clearInterval(watch); for (const s of subs) s.dispose(); };
 }
