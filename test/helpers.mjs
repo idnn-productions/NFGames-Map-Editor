@@ -1,5 +1,7 @@
 // What the tests share: the sample project, copied to a temporary folder when a test writes.
-import { chmodSync, copyFileSync, cpSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { chmodSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,24 +11,71 @@ export const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 /** Windows keeps no owner-only file modes and cannot run a `#!` script: tests of those say so with this. */
 export const WINDOWS = process.platform === 'win32';
 
+// The launcher: runs node (named in <own name>.node.txt beside it) on <own name>.stub.cjs with its own arguments,
+// quoted the way Windows programs read them, and ends with node's exit code.
+const LAUNCHER_CS = `using System; using System.Diagnostics; using System.IO; using System.Text;
+class Launcher {
+  static string Q(string s) {
+    var b = new StringBuilder("\\""); int bs = 0;
+    foreach (char c in s) {
+      if (c == '\\\\') { bs++; continue; }
+      if (c == '"') { b.Append('\\\\', bs * 2 + 1); } else { b.Append('\\\\', bs); }
+      bs = 0; b.Append(c);
+    }
+    b.Append('\\\\', bs * 2); b.Append('"'); return b.ToString();
+  }
+  static int Main(string[] args) {
+    string me = Process.GetCurrentProcess().MainModule.FileName, dir = Path.GetDirectoryName(me), name = Path.GetFileNameWithoutExtension(me);
+    var line = new StringBuilder(Q(Path.Combine(dir, name + ".stub.cjs")));
+    foreach (var a in args) { line.Append(' '); line.Append(Q(a)); }
+    var p = new Process();
+    p.StartInfo = new ProcessStartInfo(File.ReadAllText(Path.Combine(dir, name + ".node.txt")).Trim(), line.ToString()) { UseShellExecute = false };
+    p.Start(); p.WaitForExit(); return p.ExitCode;
+  }
+}
+`;
+/** The compiled launcher's path (made on first use, then reused), or null where it cannot be compiled. */
+function windowsLauncher() {
+  const exe = join(tmpdir(), `nfgames-test-launcher-${createHash('sha256').update(LAUNCHER_CS).digest('hex').slice(0, 12)}.exe`);
+  if (existsSync(exe)) return exe;
+  for (const framework of ['Framework64', 'Framework']) {
+    const csc = join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', framework, 'v4.0.30319', 'csc.exe');
+    if (!existsSync(csc)) continue;
+    const work = mkdtempSync(join(tmpdir(), 'nfgames-launcher-'));
+    try {
+      writeFileSync(join(work, 'launcher.cs'), LAUNCHER_CS);
+      execFileSync(csc, ['/nologo', '/optimize', `/out:${join(work, 'launcher.exe')}`, join(work, 'launcher.cs')], { stdio: 'ignore', windowsHide: true });
+      copyFileSync(join(work, 'launcher.exe'), exe);
+      return exe;
+    } catch { /* the next one, or none */ } finally { rmSync(work, { recursive: true, force: true }); }
+  }
+  return null;
+}
+
 /**
  * Puts a stand-in for the program `name` first on the PATH: `source` is a Node script (CommonJS; it may start with a
  * `#!` line) that reads process.argv as [node, script, ...arguments]. Returns a function that undoes it.
  *
  * Elsewhere that is the script itself, made executable. Windows cannot start a script without a shell, and the editor
- * never uses one, so there the stand-in is a real program: node itself under the name <name>.exe, with a preload
- * (NODE_OPTIONS, inherited by what the tests start) that runs the script kept beside it and exits before node looks
- * at its own arguments. A node started under any other name finds no script beside it and carries on as usual.
+ * never uses one, so there the stand-in is a real program, <name>.exe: a small launcher (compiled once per machine
+ * with the C# compiler every Windows has, and kept in the temporary folder) that runs node on the script kept beside
+ * it, with the arguments it was given. Where there is no compiler, it is node itself under that name with a preload
+ * (NODE_OPTIONS) that runs the script: enough for a program whose first argument is not an option, since node reads
+ * its own options before the preload runs.
  */
 export function fakeCommand(dir, name, source) {
   mkdirSync(dir, { recursive: true });
   const before = { PATH: process.env.PATH, NODE_OPTIONS: process.env.NODE_OPTIONS };
   if (!WINDOWS) { writeFileSync(join(dir, name), source); chmodSync(join(dir, name), 0o755); }
   else {
-    try { linkSync(process.execPath, join(dir, `${name}.exe`)); } catch { copyFileSync(process.execPath, join(dir, `${name}.exe`)); }
     writeFileSync(join(dir, `${name}.stub.cjs`), source);
-    writeFileSync(join(dir, 'preload.cjs'), "const path = require('path'), stub = path.join(path.dirname(process.execPath), path.basename(process.execPath, '.exe') + '.stub.cjs');\nif (require('fs').existsSync(stub)) { process.argv.splice(1, 0, stub); require(stub); process.exit(); }\n");
-    process.env.NODE_OPTIONS = `--require "${join(dir, 'preload.cjs').replaceAll('\\', '/')}"${before.NODE_OPTIONS ? ` ${before.NODE_OPTIONS}` : ''}`;
+    const launcher = windowsLauncher();
+    if (launcher) { copyFileSync(launcher, join(dir, `${name}.exe`)); writeFileSync(join(dir, `${name}.node.txt`), process.execPath); }
+    else {
+      try { linkSync(process.execPath, join(dir, `${name}.exe`)); } catch { copyFileSync(process.execPath, join(dir, `${name}.exe`)); }
+      writeFileSync(join(dir, 'preload.cjs'), "const path = require('path'), stub = path.join(path.dirname(process.execPath), path.basename(process.execPath, '.exe') + '.stub.cjs');\nif (require('fs').existsSync(stub)) { process.argv.splice(1, 0, stub); require(stub); process.exit(); }\n");
+      process.env.NODE_OPTIONS = `--require "${join(dir, 'preload.cjs').replaceAll('\\', '/')}"${before.NODE_OPTIONS ? ` ${before.NODE_OPTIONS}` : ''}`;
+    }
   }
   process.env.PATH = `${dir}${delimiter}${before.PATH}`;
   return () => { process.env.PATH = before.PATH; if (before.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = before.NODE_OPTIONS; };

@@ -33,7 +33,7 @@ export function newDraft({ slug, name, description = '', style = '' }) {
     concept: { rounds: [], pick: null, approved: null }, views: { list: [...VIEWS], prompts: {}, rounds: {}, picks: {}, approved: false } };
 }
 
-const SIDES = { front: 'straight from the front', back: 'straight from the back', left: 'from its left side', right: 'from its right side', 'three-quarter': 'from a three-quarter angle, front and right side showing', top: 'straight down from above', bottom: 'straight up from below' };
+const SIDES = { front: 'straight from the front', back: 'straight from the back', left: 'from its left side, its front pointing to the left of the picture', right: 'from its right side, its front pointing to the right of the picture', 'three-quarter': 'from a three-quarter angle, front and right side showing', top: 'straight down from above', bottom: 'straight up from below' };
 /** The prompt for a view: the user's own once written, else drafted from the description, the style and the side. */
 export function viewPrompt(draft, view) {
   const own = draft.views.prompts[view];

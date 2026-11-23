@@ -1,11 +1,15 @@
 // The plugin manager: the open project's plugins, which are trusted and on, and their server parts, loaded on demand
 // (an activation event) and undone completely when unloaded. A plugin that fails is turned off alone; the rest go on.
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { discoverPlugins } from './sources.mjs';
 import { pluginTrust, trustPlugin } from './trust.mjs';
 import { matchesAny } from './glob.mjs';
+
+/** The name a job's program goes by in touches.commands: its file name without .exe, in lower case, so
+ *  C:\…\blender.exe and macOS's …/MacOS/Blender are both `blender`. */
+export const programOf = (file) => win32.basename(String(file)).replace(/\.exe$/i, '').toLowerCase();
 
 const readJson = (f, fallback) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return fallback; } };
 /** What a route answers with when it sends a project file (api.routes.file): the bytes go out with this type. */
@@ -83,7 +87,7 @@ export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir
       },
       jobs: {
         run: (label, steps) => {
-          for (const s of steps) if (Array.isArray(s.command) && !programs.includes(basename(s.command[0]))) throw new Error(`${p.id} did not declare ${basename(s.command[0])} in touches.commands`);
+          for (const s of steps) if (Array.isArray(s.command) && !programs.some((name) => String(name).toLowerCase() === programOf(s.command[0]))) throw new Error(`${p.id} did not declare ${programOf(s.command[0])} in touches.commands`);
           const run = jobs.runSteps({ kind: p.id, label, steps }, { onDone: (j) => events.emit('jobs/done', { id: j.id, kind: j.kind, label: j.label, state: j.state }) });
           events.emit('jobs/started', { id: run.job.id, kind: p.id, label });
           return run;
