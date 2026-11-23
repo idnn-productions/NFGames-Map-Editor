@@ -141,8 +141,9 @@ incompatible (with the version it needs) and stays off. Breaking changes only in
 
 ### Plugins: where they come from, install, trust, lifecycle
 
-- **Sources**, searched in this order: built in (`NFGames-Map-Editor/plugins/`), user (`~/.nfgames-editor/plugins/`),
-  installed packages (`~/.nfgames-editor/packages/<id>@<version>/`), project (`<project>/nfgames.json`):
+- **Sources**: built in (`NFGames-Map-Editor/plugins/`), user (`~/.nfgames-editor/plugins/`), and the project's
+  `nfgames.json`, which names project folders, built-ins, and npm / git packages (installed once into
+  `~/.nfgames-editor/packages/<id>@<version>/`, shared by every project pinning that version):
 
   ```jsonc
   { "plugins": {
