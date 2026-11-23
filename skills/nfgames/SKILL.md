@@ -48,7 +48,11 @@ Do not call image, voice or 3D APIs yourself: ask the editor, which holds the ke
    `{"token": "<token>", "service": "<key>", "action": "<action>", "input": { … }}`. For images: service
    `nfgames.codex-image/image`, action `generate`, input
    `{"prompt": "…", "count": 2, "references": ["<project-relative image file>"]}` (references must be image files
-   inside the project).
+   inside the project). For a 3D model from a New model draft whose views are approved: service
+   `nfgames.comfy-model/model`, action `status` (input `{}`; answers what is missing) and action `generate`, input
+   `{"draft": "<draft folder name>", "length": <longest side in metres>}`. It runs on the user's graphics card for
+   minutes. It refuses when ComfyUI is busy or the model exists; add `"wait": true` or `"replace": true` only when
+   the user said so.
 4. Wait for `requests/<name>.answer.json` to have `"ok"`: `{"ok": true, "result": …}` (for images,
    `result.images` are project-relative paths) or `{"ok": false, "error": "…"}`. While it says `"waiting"`, the user is
    deciding in the editor (the first time you use a service in a session, and whenever it costs); keep waiting.

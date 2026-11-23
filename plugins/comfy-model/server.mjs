@@ -21,7 +21,9 @@ export function activate(api) {
     const url = api.settings.get('comfyUrl'), blenderSetting = String(api.settings.get('blender') || '').trim();
     let pipeline = null, pipelineError = null, client = null, info = null, comfyError = null, a3d = null, queue = null;
     try { pipeline = readPipeline(api.settings.get('workflowsDir')); } catch (e) { pipelineError = e.message; }
-    try { client = comfy(url); [info, queue] = await Promise.all([client.objectInfo(), client.queueLength()]); if (!info || typeof info !== 'object' || Array.isArray(info)) throw new Error(`What answers at ${client.base} is not ComfyUI.`); }
+    // the queue first: it answers at once and shows ComfyUI is there. Its node list is megabytes and takes seconds, and
+    // ComfyUI answers one request at a time, so the two are not asked together.
+    try { client = comfy(url); queue = await client.queueLength(); info = await client.objectInfo(); if (!info || typeof info !== 'object' || Array.isArray(info)) throw new Error(`What answers at ${client.base} is not ComfyUI.`); }
     catch (e) { info = null; queue = null; comfyError = e.message; }
     if (info) { try { a3d = await client.asset3dStatus(); } catch { a3d = null; } }
     const blender = findBlender(blenderSetting);

@@ -1,6 +1,6 @@
 # New model: look closer, send back with notes, and generate the model
 
-Date: 2026-11-23. Status: for approval.
+Date: 2026-11-23. Status: built (plan: `docs/superpowers/plans/2026-11-23-model-generation.md`).
 
 ## Why
 

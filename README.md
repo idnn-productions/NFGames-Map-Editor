@@ -630,15 +630,47 @@ press a Generate button.
 1. **① Concept.** Give it a name, describe it, and optionally write a style (kept for the project and filled in next
    time) and add up to 8 reference images from your disk (pick, drop or paste; large ones are shrunk). **Generate**
    makes 1 to 8 candidates (4 unless you say otherwise). Change the words and generate again as often as you like:
-   earlier rounds stay under a fold. Click the one you want, then **Use this one → Views**.
+   earlier rounds stay under a fold. **Pick** the one you want, then **Use this one → Views**.
 2. **② Views.** One image per view, each made from the approved concept: **front, back, left, right** unless you
-   tick others (**three-quarter**, **top**) or untick some. Each view has its own prompt, drafted from your
-   description and editable. **Generate views** makes those that have no images yet, one after another; a view's own
-   **Generate** makes it again. Pick one image per view, then **Approve views**.
-3. **③ Model.** Shows what is kept and where. Generating the model itself comes in a later update.
+   tick others (**three-quarter**, **top**, **bottom**) or untick some. Each view has its own prompt, drafted from
+   your description and editable. **Generate views** makes those that have no images yet, one after another; a view's
+   own **Generate** makes it again. Pick one image per view, then **Approve views**.
+3. **③ Model.** Makes the 3D model from the approved views: see [Generating the model](#generating-the-model).
+
+**Looking closer, and sending an image back.** A click on any image opens it large; ← and → step through its round,
+Esc closes. An image that is nearly right does not need a new prompt: in the large view press **Add notes**, click
+the picture where something should change (up to 12 numbered pins, a note each), add an overall note if you like,
+and **Regenerate from this**. A new round of the same step is made from that picture, a copy with your pins drawn on
+it, and your notes; it is listed as "revised from" the picture, with what you asked for.
+
+### Generating the model
+
+Step ③ runs on your own computer, and needs things that do not come with the editor. Its box **What this step
+needs** checks each and says what to do about one that is missing:
+
+- **The workflows folder**: a checkout of
+  [comfy-ui-model-workflows](https://github.com/idnn-productions/comfy-ui-model-workflows), set in Settings under
+  **3D model generation**. It holds the ComfyUI workflow and the Blender script the step runs.
+- **ComfyUI**, running (at `http://127.0.0.1:8188` unless you set another address), with the node types the
+  workflow uses and its model files. The workflows repository's setup guide says what to install; a graphics card
+  with about 16 GB of memory is what it was built on.
+- **[Blender](https://www.blender.org/download/)**: found on the PATH, in `Program Files\Blender Foundation` on
+  Windows or in `/Applications` on a Mac, or where Settings says.
+
+The model is made from **front, left, back and right**, which must all be approved; **top and bottom** are used too
+when both are there (they give the top and underside their real colours), and three-quarter is never sent. Give the
+**longest side in metres** (models come out of generation without a scale), the number of triangles, and whether to
+refine the shape with UltraShape, then **Generate model**. It takes a few minutes and shows in Jobs: the views go to
+ComfyUI, the result comes back, and Blender scales it, sets its pivot and compresses its textures. The model is
+saved as `models/<name>/<name>.glb` with its references in `models/<name>/<name>.refs/`, so
+[the model viewer](#the-model-viewer) shows it beside the pictures it was made from.
+
+Nothing is generated behind your back: if ComfyUI is already working on something, or a model of that name is
+already there, the step asks first. The same rules hold for an agent that asks for the `nfgames.comfy-model/model`
+service.
 
 A draft is one folder in the project, `.nfgames/drafts/<name>/`: `draft.json`, your references, and, once approved,
-`concept.png` and `views/<view>.png` (what the model step will read). Every generated round stays under
+`concept.png` and `views/<view>.png` (what the model step reads). Every generated round stays under
 `.nfgames/images/`. Drafts are listed under **Drafts** above the viewer's models, each with its step; click one to
 go on where you left it. If you close the tab or reload while images are being made, the run still finishes and
 its images are there when you open the draft again.

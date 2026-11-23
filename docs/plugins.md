@@ -158,7 +158,7 @@ and can set a monthly budget for it. A call estimated at the threshold (default 
 pass the budget, or any call once the budget is used up, asks the user first. From a page part, call a service with
 `await api.services.call('<plugin>/<service>', '<action>', input)`; it asks the user when the spend guard says so.
 Agents ask through request files (see `skills/nfgames/SKILL.md`); the first time an agent uses a service in a session,
-the user is asked to allow it. The built-in `nfgames.codex-image` plugin is a complete example. The built-in `nfgames.model-maker` plugin (New model) shows a service called from a page part, with routes that keep files in the project and answer with images.
+the user is asked to allow it. The built-in `nfgames.codex-image` plugin is a complete example. The built-in `nfgames.comfy-model` plugin (3D model generation) is a second: no key, its own settings (an address, a folder, a program), an action that reports what is missing, a job with steps that talk to a local server and run a program, and rules it keeps for every caller (nothing queued behind other work, nothing replaced, unless the input says so). The built-in `nfgames.model-maker` plugin (New model) shows a service called from a page part, with routes that keep files in the project and answer with images.
 
 ## Where plugins come from
 

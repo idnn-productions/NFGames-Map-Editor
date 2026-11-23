@@ -63,7 +63,7 @@ export function comfy(url) {
   }
   return {
     base,
-    objectInfo: () => ask('/object_info', { timeout: 15000 }),
+    objectInfo: () => ask('/object_info', { timeout: 45000 }),
     queueLength: async () => { const q = await ask('/queue'); return (q.queue_running || []).length + (q.queue_pending || []).length; },
     /** The node pack's own report (UltraShape's code, packages, checkpoints), or null from a pack too old to have it. */
     asset3dStatus: () => ask('/asset3d/status', { or404: true }),
