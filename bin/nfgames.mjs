@@ -1,18 +1,20 @@
 #!/usr/bin/env node
-// nfgames plugin list | add <npm spec | git url[#commit]> | install | update <id> | remove <id>   [--project <dir>]
+// nfgames plugin list | add <npm spec | git url[#commit]> | install | update <id> | remove <id> | trust <id>   [--project <dir>]
 //
 //   list      every plugin the project sees, where it comes from, and its state
 //   add       install a shared plugin and pin its exact version (npm: SHA-512; git: commit) in the project's nfgames.json
 //   install   install every pinned plugin that is not in ~/.nfgames-editor/packages yet (after a fresh checkout)
 //   update    the newest version of a pinned npm plugin, or the newest commit of a git one; shows old → new
 //   remove    unpin it (the cached copy stays for other projects)
+//   trust     approve a user, project or installed plugin as it is now (shows what it touches and adds first)
 import { join, resolve } from 'node:path';
 import { HOME } from '../src/home.mjs';
 import { EDITOR_ROOT } from '../src/project.mjs';
 import { discoverPlugins, readProjectPlugins } from '../src/plugins/sources.mjs';
+import { pluginTrust, trustPlugin } from '../src/plugins/trust.mjs';
 import { installGit, installMissing, installNpm, pin, unpin } from '../src/plugins/install.mjs';
 
-const USAGE = 'usage: nfgames plugin list | add <npm spec | git url[#commit]> | install | update <id> | remove <id>  [--project <dir>]';
+const USAGE = 'usage: nfgames plugin list | add <npm spec | git url[#commit]> | install | update <id> | remove <id> | trust <id>  [--project <dir>]';
 const args = process.argv.slice(2), at = args.indexOf('--project'), root = resolve(at >= 0 ? args[at + 1] : process.cwd());
 const [group, verb, arg] = args.filter((a, i) => i !== at && i !== at + 1);
 const state = join(HOME, '.nfgames-editor'), packagesDir = join(state, 'packages');
@@ -37,5 +39,11 @@ try {
     pin(root, arg, got.spec);
     console.log(`${arg}: ${old.npm || old.commit.slice(0, 12)} → ${got.spec.npm || got.spec.commit.slice(0, 12)}`);
   } else if (verb === 'remove' && arg) { unpin(root, arg); console.log(`removed ${arg} from nfgames.json`); }
+  else if (verb === 'trust' && arg) {
+    const p = discoverPlugins({ builtinDir: join(EDITOR_ROOT, 'plugins'), userDir: join(state, 'plugins'), packagesDir, root }).find((x) => x.id === arg);
+    if (!p || !p.manifest || p.errors.length) throw new Error(`no usable plugin called ${arg}${p ? `: ${p.errors.join('; ')}` : ''}`);
+    console.log(`${p.id} ${p.manifest.version} (${p.source}${p.dir ? `, ${p.dir}` : ''})\n  touches:     ${JSON.stringify(p.manifest.touches || {})}\n  contributes: ${Object.keys(p.manifest.contributes || {}).join(', ') || 'nothing'}`);
+    if (pluginTrust(state, p) === 'trusted') console.log('already trusted'); else { trustPlugin(state, p); console.log('trusted: it runs with your rights; any change to it asks again'); }
+  }
   else { console.error(USAGE); process.exit(2); }
 } catch (e) { console.error(`nfgames: ${e.message}`); process.exit(1); }

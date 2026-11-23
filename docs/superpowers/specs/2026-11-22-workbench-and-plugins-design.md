@@ -169,8 +169,9 @@ incompatible (with the version it needs) and stays off. Breaking changes only in
 - **Trust:** before a plugin first loads, the prompt shows its `touches` and `contributes`. The answer is kept per
   plugin: folder plugins (user and project) by a hash of everything in the folder, packages by their pinned bytes
   (integrity, or git URL and commit); any change asks again. Built-in plugins are trusted. Project plugins are **not**
-  trusted just for being in the project (from the security review: a folder with no config opens without asking),
-  except those of the project the editor is started on, as they are at start. Declared
+  trusted just for being in the project, nor for being in the project the editor is started on (from the security
+  review: a folder with no config opens without asking). They wait until approved: the Plugins screen, or
+  `nfgames plugin trust <id>`. Declared
   file access is enforced by `api.files`; plugins still run as trusted code, so this prevents mistakes, not malice
   (the docs say so).
 - **Lifecycle:** manifests are read at start and on project switch; code is activated on its activation events;

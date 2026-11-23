@@ -82,7 +82,7 @@ the editor carries on. Its own files are served at `/p/<id>/<path>` (no hidden f
 |---|---|---|
 | built in | `NFGames-Map-Editor/plugins/` | yes |
 | user | `~/.nfgames-editor/plugins/<folder>/` | asked once, and again when its files change |
-| project | a folder named in the project's `nfgames.json` | asked once, and again when its files change (those of the project you start the editor on are trusted at start) |
+| project | a folder named in the project's `nfgames.json` | asked once, and again when its files change |
 | npm / git | named in `nfgames.json`, installed in `~/.nfgames-editor/packages/` | asked once for its exact pinned bytes (integrity, or commit) |
 
 ```jsonc
@@ -103,6 +103,7 @@ nfgames plugin install                              # after a fresh checkout: in
 nfgames plugin update acme.terrain-tools            # newest version or commit; shows old → new
 nfgames plugin remove acme.terrain-tools
 nfgames plugin list
+nfgames plugin trust acme.terrain-tools             # approve one (shows what it touches and adds first)
 ```
 
 ## What trust means
