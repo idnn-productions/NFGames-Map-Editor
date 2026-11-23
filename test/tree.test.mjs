@@ -35,9 +35,11 @@ describe('the folding list', () => {
   it('folders keep the order their first item came in', () => {
     assert.deepEqual(nfTree.build(items('Zed/a', 'Alpha/b', 'Zed/c'), {}).map((n) => [n.label, n.count]), [['Zed', 2], ['Alpha', 1]]);
   });
-  it('5000 items build in under 50 ms', () => {
+  it('5000 items build quickly (the best of five runs, so a stalled machine does not fail it)', () => {
     const many = Array.from({ length: 5000 }, (_, i) => ({ path: `f${i % 50}/g${i % 7}/m${i}.glb` }));
-    const t0 = performance.now(); nfTree.build(many, { filter: 'm49' }); assert.ok(performance.now() - t0 < 50);
+    let best = Infinity;
+    for (let run = 0; run < 5; run++) { const t0 = performance.now(); nfTree.build(many, { filter: 'm49' }); nfTree.build(many, {}); best = Math.min(best, performance.now() - t0); }
+    assert.ok(best < 50, `${best} ms`);
   });
   it('a store without localStorage still remembers for the page\'s life', () => {
     const s = nfTree.store('test'); s.toggle('art', false); assert.ok(s.closed.has('art')); s.toggle('art', true); assert.ok(!s.closed.has('art'));
