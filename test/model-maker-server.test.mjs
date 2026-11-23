@@ -6,7 +6,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, re
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHost } from '../src/host.mjs';
-import { REPO, sampleCopy, PNG_1PX, fakeCommand, WINDOWS } from './helpers.mjs';
+import { REPO, sampleCopy, PNG_1PX, JPEG_SIG, fakeCommand, WINDOWS } from './helpers.mjs';
 
 // a stand-in for the codex CLI: writes as many PNGs as the prompt asks for, where it says (each one different)
 const CODEX = `#!/usr/bin/env node
@@ -186,15 +186,17 @@ describe('the model maker', () => {
     assert.equal(made.status, 200, JSON.stringify(made.body));
     const { draft } = await ok('/draft/settle', { slug, step: 'concept', round: started.round.id, error: null });
     assert.equal(draft.concept.rounds.length, 2); assert.equal(draft.concept.rounds[1].state, 'done'); assert.equal(draft.concept.rounds[1].from, image); assert.equal(draft.concept.rounds[1].images.length, 2);
+    const jpeg = await ok('/draft/revise', { slug, step: 'concept', image, note: 'n', pins: [{ x: 0.5, y: 0.5, note: 'here' }], marked: JPEG_SIG });   // what the page sends: a JPEG
+    assert.match(jpeg.input.references[1], /\/marks\/.+\.jpg$/); await ok('/draft/settle', { slug, step: 'concept', round: jpeg.round.id, error: 'stopped' });
     // what cannot be sent back
     for (const bad of [{ marked: 'data:image/svg+xml;base64,AAAA', note: 'n' }, { pins: [], note: ' ' }, { image: '.nfgames/images/nope/image-1.png', note: 'n' }, { pins: [{ x: 'a', y: 0, note: 'n' }] }])
       assert.equal((await post('/draft/revise', { slug, step: 'concept', image, ...bad })).status, 400, JSON.stringify(bad));
-    assert.equal((await get(`/draft?slug=${slug}`)).body.draft.concept.rounds.length, 2);
+    assert.equal((await get(`/draft?slug=${slug}`)).body.draft.concept.rounds.length, 3);
     // an image tidied away: refused before a round is started
     const other = first.draft.concept.rounds[0].images[1]; rmSync(join(copy.root, other));
     const gone = await post('/draft/revise', { slug, step: 'concept', image: other, note: 'n' });
     assert.equal(gone.status, 400); assert.match(gone.body.error, /no longer there/);
-    assert.equal((await get(`/draft?slug=${slug}`)).body.draft.concept.rounds.length, 2);
+    assert.equal((await get(`/draft?slug=${slug}`)).body.draft.concept.rounds.length, 3);
     // a view: the concept is its last reference
     await ok('/draft/pick', { slug, step: 'concept', image }); await ok('/draft/approve', { step: 'concept', slug });
     const front = await round(slug, 'front', { count: 1 }), view = front.draft.views.rounds.front[0].images[0];

@@ -2,21 +2,24 @@
 // The pins are drawn over the image in the large view; what is sent also carries a copy of the image with them on it.
 import { h } from '/shell/ui.js';
 
-const MAX_PINS = 12, MARK = '#ff2d55';
+const MAX_PINS = 12, MARK = '#ff2d55', MAX_CHARS = 1.8 * 1024 * 1024;
 
-/** The image with its numbered pins drawn on it, as a PNG data URL (at most 1536 px on its longer side). */
+/** The image with its numbered pins drawn on it, as a JPEG data URL small enough for a request (a plugin route takes
+ *  2 MB): at most 1536 px on its longer side, the quality stepped down until it fits. */
 export async function markedCopy(img, pins) {
   if (!img.complete || !img.naturalWidth) await img.decode();
   const scale = Math.min(1, 1536 / Math.max(img.naturalWidth, img.naturalHeight));
   const canvas = Object.assign(document.createElement('canvas'), { width: Math.round(img.naturalWidth * scale), height: Math.round(img.naturalHeight * scale) });
   const c = canvas.getContext('2d'), r = Math.max(canvas.width, canvas.height) * 0.022;
+  c.fillStyle = '#fff'; c.fillRect(0, 0, canvas.width, canvas.height);   // JPEG has no see-through: white behind
   c.drawImage(img, 0, 0, canvas.width, canvas.height);
   pins.forEach((p, i) => {
     const x = p.x * canvas.width, y = p.y * canvas.height;
     c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fillStyle = MARK; c.fill(); c.lineWidth = 3; c.strokeStyle = '#fff'; c.stroke();
     c.fillStyle = '#fff'; c.font = `bold ${Math.round(r * 1.2)}px sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(i + 1), x, y + r * 0.06);
   });
-  return canvas.toDataURL('image/png');
+  for (const quality of [0.9, 0.8, 0.7, 0.55, 0.4]) { const url = canvas.toDataURL('image/jpeg', quality); if (url.length <= MAX_CHARS) return url; }
+  throw new Error('This picture is too large to send back with pins: use the overall note alone.');
 }
 
 /**

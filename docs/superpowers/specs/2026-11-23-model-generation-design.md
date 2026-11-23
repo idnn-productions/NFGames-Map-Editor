@@ -87,8 +87,8 @@ Jacek chose 1.
   shows "revised from" with a small copy of that image, and its notes.
 - Rules (in `draft.mjs`, pure): the image must be one of that step's; for a view, of a round made from the approved
   concept; the concept step's revision uses the image alone (not the user's uploaded references).
-- New route `POST /draft/revise { slug, step, image, pins, note, count, marked }` (`marked`: the PNG as a data URL,
-  size-limited like references), answering like `/draft/round`. Settling is unchanged.
+- New route `POST /draft/revise { slug, step, image, pins, note, count, marked }` (`marked`: the marked copy as a JPEG data URL,
+  kept under the 2 MB a plugin route takes, like references), answering like `/draft/round`. Settling is unchanged.
 
 ### C. Views
 

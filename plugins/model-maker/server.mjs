@@ -5,7 +5,7 @@
 import { slugOf, newDraft, viewPrompt, folderFor, startRound, settleRound, reconcile, pickConcept, pickView, approveConcept, setViews, approveViews, filesToKeep, startRevision, setModel, modelViews } from './draft.mjs';
 
 const DRAFTS = '.nfgames/drafts', IMAGES = '.nfgames/images', STYLE = `${DRAFTS}/style.txt`;
-const IMAGE = /\.(png|jpe?g|webp)$/i, MAX_REFS = 8, MAX_MARKED = 6_000_000;
+const IMAGE = /\.(png|jpe?g|webp)$/i, MAX_REFS = 8;
 const refuse = (code, text) => { throw Object.assign(new Error(text), { code }); };
 
 export function activate(api) {
@@ -95,9 +95,9 @@ export function activate(api) {
     const before = read(known(body.slug)), now = Date.now(), folder = folderFor(before, body.step, now);
     let marked = null, bytes = null;
     if (body.marked !== undefined && body.marked !== null) {
-      const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(typeof body.marked === 'string' ? body.marked : '');
-      if (!m || m[1].length > MAX_MARKED * 4 / 3) refuse(400, 'marked: a PNG image of at most 6 MB');
-      bytes = Buffer.from(m[1], 'base64'); marked = `${dirOf(before.slug)}/marks/${folder}.png`;
+      const m = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(typeof body.marked === 'string' ? body.marked : '');
+      if (!m) refuse(400, 'marked: a PNG or JPEG image');
+      bytes = Buffer.from(m[2], 'base64'); marked = `${dirOf(before.slug)}/marks/${folder}.${m[1] === 'jpeg' ? 'jpg' : 'png'}`;
     }
     const { draft, round } = startRevision(before, body.step, { image: body.image, pins: body.pins, note: body.note, count: body.count ?? 2, folder, at: now, marked });
     if (!f.exists(round.from)) refuse(400, `That image is no longer there (${round.from}): pick another, or generate again.`);
