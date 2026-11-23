@@ -11,7 +11,7 @@
 // checked map name): nothing from a request reaches a shell.
 import { createServer } from 'node:http';
 import { createReadStream, readFileSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import { CONFIG_NAME, EDITOR_ROOT, loadProject } from './project.mjs';
 import { plantEditing } from './plan.mjs';
 import { view3d } from './view3d.mjs';
@@ -21,6 +21,11 @@ import { listModels, resolveModel } from './models.mjs';
 import { createReview, listReviews, publicWorkflows, LIMITS } from './reviews.mjs';
 import { installThree, vendorBase, vendorFile, vendorState } from './vendor.mjs';
 import { HOME, addRecent, browse, configTrust, insideHome, recentProjects, trustConfig } from './home.mjs';
+import { createEvents } from './events.mjs';
+import { createPluginManager } from './plugins/manager.mjs';
+import { API_VERSION } from './plugins/manifest.mjs';
+
+const TYPES = { '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.html': 'text/html; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8' };
 
 const MAX_BODY = 2 * 1024 * 1024;
 export const HOST = '127.0.0.1';
@@ -37,8 +42,9 @@ export const page = () => readFileSync(join(EDITOR_ROOT, 'src', 'editor.html'), 
 export const viewerPage = () => readFileSync(join(EDITOR_ROOT, 'src', 'viewer.html'), 'utf8').replace('/*@importmap*/', () => JSON.stringify({ imports: { three: `${vendorBase()}build/three.module.js`, 'three/addons/': `${vendorBase()}examples/jsm/` } })).replace('<!--@nav-->', () => readFileSync(join(EDITOR_ROOT, 'src', 'nav.html'), 'utf8'));
 
 /** The plan compiled (when the project compiles) and checked, for the page: nothing is written. */
-export async function preview(project, name, plan, plants = undefined) {
+export async function preview(project, name, plan, plants = undefined, plugins = null) {
   const errors = await project.planErrors(plan, name);
+  if (plugins) for (const list of await plugins.runHook('validate', { plan, name })) if (Array.isArray(list)) errors.push(...list.map(String));
   if (plants) errors.push(...(await project.plantsErrors(plants)));
   if (errors.length) return { errors, problems: [], seated: {}, overlays: null, status: null };
   const ctx = project.ctx, kinds = await project.kinds(name, plan), { hooks } = project;
@@ -51,6 +57,7 @@ export async function preview(project, name, plan, plants = undefined) {
     problems.push(...checkFit(plan, kinds));
     if (plants && project.plants) problems.push(...checkPlants(plants, plan, kinds, { plantKinds: project.plants.kinds, clearance: project.plants.clearance, tall: project.plants.tall, tallClearance: project.plants.tallClearance }));
   }
+  if (plugins) for (const list of await plugins.runHook('check', { plan, plants: plants ?? null, built, name, kinds })) if (Array.isArray(list)) problems.push(...list);
   for (const m of project.modelProblems ? project.modelProblems() : []) problems.push({ kind: 'model', text: `${m.file}: ${m.error} (drawn as 2 x 2 m)`, sel: [], at: null });
   if (hooks.check) problems.push(...((await hooks.check({ plan, plants: plants ?? null, built, name, kinds }, ctx)) || []));
   const status = hooks.status ? (await hooks.status({ plan, plants: plants ?? null, built, name }, ctx)) || [] : null;
@@ -58,8 +65,13 @@ export async function preview(project, name, plan, plants = undefined) {
 }
 
 /** The server for `project`. `port` is the one it will listen on (the Host check needs it). */
-export function createEditor(initial, { port = initial.port, defaultMap = null, dryRun = false, editorRoot = EDITOR_ROOT, fetchImpl = fetch, home = HOME, stateDir = join(HOME, '.nfgames-editor') } = {}) {
+export function createEditor(initial, { port = initial.port, defaultMap = null, dryRun = false, editorRoot = EDITOR_ROOT, fetchImpl = fetch, home = HOME, stateDir = join(HOME, '.nfgames-editor'), pluginDirs = {} } = {}) {
   let project = initial, jobs = createJobs(project, { dryRun }), startMap = defaultMap;
+  const events = createEvents();
+  const dirs = { builtinDir: join(EDITOR_ROOT, 'plugins'), userDir: join(stateDir, 'plugins'), packagesDir: join(stateDir, 'packages'), ...pluginDirs };
+  const makePlugins = () => createPluginManager({ ...dirs, stateDir, project, jobs, events, log: (...a) => console.error('plugins:', ...a) });
+  let plugins = makePlugins();
+  const ready = plugins.fire('onStartup', 'onProject');
   project.ctx.dryRun = dryRun;
   const fallback = () => startMap || project.defaultMap || project.listMaps()[0] || null;
   /** Opens another project folder (inside home). A config not yet trusted is not run: { needsTrust, config }. */
@@ -73,7 +85,9 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
     if (t === 'ask') trustConfig(stateDir, dir);
     let next;
     try { next = await loadProject({ root: dir }); } catch (e) { throw Object.assign(new Error(e.message), { code: 400 }); }
+    await plugins.close();
     project = next; jobs = createJobs(project, { dryRun }); project.ctx.dryRun = dryRun; startMap = null;
+    plugins = makePlugins(); await plugins.fire('onStartup', 'onProject'); events.emit('project/changed', { root: dir });
     addRecent(stateDir, dir);
     return { ok: true, root: dir, maps: project.listMaps() };
   }
@@ -91,6 +105,8 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       if (req.method === 'GET' && path === '/favicon.ico') { res.writeHead(204); return res.end(); }
       if (req.method === 'GET' && path === '/viewer') return send(200, viewerPage(), 'text/html; charset=utf-8');
       if (req.method === 'GET' && path.startsWith('/vendor/')) { const f = vendorFile(editorRoot, path); return f ? send(200, readFileSync(f.file), f.type) : send(404, { error: 'not here' }); }
+      { const m = req.method === 'GET' && /^\/p\/([a-z0-9.-]+)\/(.+)$/.exec(path);
+        if (m) { let rest; try { rest = decodeURIComponent(m[2]); } catch { rest = ''; } const f = rest.includes('\0') ? null : plugins.asset(m[1], rest); return f ? send(200, readFileSync(f), TYPES[extname(f)] || 'application/octet-stream') : send(404, { error: 'not here' }); } }
       if (req.method === 'GET' && path === '/api/maps') return send(200, { maps: project.listMaps(), default: fallback() });
       if (req.method === 'GET' && path === '/api/job') { const job = jobs.current(), from = Math.max(0, Number(url.searchParams.get('from')) || 0); return send(200, job ? { ...job, log: job.log.slice(from), next: job.log.length } : { state: 'idle', log: '', next: 0 }); }
       if (!path.startsWith('/api/')) return send(404, { error: 'not here' });
@@ -98,6 +114,12 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       if (req.method === 'POST' && !writeAllowed(req.headers, port)) return send(403, { error: 'a write must come from this page, as JSON' });
 
       // the model viewer and the open project: none of this is about a map
+      if (req.method === 'GET' && path === '/api/events') return events.handle(req, res);
+      if (req.method === 'GET' && path === '/api/plugins') return send(200, { api: API_VERSION, plugins: plugins.list() });
+      { const m = req.method === 'POST' && /^\/api\/plugins\/([a-z0-9.-]+)\/(trust|enable|disable|reload)$/.exec(path);
+        if (m) { try { const [, id, verb] = m; if (verb === 'trust') plugins.trust(id); else if (verb === 'reload') await plugins.reload(id); else await plugins.setEnabled(id, verb === 'enable'); return send(200, { plugins: plugins.list() }); } catch (e) { return send(e.code || 500, { error: e.message, plugins: plugins.list() }); } } }
+      { const m = /^\/api\/p\/([a-z0-9.-]+)\/(.*)$/.exec(path);
+        if (m) { const r = await plugins.route(m[1], req.method, m[2], req, res, () => body()); return send(r.status, r.body); } }
       if (req.method === 'GET' && path === '/api/projects') return send(200, { current: { root: project.root, name: basename(project.root), title: project.options.title || null, maps: project.listMaps().length }, recent: recentProjects(stateDir), home: insideHome(home, home) });
       if (req.method === 'GET' && path === '/api/browse') { try { return send(200, browse(home, url.searchParams.get('path') || home)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
       if (req.method === 'POST' && path === '/api/project') { const b = await body(); try { return send(200, await switchProject(b && b.root, { trust: !!b && b.trust === true })); } catch (e) { return send(e.code || 500, { error: e.message }); } }
@@ -126,10 +148,10 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
           actions, ui: project.ui(name), stamps: project.stamps(name),
           plantKinds: p ? p.kinds : {}, plantLabels: p ? p.labels : {}, plantDraw: p ? p.draw : {}, pointKindOf: p ? (p.pointKindOf || Object.fromEntries(Object.entries(p.kinds).filter(([, [, f]]) => f === 1).reverse().map(([k, [b]]) => [b, k]))) : {},
           plantRules: p ? { excludeRadius: p.excludeRadius, debris: p.debris, follows: p.follows, ruleMade: !!project.hooks.ruleMade } : null,
-          ...(await preview(project, name, plan, plants ?? undefined)),
+          ...(await preview(project, name, plan, plants ?? undefined, plugins)),
         });
       }
-      if (req.method === 'POST' && path === '/api/preview') { const { plan, plants } = await body(); return send(200, await preview(project, name, plan, plants ?? undefined)); }
+      if (req.method === 'POST' && path === '/api/preview') { const { plan, plants } = await body(); return send(200, await preview(project, name, plan, plants ?? undefined, plugins)); }
       if (req.method === 'POST' && path === '/api/save') {
         const { plan, plants, stamps } = await body();
         const errors = await project.planErrors(plan, name);
@@ -143,7 +165,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
         const planChanged = project.writePlan(name, plan).changed;
         const plantsChanged = plants ? project.writePlants(name, plants).changed : false;
         const savedPlan = project.readPlan(name), savedPlants = project.readPlants(name);
-        const result = await preview(project, name, savedPlan, savedPlants ?? undefined);
+        const result = await preview(project, name, savedPlan, savedPlants ?? undefined, plugins);
         if (hooks.afterSave) await hooks.afterSave({ name, plan: savedPlan, plants: savedPlants, changed: planChanged || plantsChanged }, ctx);
         return send(200, { ok: true, changed: planChanged || plantsChanged, planChanged, plantsChanged, bytes: statSync(project.planFile(name)).size, plan: savedPlan, plants: savedPlants, stamps: project.stamps(name), ...result });
       }
@@ -168,5 +190,9 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
   Object.defineProperty(server, 'jobs', { get: () => jobs });
   Object.defineProperty(server, 'project', { get: () => project });
   server.switchProject = switchProject;
+  Object.defineProperty(server, 'plugins', { get: () => plugins });
+  server.events = events; server.ready = ready;
+  const closeServer = server.close.bind(server);
+  server.close = (cb) => { events.close(); plugins.close().finally(() => closeServer(cb)); return server; };
   return server;
 }

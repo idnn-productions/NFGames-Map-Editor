@@ -5,7 +5,7 @@
   "description": "A map editor in the browser: a game map's plan (layout.json) from above, on this machine only. Game specifics plug in through a project config file.",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
-  "bin": { "nfgames-map-editor": "bin/nfgames-map-editor.mjs" },
+  "bin": { "nfgames-map-editor": "bin/nfgames-map-editor.mjs", "nfgames": "bin/nfgames.mjs" },
   "main": "src/server.mjs",
   "exports": {
     ".": "./src/server.mjs",
@@ -13,9 +13,10 @@
     "./plan": "./src/plan.mjs",
     "./check": "./src/check.mjs",
     "./schema": "./src/schema.mjs",
-    "./view3d": "./src/view3d.mjs"
+    "./view3d": "./src/view3d.mjs",
+    "./host": "./src/host.mjs"
   },
-  "files": ["bin/", "src/", "schemas/", "skills/", "examples/", "README.md", "LICENSE", "NOTICE"],
+  "files": ["bin/", "plugins/", "src/", "schemas/", "skills/", "examples/", "README.md", "LICENSE", "NOTICE"],
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node bin/nfgames-map-editor.mjs --project examples/sample",
