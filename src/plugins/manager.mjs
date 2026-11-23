@@ -10,7 +10,7 @@ import { matchesAny } from './glob.mjs';
 const readJson = (f, fallback) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return fallback; } };
 const writeJson = (f, v) => { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, `${JSON.stringify(v, null, 2)}\n`); };
 
-export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir, project, jobs, events, log = () => {} }) {
+export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir, project, jobs, events, providers = new Map(), log = () => {} }) {
   let plugins = [];
   const live = new Map(), failures = new Map();
   const disabledFile = join(stateDir, 'plugins-disabled.json'), settingsFile = join(stateDir, 'plugin-settings.json');
@@ -73,6 +73,13 @@ export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir
         post: (path, fn) => { rec.routes.set(`POST ${path}`, fn); return own(() => rec.routes.delete(`POST ${path}`)); },
       },
       events: { emit: (name, data) => events.emit(`${p.id}/${name}`, data) },
+      services: {
+        provide: (service, action, fn) => {
+          const k = `${p.id}/${service}/${action}`;
+          if (!(p.manifest.contributes?.services || []).some((s) => s.id === service && (s.actions || []).some((a) => a.id === action))) throw new Error(`${p.id}: ${service}/${action} is not declared in plugin.json`);
+          providers.set(k, fn); return own(() => { if (providers.get(k) === fn) providers.delete(k); });
+        },
+      },
       hooks: { on: (name, fn) => { rec.hooks.set(name, [...(rec.hooks.get(name) || []), fn]); return own(() => rec.hooks.set(name, (rec.hooks.get(name) || []).filter((f) => f !== fn))); } },
       settings: {
         get: (k) => (k in mine() ? mine()[k] : defaults[k]),

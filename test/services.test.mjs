@@ -1,0 +1,84 @@
+// Services over HTTP: listed from manifests, connected with keys that stay in the editor, called under the spend guard;
+// agent requests answered (after the user's yes when they cost); the agent's status; the Codex image service.
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHost } from '../src/host.mjs';
+import { sampleCopy, writePlugin, REPO } from './helpers.mjs';
+
+const SERVICE = `export function activate(api) {
+  api.services.provide('words', 'shout', async ({ text }, { secret }) => ({ text: String(text).toUpperCase() + '!', keyLength: secret('TOKEN').length }));
+  api.services.provide('words', 'poem', async () => ({ text: 'roses', cost: 0.75 }));
+}`;
+// a stand-in for the codex CLI: writes one PNG where the prompt says
+const CODEX = `#!/usr/bin/env node
+const fs = require('fs'), path = require('path'), prompt = process.argv[process.argv.length - 1], m = /into \\.\\/(\\S+)\\/ named/.exec(prompt);
+const dir = path.join(process.argv[process.argv.indexOf('-C') + 1], m[1]); fs.mkdirSync(dir, { recursive: true });
+fs.writeFileSync(path.join(dir, 'image-1.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47])); console.log('made', dir);`;
+
+describe('services', () => {
+  const port = 21393 + (process.pid % 500), origin = `http://127.0.0.1:${port}`;
+  let top, copy, host, path0;
+  const ask = (p) => fetch(`${origin}${p}`).then((r) => r.json());
+  const post = (p, body) => fetch(`${origin}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
+  const until = async (fn, ms = 6000) => { for (let t = 0; t < ms; t += 100) { const v = await fn(); if (v) return v; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timed out'); };
+  before(async () => {
+    top = realpathSync(mkdtempSync(join(tmpdir(), 'nfgames-services-'))); copy = sampleCopy();
+    const builtinDir = join(top, 'builtin');
+    writePlugin(join(builtinDir, 'words'), { id: 'test.words', server: 'server.mjs', activation: ['onService:words'],
+      contributes: { services: [{ id: 'words', title: 'Words', summary: 'Shouts', provider: 'Test', needs: [{ kind: 'key', name: 'TOKEN', help: 'Paste your token' }],
+        actions: [{ id: 'shout', title: 'Shout', cost: { estimate: 0.01 } }, { id: 'poem', title: 'Poem', cost: { estimate: 0.6 } }] }] } }, { 'server.mjs': SERVICE });
+    mkdirSync(join(builtinDir, 'codex-image'), { recursive: true });
+    for (const f of ['plugin.json', 'server.mjs']) writeFileSync(join(builtinDir, 'codex-image', f), readFileSync(join(REPO, 'plugins', 'codex-image', f)));
+    mkdirSync(join(top, 'bin')); writeFileSync(join(top, 'bin', 'codex'), CODEX); chmodSync(join(top, 'bin', 'codex'), 0o755);
+    path0 = process.env.PATH; process.env.PATH = `${join(top, 'bin')}:${path0}`;
+    host = await createHost({ root: copy.root, port, pluginDirs: { builtinDir, userDir: join(top, 'user'), packagesDir: join(top, 'packages') }, stateDir: join(top, 'state'), home: top, securityBin: null, requestInterval: 100 });
+    await host.listen();
+  });
+  after(async () => { process.env.PATH = path0; await new Promise((d) => host.server.close(d)); copy.done(); rmSync(top, { recursive: true, force: true }); });
+
+  it('lists services with what they need; the key stays in the editor', async () => {
+    const { services, vault } = await ask('/api/services');
+    const words = services.find((s) => s.key === 'test.words/words');
+    assert.equal(words.connected, false); assert.equal(words.needs[0].ok, false); assert.match(vault, /secrets\.json/);
+    assert.equal((await post('/api/services/call', { key: 'test.words/words', action: 'shout', input: { text: 'hi' } })).status, 409);
+    const c = await post('/api/services/connect', { key: 'test.words/words', name: 'TOKEN', value: 'abc123' });
+    assert.equal(c.body.connected, true); assert.doesNotMatch(JSON.stringify(c.body), /abc123/);
+    assert.ok(services.find((s) => s.key === 'nfgames.codex-image/image').needs[0].ok, 'codex found on PATH');
+  });
+  it('a cheap call runs; a costly one asks first; spend is recorded', async () => {
+    const r = await post('/api/services/call', { key: 'test.words/words', action: 'shout', input: { text: 'hi' } });
+    assert.deepEqual(r.body.result, { text: 'HI!', keyLength: 6 });
+    const ask1 = await post('/api/services/call', { key: 'test.words/words', action: 'poem' });
+    assert.equal(ask1.body.needsConfirm, true); assert.match(ask1.body.reason, /about \$0\.60/);
+    assert.equal((await post('/api/services/call', { key: 'test.words/words', action: 'poem', confirmed: true })).body.result.text, 'roses');
+    assert.equal((await ask('/api/services')).services.find((s) => s.key === 'test.words/words').spent, 0.76);
+  });
+  it('an agent\'s request is answered; one that costs waits for the user', async () => {
+    const job = join(copy.root, '.review', '2026-01-01T000000-x', 'requests'); mkdirSync(job, { recursive: true });
+    writeFileSync(join(job, 'one.json'), JSON.stringify({ service: 'test.words/words', action: 'shout', input: { text: 'agent' } }));
+    const a = await until(() => existsSync(join(job, 'one.answer.json')) && JSON.parse(readFileSync(join(job, 'one.answer.json'), 'utf8')));
+    assert.deepEqual(a, { ok: true, result: { text: 'AGENT!', keyLength: 6 } });
+    writeFileSync(join(job, 'two.json'), JSON.stringify({ service: 'test.words/words', action: 'poem' }));
+    const waiting = await until(async () => (await ask('/api/services/requests')).requests[0]);
+    assert.match(waiting.reason, /about \$0\.60/); assert.match(JSON.parse(readFileSync(join(job, 'two.answer.json'), 'utf8')).waiting, /waiting for the user/);
+    assert.equal((await post('/api/services/requests/answer', { id: 'not-a-request', approve: true })).status, 404);
+    await post('/api/services/requests/answer', { id: waiting.id, approve: true });
+    assert.equal((await until(() => { const j = JSON.parse(readFileSync(join(job, 'two.answer.json'), 'utf8')); return j.ok && j; })).result.text, 'roses');
+  });
+  it('the agent\'s status comes from the watcher\'s heartbeat', async () => {
+    assert.equal((await ask('/api/agent')).connected, false);
+    writeFileSync(join(copy.root, '.review', '.agent.json'), JSON.stringify({ agent: 'Claude Code', pid: process.pid, at: Date.now() }));
+    assert.deepEqual(await ask('/api/agent'), { connected: true, agent: 'Claude Code' });
+    writeFileSync(join(copy.root, '.review', '.agent.json'), JSON.stringify({ agent: 'Claude Code', pid: process.pid, at: Date.now() - 120000 }));
+    assert.equal((await ask('/api/agent')).connected, false);
+  });
+  it('image generation through Codex', async () => {
+    const r = await post('/api/services/call', { key: 'nfgames.codex-image/image', action: 'generate', input: { prompt: 'a weathered hull plate' } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.result.images.length, 1); assert.match(r.body.result.images[0], /^\.nfgames\/images\/.+\/image-1\.png$/);
+    assert.ok(existsSync(join(copy.root, r.body.result.images[0])));
+  });
+});

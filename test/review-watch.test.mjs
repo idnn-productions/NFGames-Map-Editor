@@ -2,7 +2,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sampleCopy, REPO } from './helpers.mjs';
 
@@ -23,6 +23,7 @@ describe('review-watch', () => {
       assert.equal(out.match(/NEW JOB/g).length, 2);
       assert.ok(!out.includes('-b'));
       assert.match(out, /^WATCHING \.review/);
+      assert.equal(JSON.parse(readFileSync(join(copy.root, '.review', '.agent.json'), 'utf8')).agent, 'an agent');
     } finally { child.kill(); copy.done(); }
   });
 });

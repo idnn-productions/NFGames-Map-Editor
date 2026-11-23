@@ -24,6 +24,19 @@ import { HOME, addRecent, browse, configTrust, insideHome, recentProjects, trust
 import { createEvents } from './events.mjs';
 import { createPluginManager } from './plugins/manager.mjs';
 import { API_VERSION } from './plugins/manifest.mjs';
+import { createVault } from './vault.mjs';
+import { createSpend } from './spend.mjs';
+import { createServices } from './services.mjs';
+import { createRequestLoop } from './requests.mjs';
+
+/** The connected agent, from the watcher's heartbeat: fresh (under 60 s) and its process alive. */
+function agentStatus(reviewsDir) {
+  try {
+    const a = JSON.parse(readFileSync(join(reviewsDir, '.agent.json'), 'utf8'));
+    let alive = false; try { process.kill(a.pid, 0); alive = true; } catch (e) { alive = e.code === 'EPERM'; }
+    return Date.now() - a.at < 60000 && alive ? { connected: true, agent: String(a.agent || 'an agent') } : { connected: false };
+  } catch { return { connected: false }; }
+}
 
 const TYPES = { '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.html': 'text/html; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8' };
 
@@ -77,12 +90,15 @@ export async function preview(project, name, plan, plants = undefined, plugins =
 }
 
 /** The server for `project`. `port` is the one it will listen on (the Host check needs it). */
-export function createEditor(initial, { port = initial.port, defaultMap = null, dryRun = false, editorRoot = EDITOR_ROOT, fetchImpl = fetch, home = HOME, stateDir = join(HOME, '.nfgames-editor'), pluginDirs = {} } = {}) {
+export function createEditor(initial, { port = initial.port, defaultMap = null, dryRun = false, editorRoot = EDITOR_ROOT, fetchImpl = fetch, home = HOME, stateDir = join(HOME, '.nfgames-editor'), pluginDirs = {}, securityBin = undefined, requestInterval = 2000 } = {}) {
   let project = initial, jobs = createJobs(project, { dryRun }), startMap = defaultMap;
   const events = createEvents();
   const dirs = { builtinDir: join(EDITOR_ROOT, 'plugins'), userDir: join(stateDir, 'plugins'), packagesDir: join(stateDir, 'packages'), ...pluginDirs };
-  const makePlugins = () => createPluginManager({ ...dirs, stateDir, project, jobs, events, log: (...a) => console.error('plugins:', ...a) });
+  const providers = new Map(), vault = createVault({ stateDir, ...(securityBin !== undefined ? { securityBin } : {}) }), spend = createSpend({ stateDir });
+  const makePlugins = () => createPluginManager({ ...dirs, stateDir, project, jobs, events, providers, log: (...a) => console.error('plugins:', ...a) });
   let plugins = makePlugins();
+  const services = createServices({ listPlugins: () => plugins.list(), activate: (id) => plugins.activate(id), providers, vault, spend, events });
+  let requests = createRequestLoop({ reviewsDir: project.reviewsDir, services, events, interval: requestInterval });
   const ready = plugins.fire('onStartup', 'onProject');
   project.ctx.dryRun = dryRun;
   const fallback = () => startMap || project.defaultMap || project.listMaps()[0] || null;
@@ -100,6 +116,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
     await plugins.close();
     project = next; jobs = createJobs(project, { dryRun }); project.ctx.dryRun = dryRun; startMap = null;
     plugins = makePlugins(); await plugins.fire('onStartup', 'onProject'); events.emit('project/changed', { root: dir });
+    requests.stop(); requests = createRequestLoop({ reviewsDir: project.reviewsDir, services, events, interval: requestInterval });
     addRecent(stateDir, dir);
     return { ok: true, root: dir, maps: project.listMaps() };
   }
@@ -131,6 +148,17 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       // the model viewer and the open project: none of this is about a map
       if (req.method === 'GET' && path === '/api/events') return events.handle(req, res);
       if (req.method === 'GET' && path === '/api/plugins') return send(200, { api: API_VERSION, plugins: plugins.list() });
+      if (req.method === 'GET' && path === '/api/services') return send(200, { services: services.list(), vault: vault.where, threshold: spend.threshold() });
+      if (req.method === 'GET' && path === '/api/services/requests') return send(200, { requests: requests.pending() });
+      if (req.method === 'GET' && path === '/api/agent') return send(200, agentStatus(project.reviewsDir));
+      { const m = req.method === 'POST' && /^\/api\/services\/(connect|disconnect|budget|call|requests\/answer)$/.exec(path);
+        if (m) { const b = (await body()) || {}; try {
+          if (m[1] === 'connect') return send(200, services.connect(b.key, b.name, b.value));
+          if (m[1] === 'disconnect') return send(200, services.disconnect(b.key));
+          if (m[1] === 'budget') return send(200, services.setBudget(b.key, b.amount ?? null));
+          if (m[1] === 'call') return send(200, await services.call(b.key, b.action, b.input, { confirmed: b.confirmed === true }));
+          await requests.answer(String(b.id), b.approve === true); return send(200, { ok: true });
+        } catch (e) { return send(e.code || 500, { error: e.message }); } } }
       { const m = req.method === 'POST' && /^\/api\/plugins\/([a-z0-9.-]+)\/(trust|enable|disable|reload|activate)$/.exec(path);
         if (m) { try { const [, id, verb] = m; if (verb === 'trust') plugins.trust(id); else if (verb === 'reload') await plugins.reload(id); else if (verb === 'activate') await plugins.activate(id); else await plugins.setEnabled(id, verb === 'enable'); return send(200, { plugins: plugins.list() }); } catch (e) { return send(e.code || 500, { error: e.message, plugins: plugins.list() }); } } }
       { const m = /^\/api\/plugins\/([a-z0-9.-]+)\/settings$/.exec(path);
@@ -210,6 +238,6 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
   Object.defineProperty(server, 'plugins', { get: () => plugins });
   server.events = events; server.ready = ready;
   const closeServer = server.close.bind(server);
-  server.close = (cb) => { events.close(); plugins.close().finally(() => closeServer(cb)); return server; };
+  server.close = (cb) => { requests.stop(); events.close(); plugins.close().finally(() => closeServer(cb)); return server; };
   return server;
 }
