@@ -17,7 +17,8 @@ header { grid-column: 1 / 4; display: flex; align-items: center; gap: 12px; padd
 header h1 { font-size: 14px; margin: 0; font-weight: 600; } header .grow { flex: 1; } header a { color: var(--dim); }
 aside { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px; }
 #right { border-right: 0; border-left: 1px solid var(--line); }
-main { position: relative; overflow: hidden; }
+main { display: flex; min-width: 0; overflow: hidden; }
+#main { position: relative; flex: 1; min-width: 0; overflow: hidden; }
 #view { display: block; width: 100%; height: 100%; }
 button, select, input, textarea { font: inherit; color: var(--text); background: #252a35; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
 button { cursor: pointer; } button:disabled { opacity: .45; cursor: default; } button.on { border-color: var(--accent); color: var(--accent); }
@@ -48,13 +49,28 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
 #status { position: absolute; bottom: 8px; left: 10px; font-size: 12px; }
 #zoom { position: fixed; inset: 0; background: rgba(0, 0, 0, .8); display: none; place-items: center; z-index: 9; cursor: zoom-out; }
 #zoom img { max-width: 90vw; max-height: 90vh; }
-main.pinning #view { cursor: crosshair; }
+#main.pinning #view { cursor: crosshair; }
+/* the model's own reference images: a strip of thumbnails over the foot of the 3D view, and one of them large beside it */
+#modelRefs { position: absolute; left: 10px; bottom: 32px; max-width: calc(100% - 20px); background: rgba(28, 32, 41, .9); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px 6px; }
+#modelRefs h2 { margin: 0; cursor: pointer; user-select: none; } #modelRefs.closed .strip { display: none; }
+#modelRefs .strip { display: flex; gap: 6px; overflow-x: auto; margin-top: 4px; }
+.mref { flex: none; display: grid; justify-items: center; gap: 1px; padding: 3px; background: none; border: 1px solid transparent; font-size: 11px; color: var(--dim); }
+.mref img { display: block; width: 56px; height: 56px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); background: #252a35; }
+.mref span { max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mref:hover span { color: var(--text); } .mref.on { border-color: var(--accent); } .mref.on span { color: var(--accent); }
+#refPanel { position: relative; flex: none; width: 42%; min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
+#refPanel .bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
+#refPanel .bar b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #refPanel .bar .grow { flex: 1; }
+#refPanel .pic { flex: 1; min-height: 0; display: grid; place-items: center; padding: 8px; }
+#refPanel .pic img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
+#refGrip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; } #refGrip:hover, #refGrip.drag { background: var(--accent); opacity: .5; }
 </style>
 </head>
 <body>
 <header><h1>Model review</h1><span class="grow"></span></header>
 <aside id="left"><button id="newModel" class="primary" hidden title="Describe a model, approve a concept image and its views">＋ New model</button><input id="filter" placeholder="filter models" autocomplete="off"><div id="drafts"></div><div id="models" class="dim">loading…</div></aside>
-<main id="main">
+<main>
+ <div id="main">
   <canvas id="view"></canvas>
   <div id="toolbar" hidden>
     <button id="pinMode" title="Pin mode (P): click the model to drop a pin; drag a pin to move it">📍 Pin</button>
@@ -63,8 +79,16 @@ main.pinning #view { cursor: crosshair; }
     <button id="wire" title="Wireframe">Wire</button>
     <button id="gridBtn" title="The floor grid (the same switch as the map's grid)">Grid</button>
   </div>
+  <div id="modelRefs" hidden><h2 id="refsHead" title="The images this model was made from. Click to fold">References</h2><div class="strip" id="refStrip"></div></div>
   <div id="status" class="dim"></div>
   <div id="overlay"><div id="overlayBody"></div></div>
+ </div>
+ <div id="refPanel" hidden>
+  <div id="refGrip" title="Drag to resize"></div>
+  <div class="bar"><b id="refName"></b><span id="refCount" class="dim"></span><span class="grow"></span>
+   <button id="refPrev" title="Previous reference (←)">‹</button><button id="refNext" title="Next reference (→)">›</button><button id="refClose" title="Close (Esc)">×</button></div>
+  <div class="pic"><img id="refImg" alt="" title="Click to see it at full size"></div>
+ </div>
 </main>
 <aside id="right">
   <h2>Pins</h2><div id="pins" class="dim">Open a model, then use 📍 Pin (P).</div>
@@ -79,7 +103,7 @@ main.pinning #view { cursor: crosshair; }
 <script src="/shell/grid.js"></script>
 <script src="/shell/tree.js"></script>
 <script type="module">
-// The model viewer: a game's .glb files, pins with notes and reference images, and Send, which writes a review job
+// The model viewer: a game's .glb files beside the images they were made from, pins with notes and reference images, and Send, which writes a review job
 // for a Claude Code session (see the README, "Model review"). three.js is installed on demand from the Install button.
 // in the workbench, the model list is lent to its side panel: look there too
 document.head.append(Object.assign(document.createElement('style'), { textContent: nfTree.css }));   // before the column is lent: it takes the page's styles along
@@ -109,6 +133,7 @@ let model = null, modelPath = null, models = [], pinMode = false, wire = false, 
 let draft = { note: '', workflow: 'auto', pins: [] }; // a pin: { position, normal, mesh, material, uv, camera, screenshot, note, refs: [data URL] }
 const markers = [];                                    // a sprite per draft pin (in order), then the sent ones
 const sent = new Map();                                // job id → { model, positions }: greyed pins until the job finishes
+let refs = [], refAt = -1;                             // the model's own reference images ([{ name, size, mtime }]) and the one shown large (-1: none)
 
 // ---- drafts, one per model, in IndexedDB (images make them too big for localStorage)
 const db = await new Promise((done, fail) => { const r = indexedDB.open('model-review', 1); r.onupgradeneeded = () => r.result.createObjectStore('drafts'); r.onsuccess = () => done(r.result); r.onerror = () => fail(r.error); });
@@ -245,9 +270,61 @@ async function openModel(m, { keepCamera = false } = {}) {
   draft = (await loadDraft(modelPath)) || { note: '', workflow: $('workflow').value, pins: [] };
   $('note').value = draft.note || '';
   if (draft.workflow && [...$('workflow').options].some((o) => o.value === draft.workflow && !o.disabled)) $('workflow').value = draft.workflow;
-  rebuildMarkers(); drawPins(); updateSend();
+  rebuildMarkers(); drawPins(); updateSend(); loadRefs(m.path);
   let tris = 0; model.traverse((o) => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
   say(`${m.path} · ${Math.round(tris).toLocaleString()} triangles`);
+}
+
+// ---- the model's own reference images: the files of <name>.refs/ beside the .glb (see the README, "Reference images")
+const keep = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private window: not remembered */ } } };
+const refLabel = (r) => r.name.replace(/\.[^.]+$/, '');
+const refUrl = (r) => `/api/model/ref?path=${encodeURIComponent(modelPath)}&name=${encodeURIComponent(r.name)}&t=${r.mtime}`;
+async function loadRefs(path) {
+  const was = refAt >= 0 ? refs[refAt].name : null;
+  let list = []; try { list = (await api(`/api/model/refs?path=${encodeURIComponent(path)}`)).refs; } catch { /* an older server, or it is restarting: no references shown */ }
+  if (path !== modelPath) return;                       // another model was opened meanwhile
+  refs = list; refAt = -1;
+  $('modelRefs').hidden = !refs.length;
+  $('refsHead').textContent = `References (${refs.length})`;
+  $('refStrip').replaceChildren(...refs.map((r, i) => el('button', { className: 'mref', title: `${r.name} · ${(r.size / MB).toFixed(1)} MB`, onclick: () => showRef(refAt === i ? -1 : i) }, el('img', { src: refUrl(r), alt: '', loading: 'lazy' }), el('span', { textContent: refLabel(r) }))));
+  // a reference left open stays open on the next model (the same view when it has one), so models can be compared in turn
+  showRef(was === null || !refs.length ? -1 : Math.max(0, refs.findIndex((r) => r.name === was)));
+}
+const stepRef = (by) => { if (refAt >= 0) showRef((refAt + by + refs.length) % refs.length); };   // round and round
+function showRef(i) {
+  refAt = i >= 0 && i < refs.length ? i : -1;
+  $('refPanel').hidden = refAt < 0;
+  [...$('refStrip').children].forEach((b, j) => b.classList.toggle('on', j === refAt));
+  if (refAt < 0) { $('refImg').removeAttribute('src'); return; }
+  const r = refs[refAt];
+  $('refName').textContent = refLabel(r); $('refCount').textContent = `${refAt + 1} / ${refs.length}`;
+  $('refImg').src = refUrl(r); $('refImg').alt = `reference: ${refLabel(r)}`;
+  $('refPrev').disabled = $('refNext').disabled = refs.length < 2;
+  refWidth();
+  $('refStrip').children[refAt]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+// the open reference's width: what was dragged or kept, never so wide that the model is left without room
+function refWidth(w = parseFloat($('refPanel').style.width)) { const pane = $('refPanel'); if (Number.isFinite(w)) pane.style.width = `${Math.round(Math.max(180, Math.min(w, pane.parentElement.clientWidth - 240)))}px`; }
+function wireRefs() {
+  const pane = $('refPanel'), grip = $('refGrip'), box = $('modelRefs'), width = refWidth;
+  const kept = Number(keep.get('viewer-ref-width')); if (kept > 0) width(kept);
+  let drag = false;
+  grip.addEventListener('pointerdown', (e) => { e.preventDefault(); drag = true; grip.classList.add('drag'); try { grip.setPointerCapture(e.pointerId); } catch { /* no such pointer: the drag still works while it stays on the grip */ } });
+  grip.addEventListener('pointermove', (e) => { if (drag) width(pane.getBoundingClientRect().right - e.clientX); });
+  for (const end of ['pointerup', 'pointercancel']) grip.addEventListener(end, () => { if (!drag) return; drag = false; grip.classList.remove('drag'); keep.set('viewer-ref-width', String(Math.round(pane.getBoundingClientRect().width))); });
+  addEventListener('resize', () => { if (!pane.hidden) width(); });
+  box.classList.toggle('closed', keep.get('viewer-refs-closed') === '1');
+  $('refsHead').onclick = () => keep.set('viewer-refs-closed', box.classList.toggle('closed') ? '1' : '0');
+  $('refPrev').onclick = () => stepRef(-1); $('refNext').onclick = () => stepRef(1); $('refClose').onclick = () => showRef(-1);
+  $('refImg').onclick = () => zoom($('refImg').src);
+  // Escape closes what is on top first: the full-size picture, then pin mode (the 3D view's own handler), then the reference
+  addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('zoom').style.display === 'grid') { $('zoom').style.display = 'none'; return; }
+    if (refAt < 0 || e.target.closest?.('textarea, input, select')) return;
+    if (e.key === 'Escape' && !pinMode) showRef(-1);
+    if (e.key === 'ArrowLeft') stepRef(-1);
+    if (e.key === 'ArrowRight') stepRef(1);
+  }, true);                                             // capturing: it sees pin mode as it was before the 3D view's handler ends it
 }
 
 // ---- pins
@@ -409,6 +486,7 @@ $('note').oninput = () => { draft.note = $('note').value; saveDraft(); updateSen
 $('workflow').onchange = () => { draft.workflow = $('workflow').value; saveDraft(); };
 $('send').onclick = send;
 $('zoom').onclick = () => { $('zoom').style.display = 'none'; };
+wireRefs();
 info = await api('/api/viewer');
 document.title = `${info.title ? `${info.title}: ` : ''}model review`;
 for (const w of info.workflows) $('workflow').append(el('option', { value: w.id, textContent: w.enabled ? w.label : `${w.label} (not set up yet)`, disabled: !w.enabled, title: w.description }));
