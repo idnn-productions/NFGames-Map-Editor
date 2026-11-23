@@ -7,6 +7,7 @@ import { createCommands, rank } from './core/commands.js';
 import { createSelection } from './core/selection.js';
 import { createDocuments } from './core/documents.js';
 import { contributionsOf } from './core/contributions.js';
+import { lentFor } from './core/lent.js';
 import { h, toast, dialog, confirmDialog } from './ui.js';
 
 const $ = (id) => document.getElementById(id);
@@ -163,19 +164,36 @@ async function setTool(key) {
 // The side panel shows the selected item: a tool picked in the rail, else the shown tab's own panel (the map editor's
 // pieces, Show, Legend and Keys; the model viewer's models), which its page lends while the tab is shown.
 let sideCleanup = null;
-function tabPanel() {
+/** What the shown tab's page lends (see lend.js), by region; null when the tab is not a page or lends nothing. */
+function lentParts() {
   const d = documents.active(), m = d && mounted.get(d.id), f = m && m.el.querySelector('iframe');
-  try { return (f && f.contentWindow && f.contentWindow.__nfPanel) || null; } catch { return null; }
+  try { return (f && f.contentWindow && f.contentWindow.__nfLent) || null; } catch { return null; }
+}
+const lent = (region) => lentFor(region, { activeTool, frame: lentParts() });
+/** Shows a lent part in a region's body, once: drawing the region again leaves a part that is already there alone. */
+const shownLent = { inspector: null, bottom: null };
+function showLent(region, part, body) {
+  if (shownLent[region] === part) return;
+  hideLent(region);
+  body.classList.add('flush');
+  const host = h('div', { className: 'lent' }); body.replaceChildren(host);
+  try { part.mount(host); shownLent[region] = part; } catch (e) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: `${part.title}: ${e.message}` })); }
+}
+function hideLent(region) {
+  const part = shownLent[region]; if (!part) return;
+  shownLent[region] = null;
+  try { part.unmount(); } catch { /* its tab is gone */ }
+  $(region === 'inspector' ? 'inspectorBody' : 'bottomBody').classList.remove('flush');
 }
 function renderSide() {
   if (typeof sideCleanup === 'function') sideCleanup(); sideCleanup = null;
   const t = model.tools.find((x) => x.key === activeTool), body = $('sideBody');
   $('sideTitle').textContent = t ? t.title : 'Tools'; body.classList.remove('flush');
-  const lent = !t && tabPanel();
-  if (lent) {
-    $('sideTitle').textContent = lent.title; body.classList.add('flush');
+  const part = lent('side');
+  if (part) {
+    $('sideTitle').textContent = part.title; body.classList.add('flush');
     const host = h('div', { className: 'lent' }); body.replaceChildren(host);
-    try { lent.mount(host); sideCleanup = () => { try { lent.unmount(); } catch { /* its tab is gone */ } }; } catch (e) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: `${lent.title}: ${e.message}` })); }
+    try { part.mount(host); sideCleanup = () => { try { part.unmount(); } catch { /* its tab is gone */ } }; } catch (e) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: `${part.title}: ${e.message}` })); }
     return;
   }
   if (!t) {
@@ -217,9 +235,10 @@ let shownDoc = null;
 documents.on(() => {
   renderDocs(); renderStatus(); renderViews();
   const now = documents.active()?.id ?? null;
-  if (now !== shownDoc) { shownDoc = now; activeTool = null; renderActivity(); renderSide(); }
+  if (now !== shownDoc) { shownDoc = now; activeTool = null; renderActivity(); renderSide(); renderInspector(); renderBottom(); }
 });
-document.addEventListener('nf:panel', () => { if (!activeTool) renderSide(); });
+document.addEventListener('nf:panel', () => { if (!activeTool) renderSide(); renderInspector(); renderBottom(); });
+document.addEventListener('nf:title', () => { const i = lent('inspector'); if (i) $('inspectorTitle').textContent = i.title; renderBottom(); });
 // Home: a place to start, for now
 async function renderHomeScreen(el) {
   const p = (await json('/api/projects').catch(() => ({ current: {} }))).current;
@@ -230,8 +249,12 @@ async function renderHomeScreen(el) {
 
 let inspectorCleanups = [];
 function renderInspector() {
+  const sel = selection.get(), body = $('inspectorBody'), part = lent('inspector');
+  // the shown page's own part (the map's Selected, the viewer's review) takes the Inspector while its tab is shown
+  $('inspectorTitle').textContent = part ? part.title : 'Inspector';
+  if (part) { for (const c of inspectorCleanups.splice(0)) if (typeof c === 'function') c(); showLent('inspector', part, body); return; }
+  hideLent('inspector');
   for (const c of inspectorCleanups.splice(0)) if (typeof c === 'function') c();
-  const sel = selection.get(), body = $('inspectorBody');
   if (!sel.type) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: 'Nothing selected.' })); return; }
   const wanted = model.inspectors.filter((i) => i.for === sel.type);
   body.replaceChildren(h('p', { className: 'nf-muted', textContent: `${sel.items.length} selected (${sel.type})` }));
@@ -245,8 +268,13 @@ selection.on(() => { renderInspector(); renderStatus(); });
 
 function renderBottom() {
   const tabs = [{ key: 'core/jobs', title: 'Jobs' }, { key: 'core/problems', title: `Problems${countProblems() ? ` (${countProblems()})` : ''}` }, { key: 'core/output', title: 'Output' }, ...model.panels.filter((p) => p.region === 'bottom')];
+  const part = lent('bottom'), lentKey = part && `lent/${part.key}`;
+  if (part) tabs.push({ key: lentKey, title: part.title });
+  if (bottomTab.startsWith('lent/') && bottomTab !== lentKey) bottomTab = 'core/jobs';   // that page's tab is no longer shown
+  if (bottomTab !== lentKey || !part) hideLent('bottom');
   $('bottomTabs').replaceChildren(...tabs.map((t) => h('span', { className: `nf-tab${bottomTab === t.key ? ' on' : ''}`, textContent: t.title, onclick: () => { bottomTab = t.key; renderBottom(); } })));
   const body = $('bottomBody');
+  if (part && bottomTab === lentKey) return showLent('bottom', part, body);
   if (bottomTab === 'core/jobs') return renderJobs(body);
   if (bottomTab === 'core/problems') { const all = [...problems.values()].flat(); body.replaceChildren(all.length ? h('ul', { className: 'nf-log' }, ...all.map((p) => h('li', { textContent: `${p.kind || 'problem'}  ${p.text}  (${p.plugin})` }))) : h('p', { className: 'nf-muted', textContent: 'No problems.' })); return; }
   if (bottomTab === 'core/output') { body.replaceChildren(h('pre', { className: 'nf-log', textContent: output.join('\n') || 'Nothing yet.' })); return; }

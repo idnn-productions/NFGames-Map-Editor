@@ -11,7 +11,7 @@
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
 body { display: grid; grid-template-columns: 260px 1fr 340px; grid-template-rows: 40px 1fr; height: 100vh; }
 /* inside the workbench (a tab) the workbench's top bar is the only one */
-body.framed { grid-template-rows: 1fr; } body.framed > header { display: none; } body.lent { grid-template-columns: 1fr 340px; }
+body.framed { grid-template-rows: 1fr; } body.framed > header { display: none; } body.lent-side { grid-template-columns: 1fr 340px; }
 header { grid-column: 1 / 4; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 header h1 { font-size: 14px; margin: 0; font-weight: 600; } header .grow { flex: 1; } header a { color: var(--dim); }
 aside { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px; }

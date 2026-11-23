@@ -8,6 +8,7 @@ import { createCommands, rank } from '../src/shell/core/commands.js';
 import { createSelection } from '../src/shell/core/selection.js';
 import { createDocuments } from '../src/shell/core/documents.js';
 import { contributionsOf } from '../src/shell/core/contributions.js';
+import { lentFor } from '../src/shell/core/lent.js';
 
 const ev = (key, mods = {}) => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
 
@@ -63,5 +64,19 @@ describe('contributions', () => {
       { id: 'c.d', name: 'CD', state: 'needs-trust', contributes: { tools: [{ id: 'x' }] } }]);
     assert.deepEqual(c.tools.map((t) => [t.key, t.event]), [['a.b/t', 'onTool:t']]);
     assert.equal(c.commands[0].category, 'AB'); assert.equal(c.panels[0].region, 'bottom'); assert.equal(c.settings[0].plugin, 'a.b');
+  });
+});
+
+describe('what a framed page lends', () => {
+  const frame = { side: { title: 'S' }, inspector: { title: 'I' }, bottom: { title: 'B', key: 'reviews' } };
+  it('the side panel takes the page\'s part unless a tool is picked; the Inspector and the bottom panel always do', () => {
+    assert.equal(lentFor('side', { activeTool: null, frame }), frame.side);
+    assert.equal(lentFor('side', { activeTool: 'x/tool', frame }), null);
+    assert.equal(lentFor('inspector', { activeTool: 'x/tool', frame }), frame.inspector);
+    assert.equal(lentFor('bottom', { activeTool: null, frame }), frame.bottom);
+  });
+  it('nothing is lent without a frame, or for a region the page keeps', () => {
+    assert.equal(lentFor('bottom', { activeTool: null, frame: null }), null);
+    assert.equal(lentFor('inspector', { activeTool: null, frame: { side: frame.side } }), null);
   });
 });
