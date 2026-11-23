@@ -1,7 +1,12 @@
 /* The workbench's regions. Hiding a region (commands "Toggle …") collapses its grid track. */
 #wb { display: grid; height: 100vh; grid-template-columns: 46px var(--side-w, 260px) 1fr var(--inspector-w, 280px); grid-template-rows: 40px 1fr var(--bottom-h, 190px) 24px; }
-#wb.no-side { --side-w: 0px; } #wb.no-inspector { --inspector-w: 0px; } #wb.no-bottom { --bottom-h: 0px; }
-#wb.no-side #side, #wb.no-inspector #inspector, #wb.no-bottom #bottom { display: none; }
+#wb.no-side { --side-w: 0px !important; } #wb.no-inspector { --inspector-w: 0px !important; } #wb.no-bottom { --bottom-h: 29px; }
+#wb.no-side #side, #wb.no-inspector #inspector, #wb.no-bottom #bottomBody, #wb.no-side #sideGrip, #wb.no-inspector #inspectorGrip { display: none; }
+#wb.no-bottom #bottomTabs { border-bottom: 0; }
+/* the grips on the side panel's and the Inspector's inner edges */
+.grip { grid-row: 2 / 4; width: 7px; cursor: col-resize; z-index: 5; } .grip:hover, #wb.dragging .grip { background: color-mix(in srgb, var(--nf-accent) 35%, transparent); }
+#sideGrip { grid-column: 2; justify-self: end; margin-right: -4px; } #inspectorGrip { grid-column: 4; justify-self: start; margin-left: -4px; }
+#wb.dragging { cursor: col-resize; user-select: none; } #wb.dragging iframe { pointer-events: none; }
 #top { grid-column: 1 / 5; grid-row: 1; display: flex; align-items: center; gap: var(--nf-s3); padding: 0 var(--nf-s3); background: var(--nf-panel); border-bottom: 1px solid var(--nf-line); }
 #top { white-space: nowrap; overflow: hidden; } #top .brand { color: var(--nf-accent); } #top #nfnav { flex: none; }
 #top .status-zone { display: flex; gap: var(--nf-s3); align-items: center; flex: none; font-size: 12px; }
@@ -49,3 +54,6 @@
 .layout button:hover { color: var(--nf-text); background: var(--nf-raised); } .layout button[aria-pressed=true] { color: var(--nf-accent); }
 .region-body.flush { padding: 0; } .region-body > .lent { height: 100%; }
 .act-sep { width: 22px; border: 0; border-top: 1px solid var(--nf-line); margin: 4px auto; } .layout-sep { width: 1px; margin: 4px 2px; background: var(--nf-line); }
+
+.nf-problems { list-style: none; padding: 0 var(--nf-s3); } .nf-problems li { padding: 2px 0; } .nf-problems li.go { cursor: pointer; } .nf-problems li.go:hover { color: var(--nf-accent); }
+.nf-problems li b { color: var(--nf-warn); font-weight: 600; } .nf-problems li.error b { color: var(--nf-error); }

@@ -8,6 +8,9 @@ import { createCommands, rank } from '../src/shell/core/commands.js';
 import { createSelection } from '../src/shell/core/selection.js';
 import { createDocuments } from '../src/shell/core/documents.js';
 import { contributionsOf } from '../src/shell/core/contributions.js';
+import { lentFor } from '../src/shell/core/lent.js';
+import { createProblems } from '../src/shell/core/problems.js';
+import { DEFAULTS, clampWidths, readLayout, writeLayout } from '../src/shell/core/layout.js';
 
 const ev = (key, mods = {}) => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
 
@@ -63,5 +66,62 @@ describe('contributions', () => {
       { id: 'c.d', name: 'CD', state: 'needs-trust', contributes: { tools: [{ id: 'x' }] } }]);
     assert.deepEqual(c.tools.map((t) => [t.key, t.event]), [['a.b/t', 'onTool:t']]);
     assert.equal(c.commands[0].category, 'AB'); assert.equal(c.panels[0].region, 'bottom'); assert.equal(c.settings[0].plugin, 'a.b');
+  });
+});
+
+describe('what a framed page lends', () => {
+  const frame = { side: { title: 'S' }, inspector: { title: 'I' }, bottom: { title: 'B', key: 'reviews' } };
+  it('the side panel takes the page\'s part unless a tool is picked; the Inspector and the bottom panel always do', () => {
+    assert.equal(lentFor('side', { activeTool: null, frame }), frame.side);
+    assert.equal(lentFor('side', { activeTool: 'x/tool', frame }), null);
+    assert.equal(lentFor('inspector', { activeTool: 'x/tool', frame }), frame.inspector);
+    assert.equal(lentFor('bottom', { activeTool: null, frame }), frame.bottom);
+  });
+  it('nothing is lent without a frame, or for a region the page keeps', () => {
+    assert.equal(lentFor('bottom', { activeTool: null, frame: null }), null);
+    assert.equal(lentFor('inspector', { activeTool: null, frame: { side: frame.side } }), null);
+  });
+});
+
+describe('problems, from plugins and from the shown page', () => {
+  it('a source sets its list, clears it, and is dropped; clicking one goes to it', () => {
+    const p = createProblems(); let changes = 0, went = null; p.on(() => changes++);
+    p.set('map', [{ kind: 'door', text: 'x' }, { kind: 'fit', text: 'y' }], (i) => { went = i; });
+    p.set('nfgames.hello', [{ kind: 'hello', text: 'z' }]);
+    assert.equal(p.count(), 3);
+    assert.deepEqual(p.all().map((x) => [x.source, x.kind, x.text]), [['map', 'door', 'x'], ['map', 'fit', 'y'], ['nfgames.hello', 'hello', 'z']]);
+    p.go(p.all()[1]); assert.equal(went, 1);
+    p.go(p.all()[2]);   // a source with nowhere to go: nothing happens
+    p.set('map', []); assert.equal(p.count(), 1);
+    p.drop('nfgames.hello'); assert.equal(p.count(), 0); assert.equal(changes, 4);
+  });
+  it('a list that is not one is no problems', () => {
+    const p = createProblems(); p.set('map', null); assert.equal(p.count(), 0);
+  });
+});
+
+describe('the workbench\'s layout', () => {
+  it('widths are kept as set when they fit', () => {
+    assert.deepEqual(clampWidths({ side: 260, inspector: 280 }, 1440), { side: 260, inspector: 280 });
+  });
+  it('a panel is at least 200 px, and the documents keep 320', () => {
+    assert.deepEqual(clampWidths({ side: 100, inspector: 900 }, 1440), { side: 200, inspector: 874 });
+    const w = clampWidths({ side: 500, inspector: 500 }, 1024);
+    assert.ok(w.side >= 200 && w.inspector >= 200 && 1024 - 46 - w.side - w.inspector >= 320, JSON.stringify(w));
+  });
+  it('a window too narrow for both panels gives up the Inspector', () => {
+    assert.deepEqual(clampWidths({ side: 260, inspector: 280 }, 700), { side: 200, inspector: 0 });
+  });
+  it('numbers that are not numbers fall back to the defaults', () => {
+    assert.deepEqual(clampWidths({ side: 'x', inspector: undefined }, 1440), { side: DEFAULTS.side, inspector: DEFAULTS.inspector });
+  });
+  it('the bottom panel rests as a strip unless it was opened; what was kept before is read', () => {
+    assert.deepEqual(readLayout('not json'), DEFAULTS); assert.deepEqual(readLayout(null), DEFAULTS);
+    assert.deepEqual(DEFAULTS.hidden, ['bottom']);
+    assert.deepEqual(readLayout('["bottom"]').hidden, ['bottom']);
+    assert.deepEqual(readLayout('["side"]').hidden.sort(), ['bottom', 'side']);   // the old list of hidden panels: the bottom was open by default then
+    const kept = readLayout(writeLayout({ hidden: ['inspector'], side: 300, inspector: 400 }));
+    assert.deepEqual(kept, { hidden: ['inspector'], side: 300, inspector: 400 });
+    assert.deepEqual(readLayout('{"hidden":["nonsense","side"],"side":"wide"}'), { hidden: ['side'], side: 260, inspector: 280 });
   });
 });

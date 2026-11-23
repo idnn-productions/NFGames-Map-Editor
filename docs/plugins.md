@@ -25,7 +25,7 @@ my-plugin/
   "id": "studio.terrain-tools",            // lower case, reverse-domain style; namespaces everything the plugin adds
   "name": "Terrain tools",
   "version": "1.2.0",                       // x.y.z
-  "engines": { "nfgames": "^1.0.0" },       // the plugin API it needs (this editor: 1.0.0); otherwise it stays off
+  "engines": { "nfgames": "^1.0.0" },       // the plugin API it needs (this editor: 1.1.0); otherwise it stays off
   "server": "server.mjs",                   // optional, a path inside the folder
   "web": "web/index.js",                    // optional
   "touches": {                              // shown when the user is asked to trust it
@@ -63,9 +63,10 @@ export function deactivate() {}   // optional
 |---|---|
 | `id`, `dir`, `version` | the plugin's id, its folder, its version |
 | `project` | `{ root, name, options }` of the open project |
-| `files.read(rel)`, `.write(rel, data)`, `.exists(rel)`, `.list(rel)` | project files, **only** those matching `touches.files` |
+| `files.read(rel)`, `.write(rel, data)`, `.exists(rel)`, `.list(rel)`, `.remove(rel)` | project files, **only** those matching `touches.files` and really in the project (a link that leads out of it is refused). `remove` takes a file, or a folder with what is in it; nothing there is not an error (since 1.1.0) |
 | `jobs.run(label, steps)` | one job (the editor runs one at a time); a step is `{ label, run: async (log) => … }` or `{ label, command: [program, …args] }` with the program in `touches.commands`. Returns `{ job, done }` |
-| `routes.get(path, fn)`, `.post(path, fn)` | served at `/api/p/<id><path>`; `fn({ query, body })` returns JSON |
+| `routes.get(path, fn)`, `.post(path, fn)` | served at `/api/p/<id><path>`; `fn({ query, body })` returns JSON. To refuse, throw an error whose `code` is 400 to 499: the page gets that status and `{ error }` (and `needsConfirm: true` when the error has it). Any other throw counts as the plugin failing and turns it off |
+| `routes.file(rel)` | for a route to return: the project file itself, sent as an image (`.png`, `.jpg`, `.webp`), JSON or text, anything else as bytes to save; a missing file is a 404 (since 1.1.0) |
 | `events.emit(name, data)` | to the page's live stream, as `<id>/<name>` |
 | `hooks.on(name, fn)` | `check` (warnings for Problems: `[{ kind, text, sel, at }]`), `validate` (errors that stop a save) |
 | `settings.get(key)`, `.set(key, value)` | its settings, with the manifest's defaults |
@@ -157,7 +158,7 @@ and can set a monthly budget for it. A call estimated at the threshold (default 
 pass the budget, or any call once the budget is used up, asks the user first. From a page part, call a service with
 `await api.services.call('<plugin>/<service>', '<action>', input)`; it asks the user when the spend guard says so.
 Agents ask through request files (see `skills/nfgames/SKILL.md`); the first time an agent uses a service in a session,
-the user is asked to allow it. The built-in `nfgames.codex-image` plugin is a complete example.
+the user is asked to allow it. The built-in `nfgames.codex-image` plugin is a complete example. The built-in `nfgames.model-maker` plugin (New model) shows a service called from a page part, with routes that keep files in the project and answer with images.
 
 ## Where plugins come from
 

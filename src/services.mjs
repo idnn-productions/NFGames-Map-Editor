@@ -53,7 +53,7 @@ export function createServices({ listPlugins, activate, providers, vault, spend,
       events.emit('services/done', { key, action, title: `${s.title}: ${a.title}`, by, ok: true });
       events.emit('services/changed', { key });
       return { ok: true, result };
-    } catch (e) { events.emit('services/done', { key, action, title: `${s.title}: ${a.title}`, by, ok: false, error: e.message }); throw e; }
+    } catch (e) { events.emit('services/done', { key, action, title: `${s.title}: ${a.title}`, by, ok: false, error: e.message, ...(typeof e.folder === 'string' ? { folder: e.folder } : {}) }); throw e; }
   }
   return { list, connect, disconnect, setBudget, call };
 }

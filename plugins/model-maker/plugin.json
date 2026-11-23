@@ -1,0 +1,14 @@
+{
+  "id": "nfgames.model-maker",
+  "name": "New model",
+  "version": "1.0.0",
+  "engines": { "nfgames": "^1.1.0" },
+  "server": "server.mjs",
+  "web": "web/index.js",
+  "touches": { "files": [".nfgames/drafts", ".nfgames/drafts/**", ".nfgames/images", ".nfgames/images/**"] },
+  "contributes": {
+    "editors": [{ "id": "new-model", "title": "New model" }],
+    "commands": [{ "id": "new-model", "title": "New model" }]
+  },
+  "activation": ["onRoute", "onEditor:new-model", "onCommand:new-model"]
+}

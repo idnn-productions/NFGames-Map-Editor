@@ -10,7 +10,8 @@
 //
 // Needs playwright-core, which is not a dependency: `npm i --no-save playwright-core`, or PLAYWRIGHT_MODULE=<path to its
 // folder>. Chrome: CHROME=<path>, else the usual install places, else Playwright's own browser.
-import { existsSync, readFileSync, cpSync, mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, readdirSync, cpSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { delimiter } from 'node:path';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -279,6 +280,102 @@ try {
   const origin = await statusOf(port, { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, 'POST', '/api/save');
   console.log(`foreign Host: ${host}; foreign Origin on a write: ${origin}`);
   if (host !== 403 || origin !== 403) fail('a foreign Host and a foreign Origin must get 403');
+
+  // through the workbench: Save sits in a bar over the map, Selected in the Inspector, and a problem is listed once,
+  // in the bottom panel, where a click selects it on the map
+  {
+    const wb = await context.newPage();
+    wb.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`workbench: ${m.text()}`); });
+    wb.on('pageerror', (e) => errors.push(`workbench: ${e}`));
+    await wb.goto(new URL('?view=map', url).href);
+    await wb.waitForFunction(() => { try { return document.querySelector('iframe').contentWindow.__map.ready; } catch { return false; } }, null, { timeout: 15000 });
+    const inFrame = (fn, arg) => wb.evaluate(([f, a]) => new Function('w', 'a', `return (${f})(w, a)`)(document.querySelector('iframe').contentWindow, a), [fn.toString(), arg]);
+    const lentIn = (region, sel) => wb.evaluate(([r, q]) => { const host = document.querySelector(`#${r} .lent`); return !!(host && host.shadowRoot && host.shadowRoot.querySelector(q)); }, [region, sel]);
+    if (!(await inFrame((w) => !!w.document.querySelector('#toolbar #save') && !!w.document.querySelector('#toolbar #viewBar')))) fail('in the workbench, Save and Top/3D should be in the bar over the map');
+    if (!(await lentIn('inspectorBody', '#sel')) || !(await lentIn('sideBody', '#palette'))) fail('in the workbench, Selected should be in the Inspector and the palette in the side panel');
+    if ((await wb.locator('#inspectorTitle').textContent()) !== 'Map') fail('with nothing selected the Inspector should be titled Map');
+    const text = await wb.evaluate(() => document.querySelector('#inspectorBody .lent').shadowRoot.querySelector('#sel').textContent);
+    if (/null/.test(text)) fail(`the Inspector should not print "null": ${text}`);
+    const mapW = await inFrame((w) => w.document.querySelector('#map').getBoundingClientRect().width), winW = await wb.evaluate(() => innerWidth);
+    console.log(`workbench: the map is ${Math.round(mapW)} px of ${winW}`);
+    if (mapW < winW * 0.5) fail(`in the workbench the map should have at least half the window (${Math.round(mapW)} of ${winW} px)`);
+    // a piece moved far outside the map is a problem
+    await inFrame((w) => w.__map.select(['piece:crate']));
+    if ((await wb.locator('#inspectorTitle').textContent()) !== 'Selected') fail('with a piece selected the Inspector should be titled Selected');
+    const before = await inFrame((w) => w.__map.previews);
+    await wb.evaluate(() => { const i = document.querySelector('#inspectorBody .lent').shadowRoot.querySelector('#sel input[type=number]'); i.value = '500'; i.dispatchEvent(new Event('change')); });
+    await wb.waitForFunction((n) => document.querySelector('iframe').contentWindow.__map.previews > n, before, { timeout: 10000 });
+    const want = await inFrame((w) => w.__map.problems.errors.length + w.__map.problems.problems.length);
+    await wb.locator('#bottomTabs .nf-tab', { hasText: 'Problems' }).click();
+    const rows = await wb.locator('#bottomBody .nf-problems li').count();
+    console.log(`workbench: ${want} problems on the map, ${rows} in the Problems tab`);
+    if (!want || rows !== want) fail('the Problems tab should list the map\'s problems');
+    if (await inFrame((w) => w.document.querySelector('#problems').children.length)) fail('in the workbench the map should not list its problems a second time');
+    // keys pressed while the Inspector has the focus still reach the map: undo takes the move back, and the page's own save runs
+    const moved = await inFrame((w) => w.__map.plan.pieces.find((q) => q.id === 'crate').at[0]);
+    await wb.evaluate(() => document.querySelector('#inspectorBody .lent').shadowRoot.querySelector('#sel button').focus());
+    await wb.keyboard.press('Control+z');
+    const undone = await inFrame((w) => w.__map.plan.pieces.find((q) => q.id === 'crate').at[0]);
+    if (moved !== 500 || undone === 500) fail(`Ctrl+Z with the focus in the Inspector should undo on the map (x was ${moved}, is ${undone})`);
+    await wb.keyboard.press('Control+y');
+    if ((await inFrame((w) => w.__map.plan.pieces.find((q) => q.id === 'crate').at[0])) !== 500) fail('Ctrl+Y with the focus in the Inspector should redo on the map');
+    await wb.evaluate(() => { const i = document.querySelector('#inspectorBody .lent').shadowRoot.querySelector('#sel input[type=number]'); i.focus(); });
+    await wb.keyboard.press('Delete');   // typing in a field is typing: the piece stays
+    if (!(await inFrame((w) => w.__map.plan.pieces.some((q) => q.id === 'crate')))) fail('Delete typed in an Inspector field should not remove the piece');
+    await inFrame((w) => w.__map.select([]));
+    await wb.locator('#bottomBody .nf-problems li').first().click();
+    if ((await inFrame((w) => w.__map.sel.join())) !== 'piece:crate') fail('a click on a problem should select it on the map');
+    await wb.close({ runBeforeUnload: false });
+  }
+
+  // New model, with a stand-in for the codex CLI (our own server only): describe it, generate, pick a concept, make
+  // and pick the views, approve; the draft's folder then holds concept.png and the four views, and reopens on step 3
+  if (server && process.platform !== 'win32') {
+    const bin = mkdtempSync(join(tmpdir(), 'nfgames-check-bin-')), path0 = process.env.PATH;
+    writeFileSync(join(bin, 'codex'), `#!/usr/bin/env node
+const fs = require('fs'), path = require('path'), a = process.argv.slice(2);
+const prompt = a.find((x, i) => i > 0 && /^Use your image generation tool/.test(x));
+const m = /into \\.\\/(\\S+)\\/ named/.exec(prompt), n = Number(/make (\\d+) image/.exec(prompt)[1]);
+const dir = path.join(a[a.indexOf('-C') + 1], m[1]); fs.mkdirSync(dir, { recursive: true });
+for (let i = 1; i <= n; i++) fs.writeFileSync(path.join(dir, 'image-' + i + '.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+`); chmodSync(join(bin, 'codex'), 0o755);
+    process.env.PATH = `${bin}${delimiter}${path0}`;
+    const wb = await context.newPage();
+    wb.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`new model: ${m.text()}`); });
+    wb.on('pageerror', (e) => errors.push(`new model: ${e}`));
+    try {
+      await wb.goto(new URL('?view=viewer', url).href);
+      const side = (q) => wb.locator('#sideBody .lent').locator(q);
+      await wb.waitForFunction(() => { const b = document.querySelector('#sideBody .lent')?.shadowRoot?.querySelector('#newModel'); return b && !b.hidden; }, null, { timeout: 15000 });
+      await side('#newModel').click();
+      await wb.locator('.mm [data-key="name"]').fill('Check lantern');
+      await wb.locator('.mm [data-key="description"]').fill('a small brass street lantern');
+      await wb.locator('.mm [data-key="count"]').fill('2');
+      await wb.locator('.mm-btn.primary', { hasText: 'Generate' }).click();
+      await wb.waitForSelector('.mm-grid .mm-pic', { timeout: 20000 });
+      if ((await wb.locator('.mm-grid .mm-pic').count()) !== 2) fail('New model: two concept candidates were asked for');
+      await wb.locator('.mm-grid .mm-pic').first().click();
+      await wb.locator('.mm-btn', { hasText: 'Use this one' }).click();
+      await wb.waitForSelector('.mm-views');
+      await wb.locator('.mm-btn.primary', { hasText: 'Generate views' }).click();
+      await wb.waitForFunction(() => document.querySelectorAll('.mm-view .mm-grid').length === 4 && !document.querySelector('.mm-wait'), null, { timeout: 40000 });
+      if (!(await wb.locator('.mm-btn', { hasText: 'Approve views' }).isDisabled())) fail('New model: the views cannot be approved before each has a pick');
+      for (let i = 0; i < 4; i++) { await wb.locator('.mm-view').nth(i).locator('.mm-pic').first().click(); await wb.waitForFunction((n) => document.querySelectorAll('.mm-view .mm-pic.on').length === n, i + 1); }
+      await wb.locator('.mm-btn', { hasText: 'Approve views' }).click();
+      await wb.waitForSelector('.mm-btn:disabled:has-text("Generate model")');
+      const kept = join(root, '.nfgames', 'drafts', 'check-lantern');
+      const views = existsSync(join(kept, 'views')) ? readdirSync(join(kept, 'views')).sort().join() : '';
+      console.log(`new model: concept.png ${existsSync(join(kept, 'concept.png')) ? 'kept' : 'MISSING'}; views: ${views}`);
+      if (!existsSync(join(kept, 'concept.png')) || views !== 'back.png,front.png,left.png,right.png') fail('New model: an approved draft keeps concept.png and its four views');
+      await wb.reload();
+      await wb.locator('#nfnav .view[data-view="viewer"]').click();
+      await wb.waitForFunction(() => document.querySelector('#sideBody .lent')?.shadowRoot?.querySelector('#drafts button.model'), null, { timeout: 15000 });
+      await side('#drafts button.model').first().click();
+      await wb.waitForSelector('.mm-step.on');
+      if (!/Model/.test(await wb.locator('.mm-step.on').textContent())) fail('New model: an approved draft reopens on its Model step');
+    } catch (e) { fail(`New model: ${e.message}`); }
+    await wb.close(); process.env.PATH = path0; rmSync(bin, { recursive: true, force: true });
+  }
 
   if (errors.length) fail(`console errors:\n  ${errors.join('\n  ')}`); else console.log('console: no errors or warnings');
   await context.close();

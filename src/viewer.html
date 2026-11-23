@@ -11,7 +11,8 @@
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
 body { display: grid; grid-template-columns: 260px 1fr 340px; grid-template-rows: 40px 1fr; height: 100vh; }
 /* inside the workbench (a tab) the workbench's top bar is the only one */
-body.framed { grid-template-rows: 1fr; } body.framed > header { display: none; } body.lent { grid-template-columns: 1fr 340px; }
+body.framed { grid-template-rows: 1fr; } body.framed > header { display: none; } body.framed { grid-template-columns: 260px 1fr; } body.framed.lent-side { grid-template-columns: 1fr; } body.framed #right { display: none; }
+#review, #reviews { background: var(--panel); padding: 0 12px 20px; } #review h2:first-child { margin-top: 4px; }
 header { grid-column: 1 / 4; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 header h1 { font-size: 14px; margin: 0; font-weight: 600; } header .grow { flex: 1; } header a { color: var(--dim); }
 aside { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px; }
@@ -24,8 +25,8 @@ button.primary { background: var(--accent); color: #1a1206; border-color: var(--
 textarea { width: 100%; resize: vertical; min-height: 48px; } select { width: 100%; }
 .dim { color: var(--dim); } .bad { color: var(--bad); } .ok { color: var(--ok); }
 h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 14px 0 6px; }
-#filter { width: 100%; margin-bottom: 8px; }
-.group { margin: 8px 0 2px; color: var(--dim); font-size: 11px; }
+#filter { width: 100%; margin-bottom: 8px; } #newModel { width: 100%; margin-bottom: 8px; }
+.draft-step { color: var(--dim); font-size: 11px; margin-left: 6px; }
 .model { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model:hover { background: #252a35; } .model.current { background: #33291c; color: var(--accent); }
 .pin { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 8px 0; }
@@ -52,7 +53,7 @@ main.pinning #view { cursor: crosshair; }
 </head>
 <body>
 <header><h1>Model review</h1><span class="grow"></span></header>
-<aside id="left"><input id="filter" placeholder="filter models" autocomplete="off"><div id="models" class="dim">loading…</div></aside>
+<aside id="left"><button id="newModel" class="primary" hidden title="Describe a model, approve a concept image and its views">＋ New model</button><input id="filter" placeholder="filter models" autocomplete="off"><div id="drafts"></div><div id="models" class="dim">loading…</div></aside>
 <main id="main">
   <canvas id="view"></canvas>
   <div id="toolbar" hidden>
@@ -71,18 +72,30 @@ main.pinning #view { cursor: crosshair; }
   <h2>Workflow</h2><select id="workflow"></select>
   <p id="warn" class="bad"></p>
   <p><button class="primary" id="send" disabled>Send to Claude</button> <span id="sendState" class="dim"></span></p>
-  <h2>Jobs</h2><div id="jobs" class="dim">none yet</div>
+  <h2 id="jobsHead">Jobs</h2><div id="jobs" class="dim">none yet</div>
 </aside>
 <div id="zoom"><img alt="reference image"></div>
 <script src="/shell/lend.js"></script>
 <script src="/shell/grid.js"></script>
+<script src="/shell/tree.js"></script>
 <script type="module">
 // The model viewer: a game's .glb files, pins with notes and reference images, and Send, which writes a review job
 // for a Claude Code session (see the README, "Model review"). three.js is installed on demand from the Install button.
 // in the workbench, the model list is lent to its side panel: look there too
-const panel = window.top !== window ? nfLendPanel(document.getElementById('left'), { title: 'Model viewer', css: '#left { padding: 10px; }' }) : null;
+document.head.append(Object.assign(document.createElement('style'), { textContent: nfTree.css }));   // before the column is lent: it takes the page's styles along
+// In the workbench the page keeps the model and its toolbar: the model list is lent to the side panel, the review
+// (pins, note, workflow, Send) to the Inspector, and the review jobs to the bottom panel as "Reviews".
+const embedded = window.top !== window;
+if (embedded) {
+  const byId = (id) => document.getElementById(id), right = byId('right'), div = (id) => Object.assign(document.createElement('div'), { id });
+  document.body.classList.add('framed');
+  const review = div('review'), reviews = div('reviews');
+  review.append(...[...right.children].filter((e) => e.id !== 'jobs' && e.id !== 'jobsHead')); reviews.append(byId('jobs'));
+  right.append(review, reviews);
+}
+const panel = embedded ? nfLend({ side: { el: document.getElementById('left'), title: 'Model viewer', css: '#left { padding: 10px; }' },
+  inspector: { el: document.getElementById('review'), title: 'Review' }, bottom: { el: document.getElementById('reviews'), title: 'Reviews', key: 'reviews' } }) : null;
 const $ = (id) => document.getElementById(id) || (panel && panel.byId(id));
-if (window.top !== window) document.body.classList.add('framed');
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); for (const k of kids) e.append(k); return e; };
 const api = async (path, options) => { const r = await fetch(path, options), j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || `${r.status} ${r.statusText}`); return j; };
 const post = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -177,22 +190,43 @@ function frame() {
   camera.near = r / 1000; camera.far = r * 1000; camera.updateProjectionMatrix(); controls.update();
 }
 
+// ---- drafts of new models (the New model plugin, when it is on; only in the workbench, where its screen opens as a tab)
+const MAKER = 'nfgames.model-maker';
+let drafts = [], draftFolders = nfTree.store('viewer-drafts');
+const workbench = () => { try { return (embedded && window.top.nfWorkbench) || null; } catch { return null; } };
+async function listDrafts() {
+  const wb = workbench(); if (!wb || !wb.run) return;
+  try {
+    const on = (await api('/api/plugins')).plugins.some((p) => p.id === MAKER && ['ready', 'active'].includes(p.state));
+    $('newModel').hidden = !on; $('newModel').onclick = () => wb.run(`${MAKER}/new-model`);
+    drafts = on ? (await api(`/api/p/${MAKER}/drafts`)).drafts : [];
+  } catch { drafts = []; }
+  const box = $('drafts');
+  if (!drafts.length) { box.replaceChildren(); return; }
+  nfTree.render(box, nfTree.build(drafts.map((d) => ({ ...d, path: `Drafts/${d.slug}` })), { closed: draftFolders.closed }), { onToggle: (path, open) => draftFolders.toggle(path, open),
+    row: (d) => el('button', { className: 'model', title: `A draft of a new model: ${d.status}`, onclick: () => wb.run(`${MAKER}/new-model`, { slug: d.slug, name: d.name }) }, d.name, el('span', { className: 'draft-step', textContent: d.status })) });
+}
+// the list is shown again whenever this tab is (the side panel being lent back resizes the page)
+let draftsTimer = null; addEventListener('resize', () => { clearTimeout(draftsTimer); draftsTimer = setTimeout(listDrafts, 150); });
+
 // ---- models
 async function listModels() {
+  listDrafts();
   if (!info.models) { $('models').textContent = 'No models folder: add models: \'<folder>\' to map-editor.config.mjs.'; return; }
   models = (await api('/api/models')).models;
+  try { folders = nfTree.store(`viewer:${(await api('/api/projects')).current.root}`); } catch { /* one list of closed folders for every project */ }
   drawModelList();
 }
+// Folders open and close; which are closed is kept per project. A filter shows every match with its folders open.
+let folders = nfTree.store('viewer');
 function drawModelList() {
-  const q = $('filter').value.trim().toLowerCase(), box = $('models'), shown = models.filter((m) => m.path.toLowerCase().includes(q));
-  if (!shown.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : `no .glb files in ${info.models}/`; return; }
-  const kids = []; let group = null;
-  for (const m of shown) {
-    const dir = m.path.includes('/') ? m.path.slice(0, m.path.lastIndexOf('/')) : '';
-    if (dir !== group) { group = dir; kids.push(el('div', { className: 'group', textContent: dir ? `${dir}/` : `${info.models}/` })); }
-    kids.push(el('button', { className: `model${m.path === modelPath ? ' current' : ''}`, textContent: m.path.slice(dir ? dir.length + 1 : 0), title: `${m.path} · ${(m.size / MB).toFixed(1)} MB`, onclick: () => openModel(m) }));
-  }
-  box.className = ''; box.replaceChildren(...kids);
+  const box = $('models'), root = `${info.models}/`;
+  // models directly in the models folder go under a folder named after it, as the others go under theirs
+  const nodes = nfTree.build(models.map((m) => ({ ...m, path: m.path.includes('/') ? m.path : `${root}${m.path}`, model: m })), { filter: $('filter').value, closed: folders.closed });
+  if (!nodes.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : `no .glb files in ${root}`; return; }
+  box.className = '';
+  nfTree.render(box, nodes, { onToggle: (path, open) => folders.toggle(path, open),
+    row: ({ model: m }, n) => el('button', { className: `model${m.path === modelPath ? ' current' : ''}`, textContent: n.label, title: `${m.path} · ${(m.size / MB).toFixed(1)} MB`, onclick: () => openModel(m) }) });
 }
 async function openModel(m, { keepCamera = false } = {}) {
   if (!T) return;
@@ -204,7 +238,7 @@ async function openModel(m, { keepCamera = false } = {}) {
   model = gltf.scene; scene.add(model); // the scene root stays at identity, so world coordinates are the model's own
   if (wire) setWire(true);
   placeGrid(new T.Box3().setFromObject(model));
-  modelPath = m.path; drawModelList();
+  modelPath = m.path; folders.reveal(m.path.includes('/') ? m.path : `${info.models}/${m.path}`); drawModelList();
   history.replaceState(null, '', `/viewer?model=${encodeURIComponent(m.path)}`);
   if (!keepCamera) frame();
   $('overlayBody').replaceChildren();

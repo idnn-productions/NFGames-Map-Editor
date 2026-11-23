@@ -34,6 +34,7 @@ It runs on your machine only: the server listens on `127.0.0.1` and refuses ever
 - [The map file format](#the-map-file-format)
 - [Using the editor](#using-the-editor)
 - [Model review](#model-review)
+- [New model](#new-model)
 - [Plugins](#plugins)
 - [Save and backups](#save-and-backups)
 - [The fit check](#the-fit-check)
@@ -252,7 +253,7 @@ footprint comes from the model's own bounds, read from the GLB's header without 
 the editor's frame; quantized positions, as Meshopt writes them, are read as the GPU draws them), and its box sits
 where the model is when the model's origin is not at its middle. A part turned inside the model makes the box a little
 larger than the model, since only the parts' own boxes are read. Models are
-listed under **Models · <folder>**, in the class `model` (teal). Each file is read once per version. A `kit.json`
+listed under **Models**, by folder, in the class `model` (teal). Each file is read once per version. A `kit.json`
 entry of the same name wins (a `size` there without `boxes` uses the whole footprint), so a footprint, `door` or
 `solid` can be set by hand. A file that cannot be read is a kind of unknown size (2 x 2 m) with a `model` problem
 naming it. A model piece's Selected panel has **View model**, which opens it in the model viewer. In the 3D view
@@ -362,8 +363,12 @@ Any other section (a project's planting rules, say) is kept as it is; the editor
 
 ## Using the editor
 
-The page has three columns: the palette and layers on the left, the map in the middle, and the map's
-state and the selection on the right.
+The bare page (`/map?alone`) has three columns: the palette and layers on the left, the map in the middle, and the
+map's state and the selection on the right. In the workbench the map takes the room instead: the left column is the
+side panel; **Save**, **Undo**, **Redo**, snap, the map's name and the status line are a bar over the map, beside
+**Top / 3D**; the map's Apply box and the selection are the **Inspector** (titled *Map* with nothing selected,
+*Selected* otherwise); and problems are listed once, in the bottom panel's **Problems** tab, where a click pans to
+one and selects it.
 
 ### The map
 
@@ -417,7 +422,9 @@ On a Mac, Cmd works in place of Ctrl. Keys other than Ctrl S are ignored while y
 ### Left column
 
 - **Add a piece**: the palette. The project's presets come first, then plants (`plants.json`), then the
-  kinds of piece under their group headings, each with its size and its class tag. Click an entry to pick
+  kinds of piece under their group headings, each with its size and its class tag. A heading opens and closes
+  its group (models nest by folder under **Models**), and what is closed is remembered for the project. The
+  filter above the palette shows only the entries whose name or kind matches, whatever is closed. Click an entry to pick
   it, then click the map wherever it should go. Click the entry again, or press Esc, to stop. A new piece
   gets an id from its kind's name (`house`, `house2` ...), a preset piece gets the next id of its series,
   and everything snaps to the grid.
@@ -549,6 +556,7 @@ Nothing is fetched at any other time, and no CDN is used.
 | Do | What happens |
 |---|---|
 | Click a model on the left | it opens and is framed. Over 200 MB asks first |
+| Click a folder on the left | it opens or closes, with how many models it holds; what is closed is remembered for the project. The filter shows every match, whatever is closed |
 | **📍 Pin** (or **P**), then click the model | a numbered pin at that point, with a note. It records the point and the surface's direction in the model's own frame (glTF, metres, Y up), the mesh, the material, the texture coordinate under it, the view, and a screenshot |
 | Drag a pin | moves it over the surface (and takes a new screenshot) |
 | **View** on a pin | flies back to the view it was placed from |
@@ -577,6 +585,37 @@ Then, in a Claude Code session in the game project, say **"watch the review inbo
 once per waiting job, and each line wakes the session. A Monitor watch lasts at most 30 minutes; the skill
 restarts it. Jobs wait on disk while nobody watches, so nothing is lost.
 
+## New model
+
+**＋ New model**, at the top of the model viewer's side panel (or **New model** in ⌘K), opens a tab with three steps.
+It comes from the built-in **New model** plugin and makes its images through the **Image generation** service
+(Codex, with your ChatGPT login: see [Agents and services](#agents-and-services)). Nothing is generated until you
+press a Generate button.
+
+1. **① Concept.** Give it a name, describe it, and optionally write a style (kept for the project and filled in next
+   time) and add up to 8 reference images from your disk (pick, drop or paste; large ones are shrunk). **Generate**
+   makes 1 to 8 candidates (4 unless you say otherwise). Change the words and generate again as often as you like:
+   earlier rounds stay under a fold. Click the one you want, then **Use this one → Views**.
+2. **② Views.** One image per view, each made from the approved concept: **front, back, left, right** unless you
+   tick others (**three-quarter**, **top**) or untick some. Each view has its own prompt, drafted from your
+   description and editable. **Generate views** makes those that have no images yet, one after another; a view's own
+   **Generate** makes it again. Pick one image per view, then **Approve views**.
+3. **③ Model.** Shows what is kept and where. Generating the model itself comes in a later update.
+
+A draft is one folder in the project, `.nfgames/drafts/<name>/`: `draft.json`, your references, and, once approved,
+`concept.png` and `views/<view>.png` (what the model step will read). Every generated round stays under
+`.nfgames/images/`. Drafts are listed under **Drafts** above the viewer's models, each with its step; click one to
+go on where you left it. If you close the tab or reload while images are being made, the run still finishes and
+its images are there when you open the draft again.
+
+Going back: approving a different concept after views were made asks first, then clears the views you chose (their
+images stay under "earlier rounds"). Generating or picking a view again after **Approve views** takes the draft
+back to step ②, and `views/` is removed until you approve again, so the files never disagree with the concept.
+**Delete draft** removes the draft's folder and leaves the generated rounds.
+
+The editor runs one job at a time: while a map's Apply action or another generation runs, Generate says what is
+running and does nothing else. With no `codex` on the PATH the Generate buttons are off and say why.
+
 ## Plugins
 
 The editor can be extended with **plugins**: folders with a `plugin.json` and, optionally, a server part and a page
@@ -596,8 +635,12 @@ every command. Plugins add to it; **🧩 Plugins** turns them on and off and ask
 edits their settings. The map editor and the model viewer are always its tabs (from the **Core Tools** plugin, until
 they are rebuilt as plugins): opening `/map` or `/viewer` in a browser goes to `/?view=map` or `/?view=viewer`, and
 only `?alone` (or a frame) gets the bare page. The side panel follows the view shown: the map editor's left column
-(the palette, Show, Legend, Keys) or the viewer's model list. The side panel, inspector and bottom panel hide from
-the bar or with **⌘B**, **⌘I** and **⌘J** (kept per browser), not yet resized by dragging; **⌘G** turns every grid
+(the palette, Show, Legend, Keys) or the viewer's model list. The Inspector follows it too: the map's Apply box and
+selection, or the viewer's review (pins, note, workflow, **Send to Claude**); the viewer's review jobs are the bottom
+panel's **Reviews** tab. The bottom panel rests as a one-line strip of its tabs, with the number of problems and a
+● on Jobs while one runs: a tab opens it, the same tab or **⌘J** closes it, and it never opens by itself. The side
+panel and the Inspector hide from the bar or with **⌘B** and **⌘I**, and their inner edges drag to set their widths
+(at least 200 px each; the documents always keep 320). All of this is kept per browser. **⌘G** turns every grid
 on or off. On Windows and Linux, Ctrl stands for ⌘.
 
 How to write one, what it gets, and what trust means: [`docs/plugins.md`](docs/plugins.md). A small example:

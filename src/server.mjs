@@ -163,13 +163,13 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
           if (m[1] === 'budget') return send(200, services.setBudget(b.key, b.amount ?? null));
           if (m[1] === 'call') return send(200, await services.call(b.key, b.action, b.input, { confirmed: b.confirmed === true }));
           await requests.answer(String(b.id), b.approve === true); return send(200, { ok: true });
-        } catch (e) { return send(e.code || 500, { error: e.message }); } } }
+        } catch (e) { return send(e.code || 500, { error: e.message, ...(typeof e.folder === 'string' ? { folder: e.folder } : {}) }); } } }   // a failed generation says where it was saving
       { const m = req.method === 'POST' && /^\/api\/plugins\/([a-z0-9.-]+)\/(trust|enable|disable|reload|activate)$/.exec(path);
         if (m) { try { const [, id, verb] = m; if (verb === 'trust') plugins.trust(id); else if (verb === 'reload') await plugins.reload(id); else if (verb === 'activate') await plugins.activate(id); else await plugins.setEnabled(id, verb === 'enable'); return send(200, { plugins: plugins.list() }); } catch (e) { return send(e.code || 500, { error: e.message, plugins: plugins.list() }); } } }
       { const m = /^\/api\/plugins\/([a-z0-9.-]+)\/settings$/.exec(path);
         if (m) { try { if (req.method === 'GET') return send(200, plugins.getSettings(m[1])); const { key, value } = await body(); return send(200, plugins.setSetting(m[1], key, value)); } catch (e) { return send(e.code || 500, { error: e.message }); } } }
       { const m = /^\/api\/p\/([a-z0-9.-]+)\/(.*)$/.exec(path);
-        if (m) { const r = await plugins.route(m[1], req.method, m[2], req, res, () => body()); return send(r.status, r.body); } }
+        if (m) { const r = await plugins.route(m[1], req.method, m[2], req, res, () => body()); return r.file ? send(r.status, readFileSync(r.file.path), r.file.type) : send(r.status, r.body); } }
       if (req.method === 'GET' && path === '/api/projects') return send(200, { current: { root: project.root, name: basename(project.root), title: project.options.title || null, maps: project.listMaps().length }, recent: recentProjects(stateDir), home: insideHome(home, home) });
       if (req.method === 'GET' && path === '/api/browse') { try { return send(200, browse(home, url.searchParams.get('path') || home)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
       if (req.method === 'POST' && path === '/api/project') { const b = await body(); try { return send(200, await switchProject(b && b.root, { trust: !!b && b.trust === true })); } catch (e) { return send(e.code || 500, { error: e.message }); } }
