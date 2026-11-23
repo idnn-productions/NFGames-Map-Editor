@@ -2,10 +2,10 @@
 // the user's reference images, and what the model step will read: concept.png and views/<view>.png once approved).
 // The rules are in draft.mjs; here they meet the files. The page runs each generation through the image service and
 // tells these routes when a round starts and ends; a round whose tab went away is settled from what is in its folder.
-import { slugOf, newDraft, viewPrompt, folderFor, startRound, settleRound, reconcile, pickConcept, pickView, approveConcept, setViews, approveViews, filesToKeep } from './draft.mjs';
+import { slugOf, newDraft, viewPrompt, folderFor, startRound, settleRound, reconcile, pickConcept, pickView, approveConcept, setViews, approveViews, filesToKeep, startRevision, setModel, modelViews } from './draft.mjs';
 
 const DRAFTS = '.nfgames/drafts', IMAGES = '.nfgames/images', STYLE = `${DRAFTS}/style.txt`;
-const IMAGE = /\.(png|jpe?g|webp)$/i, MAX_REFS = 8;
+const IMAGE = /\.(png|jpe?g|webp)$/i, MAX_REFS = 8, MAX_MARKED = 6_000_000;
 const refuse = (code, text) => { throw Object.assign(new Error(text), { code }); };
 
 export function activate(api) {
@@ -23,7 +23,7 @@ export function activate(api) {
   };
   const imagesIn = (folder) => { const dir = `${IMAGES}/${folder}`; return f.exists(dir) ? f.list(dir).filter((n) => IMAGE.test(n)).sort().map((n) => `${dir}/${n}`) : []; };
   /** What the page gets: the draft, and each listed view's prompt as it would be sent (the user's own, or drafted). */
-  const shown = (draft) => ({ draft, prompts: Object.fromEntries(draft.views.list.map((v) => [v, viewPrompt(draft, v)])) });
+  const shown = (draft) => ({ draft, prompts: Object.fromEntries(draft.views.list.map((v) => [v, viewPrompt(draft, v)])), model: modelViews(draft) });
   /** Writes the draft, and (files: true) what it keeps beside it: concept.png, and views/ only while they are approved.
    *  A kept file is copied from its round only when the choice changed, so rounds tidied away later do no harm; a new
    *  choice whose image is gone is refused, before anything is written. */
@@ -89,6 +89,28 @@ export function activate(api) {
     const { draft, round } = startRound(before, body.step, { prompt: body.prompt, count: body.count, folder: folderFor(before, body.step, Date.now()), at: Date.now() });
     const references = body.step === 'concept' ? draft.refs : [`${dirOf(draft.slug)}/concept.png`];
     return { ...save(draft, { files: body.step !== 'concept' }), round, input: { prompt: round.prompt, count: round.count, references, folder: round.folder } };
+  });
+  // a round that revises one image from the user's notes: that image, the copy the page marked, and for a view the concept
+  api.routes.post('/draft/revise', ({ body = {} }) => {
+    const before = read(known(body.slug)), now = Date.now(), folder = folderFor(before, body.step, now);
+    let marked = null, bytes = null;
+    if (body.marked !== undefined && body.marked !== null) {
+      const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(typeof body.marked === 'string' ? body.marked : '');
+      if (!m || m[1].length > MAX_MARKED * 4 / 3) refuse(400, 'marked: a PNG image of at most 6 MB');
+      bytes = Buffer.from(m[1], 'base64'); marked = `${dirOf(before.slug)}/marks/${folder}.png`;
+    }
+    const { draft, round } = startRevision(before, body.step, { image: body.image, pins: body.pins, note: body.note, count: body.count ?? 2, folder, at: now, marked });
+    if (!f.exists(round.from)) refuse(400, `That image is no longer there (${round.from}): pick another, or generate again.`);
+    if (bytes) f.write(marked, bytes);
+    const references = [round.from, ...(marked ? [marked] : []), ...(body.step === 'concept' ? [] : [`${dirOf(draft.slug)}/concept.png`])];
+    return { ...save(draft, { files: body.step !== 'concept' }), round, input: { prompt: round.prompt, count: round.count, references, folder: round.folder } };
+  });
+  // the model step made a model (the page says so once the model service has answered with where it is)
+  api.routes.post('/draft/model', ({ body = {} }) => {
+    const draft = read(known(body.slug));
+    if (body.path !== `models/${draft.slug}/${draft.slug}.glb`) refuse(400, 'path: this draft\'s model only');
+    if (typeof body.length !== 'number' || !(body.length > 0) || !Number.isFinite(body.length)) refuse(400, 'length: the longest side in metres');
+    return save(setModel(draft, { path: body.path, length: body.length, at: Date.now() }));
   });
   // ...and ends here: its images are what is in its folder, whatever the page says
   api.routes.post('/draft/settle', ({ body = {} }) => {

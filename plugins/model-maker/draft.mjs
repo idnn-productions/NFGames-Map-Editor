@@ -5,11 +5,16 @@
 //   { version: 1, slug, name, description, style, status: 'concept' | 'views' | 'ready', refs: [paths],
 //     concept: { rounds: [round], pick: image | null, approved: image | null },
 //     views: { list: [view], prompts: { view: text }, rounds: { view: [round] }, picks: { view: image }, approved: boolean } }
+//     model: { path, length, at } }   (once the model step has made one)
 //   round: { id, folder, prompt, count, state: 'pending' | 'done' | 'failed', images: [paths], error, at }
+//   a round that revises an image also has `from` (that image), `pins: [{ x, y, note }]` (0 to 1 from the image's top
+//   left), `note` and `marked` (the copy with the pins drawn on it, or null).
 //   a view's round also has `concept`: the approved concept image it was made from. Rounds made from another
 //   concept stay listed but are not this concept's views: their images cannot be picked.
 export const VIEWS = ['front', 'back', 'left', 'right'];
-export const EXTRA_VIEWS = ['three-quarter', 'top'];
+export const EXTRA_VIEWS = ['three-quarter', 'top', 'bottom'];
+/** What the model step is made from: these four, and top and bottom when there are both. */
+export const MODEL_SIDES = ['front', 'left', 'back', 'right'], MODEL_POLES = ['top', 'bottom'];
 const ALL_VIEWS = [...VIEWS, ...EXTRA_VIEWS];
 const copy = (draft) => structuredClone(draft);
 const refuse = (text, extra = {}) => { throw Object.assign(new Error(text), { code: 400, ...extra }); };
@@ -28,13 +33,13 @@ export function newDraft({ slug, name, description = '', style = '' }) {
     concept: { rounds: [], pick: null, approved: null }, views: { list: [...VIEWS], prompts: {}, rounds: {}, picks: {}, approved: false } };
 }
 
-const SIDES = { front: 'straight from the front', back: 'straight from the back', left: 'from its left side', right: 'from its right side', 'three-quarter': 'from a three-quarter angle, front and right side showing', top: 'straight down from above' };
+const SIDES = { front: 'straight from the front', back: 'straight from the back', left: 'from its left side', right: 'from its right side', 'three-quarter': 'from a three-quarter angle, front and right side showing', top: 'straight down from above', bottom: 'straight up from below' };
 /** The prompt for a view: the user's own once written, else drafted from the description, the style and the side. */
 export function viewPrompt(draft, view) {
   const own = draft.views.prompts[view];
   if (typeof own === 'string' && own.trim()) return own;
   return [draft.description.trim(), draft.style.trim() && `Style: ${draft.style.trim()}.`,
-    `The same object as in the reference image, unchanged in shape, colours and materials, seen ${SIDES[view] || view} (${view} view). Orthographic, no perspective. The whole object in frame, centred, on a plain neutral grey background, in even soft light, with no shadow on the ground, no text and nothing else in the picture.`].filter(Boolean).join('\n');
+    `The same object as in the reference image, unchanged in shape, proportions, colours and materials, seen ${SIDES[view] || view} (${view} view). Orthographic, no perspective. The whole object in frame with nothing cropped, centred, on a plain neutral grey background, in even soft light, with no shadow on the ground, no text and nothing else in the picture.${MODEL_POLES.includes(view) ? ' The front of the object pointing to the top of the picture, and its length and width in the same proportion as the reference shows.' : ''}`].filter(Boolean).join('\n');
 }
 
 /** The image service's folder for a round: a name it takes (letters, digits, dashes, at most 80), new each time. */
@@ -63,6 +68,41 @@ export function startRound(draft, step, { prompt, count, folder, at }) {
   rounds.push(round);
   if (step !== 'concept') reopenViews(d);
   return { draft: d, round: { ...round } };
+}
+
+/** Where a point of an image is, in words: the ninth of the picture it falls in (x, y from 0 to 1, from the top left). */
+export function whereOf(x, y) {
+  const col = x < 1 / 3 ? 0 : x > 2 / 3 ? 2 : 1, row = y < 1 / 3 ? 0 : y > 2 / 3 ? 2 : 1;
+  return [['upper left', 'top centre', 'upper right'], ['left side', 'centre', 'right side'], ['lower left', 'bottom centre', 'lower right']][row][col];
+}
+/** Notes as they are kept: pins inside the image with a note each (at most 12), and one overall note. */
+export function cleanNotes({ pins = [], note = '' } = {}) {
+  if (!Array.isArray(pins) || pins.some((p) => !p || typeof p.x !== 'number' || typeof p.y !== 'number' || !Number.isFinite(p.x) || !Number.isFinite(p.y))) refuse('pins: each is { x, y, note } with x and y from 0 to 1');
+  if (pins.length > 12) refuse('pins: at most 12');
+  const unit = (n) => Math.max(0, Math.min(1, n));
+  const kept = pins.map((p) => ({ x: unit(p.x), y: unit(p.y), note: String(p.note ?? '').trim().slice(0, 300) })).filter((p) => p.note);
+  const all = String(note ?? '').trim().slice(0, 1000);
+  if (!kept.length && !all) refuse('notes: say what to change');
+  return { pins: kept, note: all };
+}
+/** The prompt of a round that revises an image of `round`: that round's own prompt, then what to change. */
+export function revisionPrompt(draft, step, round, { pins, note, marked = null }) {
+  return [`${round.prompt}\n`,
+    'Revise the first reference image: make the same picture again with only the changes listed here, and leave everything not mentioned exactly as it is.',
+    ...pins.map((p, i) => `${i + 1} (${whereOf(p.x, p.y)}): ${p.note}`), note && `Also: ${note}`,
+    marked && 'The second reference image is the first with numbered markers showing where each change belongs. The markers are not part of the picture and must not appear in the result.',
+    step !== 'concept' && 'The last reference image is the concept the object comes from.'].filter(Boolean).join('\n');
+}
+/** Starts a round that revises `image` (one of this step's; a view's must be of the approved concept): { draft, round }. */
+export function startRevision(draft, step, { image, pins, note, count = 2, folder, at, marked = null }) {
+  const mine = roundsOf(copy(draft), step).filter((r) => step === 'concept' || r.concept === draft.concept.approved);
+  const source = typeof image === 'string' && mine.find((r) => r.images.includes(image));
+  if (!source) refuse(step === 'concept' ? 'image: not an image of this draft\'s concept' : `image: not an image of this draft's ${step} view, made from the approved concept`);
+  const notes = cleanNotes({ pins, note });
+  const started = startRound(draft, step, { prompt: revisionPrompt(draft, step, source, { ...notes, marked }), count, folder, at });
+  const round = (step === 'concept' ? started.draft.concept.rounds : started.draft.views.rounds[step]).find((r) => r.id === started.round.id);
+  Object.assign(round, { from: image, ...notes, marked });
+  return { draft: started.draft, round: structuredClone(round) };
 }
 
 /** Ends a round: done with at least one image and no error, else failed (what it saved is kept either way). */
@@ -135,4 +175,16 @@ export function approveViews(draft) {
 /** What the draft's folder holds besides draft.json: concept.png from this image, views/<view>.png from these. */
 export function filesToKeep(draft) {
   return { concept: draft.concept.approved, views: draft.views.approved ? Object.fromEntries(draft.views.list.map((v) => [v, draft.views.picks[v]])) : {} };
+}
+
+/** What a model can be made from now: the approved sides and, as a pair, top and bottom; and the sides still missing. */
+export function modelViews(draft) {
+  const got = (v) => draft.views.approved && draft.views.list.includes(v) && !!draft.views.picks[v];
+  const poles = MODEL_POLES.every(got) ? MODEL_POLES : [];
+  return { views: [...MODEL_SIDES.filter(got), ...poles], missing: draft.views.approved ? MODEL_SIDES.filter((v) => !got(v)) : [] };
+}
+/** Records the model the model step made. */
+export function setModel(draft, { path, length, at }) {
+  if (draft.status !== 'ready') refuse('model: approve the views first');
+  const d = copy(draft); d.model = { path, length, at }; return d;
 }

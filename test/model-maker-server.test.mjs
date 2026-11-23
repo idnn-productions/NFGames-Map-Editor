@@ -175,6 +175,48 @@ describe('the model maker', () => {
     assert.equal((await post('/draft/delete', { slug: '..' })).status, 404); assert.ok(existsSync(join(copy.root, '.nfgames', 'drafts')));
     await ok('/draft/delete', { slug: 'broken' });   // an unreadable one can still be deleted
   });
+  it('an image is revised from notes: a new round made from it and its marked copy; a view takes the concept too', async () => {
+    const slug = (await ok('/drafts', { name: 'Kettle', description: 'a copper kettle' })).draft.slug;
+    const first = await round(slug, 'concept'), image = first.draft.concept.rounds[0].images[0];
+    const started = await ok('/draft/revise', { slug, step: 'concept', image, pins: [{ x: 0.1, y: 0.1, note: 'no antenna' }], note: '', marked: PNG_1PX });
+    const mark = `.nfgames/drafts/${slug}/marks/${started.input.folder}.png`;
+    assert.deepEqual(started.input.references, [image, mark]); assert.ok(existsSync(join(copy.root, mark)));
+    assert.match(started.input.prompt, /1 \(upper left\): no antenna/); assert.equal(started.input.count, 2); assert.equal(started.round.from, image);
+    const made = await post('/services/call', { key: 'nfgames.codex-image/image', action: 'generate', input: started.input, confirmed: true }, '/api');
+    assert.equal(made.status, 200, JSON.stringify(made.body));
+    const { draft } = await ok('/draft/settle', { slug, step: 'concept', round: started.round.id, error: null });
+    assert.equal(draft.concept.rounds.length, 2); assert.equal(draft.concept.rounds[1].state, 'done'); assert.equal(draft.concept.rounds[1].from, image); assert.equal(draft.concept.rounds[1].images.length, 2);
+    // what cannot be sent back
+    for (const bad of [{ marked: 'data:image/svg+xml;base64,AAAA', note: 'n' }, { pins: [], note: ' ' }, { image: '.nfgames/images/nope/image-1.png', note: 'n' }, { pins: [{ x: 'a', y: 0, note: 'n' }] }])
+      assert.equal((await post('/draft/revise', { slug, step: 'concept', image, ...bad })).status, 400, JSON.stringify(bad));
+    assert.equal((await get(`/draft?slug=${slug}`)).body.draft.concept.rounds.length, 2);
+    // an image tidied away: refused before a round is started
+    const other = first.draft.concept.rounds[0].images[1]; rmSync(join(copy.root, other));
+    const gone = await post('/draft/revise', { slug, step: 'concept', image: other, note: 'n' });
+    assert.equal(gone.status, 400); assert.match(gone.body.error, /no longer there/);
+    assert.equal((await get(`/draft?slug=${slug}`)).body.draft.concept.rounds.length, 2);
+    // a view: the concept is its last reference
+    await ok('/draft/pick', { slug, step: 'concept', image }); await ok('/draft/approve', { step: 'concept', slug });
+    const front = await round(slug, 'front', { count: 1 }), view = front.draft.views.rounds.front[0].images[0];
+    const again = await ok('/draft/revise', { slug, step: 'front', image: view, note: 'the spout on the left' });
+    assert.deepEqual(again.input.references, [view, `.nfgames/drafts/${slug}/concept.png`]); assert.match(again.input.prompt, /concept the object comes from/);
+    await ok('/draft/settle', { slug, step: 'front', round: again.round.id, error: 'stopped' });
+  });
+  it('the model is recorded on a ready draft, at its own path only', async () => {
+    const slug = (await ok('/drafts', { name: 'Stool', description: 'a stool' })).draft.slug;
+    const c = await round(slug, 'concept', { count: 1 });
+    await ok('/draft/pick', { slug, step: 'concept', image: c.draft.concept.rounds[0].images[0] }); await ok('/draft/approve', { slug, step: 'concept' });
+    const path = `models/${slug}/${slug}.glb`;
+    assert.equal((await post('/draft/model', { slug, path, length: 1 })).status, 400);   // not ready yet
+    for (const v of ['front', 'back', 'left', 'right']) { const r = await round(slug, v, { count: 1 }); await ok('/draft/pick', { slug, step: v, image: r.draft.views.rounds[v][0].images[0] }); }
+    const ready = await ok('/draft/approve', { slug, step: 'views' });
+    assert.deepEqual(ready.model, { views: ['front', 'left', 'back', 'right'], missing: [] });
+    assert.equal((await post('/draft/model', { slug, path: 'models/other/x.glb', length: 1 })).status, 400);
+    assert.equal((await post('/draft/model', { slug, path, length: 0 })).status, 400);
+    assert.equal((await post('/draft/model', { slug, path, length: '4' })).status, 400);
+    const { draft } = await ok('/draft/model', { slug, path, length: 40 });
+    assert.equal(draft.model.length, 40); assert.equal(draft.model.path, path); assert.equal(draft.status, 'ready');
+  });
   it('the page part is served', async () => {
     const r = await fetch(`${origin}/p/nfgames.model-maker/web/index.js`);
     assert.equal(r.status, 200); assert.match(r.headers.get('content-type'), /javascript/);

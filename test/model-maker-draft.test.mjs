@@ -1,7 +1,7 @@
 // A draft of a new model: its steps (concept, then views, then ready) and the rules between them, without files.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { VIEWS, EXTRA_VIEWS, slugOf, newDraft, viewPrompt, folderFor, startRound, settleRound, reconcile, pickConcept, pickView, approveConcept, setViews, approveViews, filesToKeep } from '../plugins/model-maker/draft.mjs';
+import { VIEWS, EXTRA_VIEWS, slugOf, newDraft, viewPrompt, folderFor, startRound, settleRound, reconcile, pickConcept, pickView, approveConcept, setViews, approveViews, filesToKeep, MODEL_SIDES, MODEL_POLES, whereOf, cleanNotes, revisionPrompt, startRevision, modelViews, setModel } from '../plugins/model-maker/draft.mjs';
 
 const img = (folder, n = 1) => `.nfgames/images/${folder}/image-${n}.png`;
 /** A draft with a finished concept round ('c1', two images), nothing picked. */
@@ -36,7 +36,7 @@ describe('a draft\'s name and folder', () => {
   it('a new draft starts at the concept, with the four views listed', () => {
     const d = newDraft({ slug: 'a', name: 'A' });
     assert.equal(d.version, 1); assert.equal(d.status, 'concept'); assert.deepEqual(d.views.list, ['front', 'back', 'left', 'right']); assert.deepEqual(VIEWS, d.views.list);
-    assert.deepEqual(EXTRA_VIEWS, ['three-quarter', 'top']);
+    assert.deepEqual(EXTRA_VIEWS, ['three-quarter', 'top', 'bottom']);
   });
   it('a round\'s folder fits what the image service takes, however long the name', () => {
     const d = newDraft({ slug: 'x'.repeat(40), name: 'A' });
@@ -137,5 +137,78 @@ describe('a draft\'s steps', () => {
     assert.deepEqual(d.views.list, ['front', 'top']); assert.deepEqual(Object.keys(d.views.picks), ['front']); assert.equal(d.views.prompts.top, 'from above');
     assert.throws(() => setViews(withViews(), { list: [] }), /view/); assert.throws(() => setViews(withViews(), { list: ['front', 'inside-out'] }), /view/);
     assert.throws(() => approveViews(d), /every view/);   // top has no pick yet
+  });
+});
+
+describe('revisions and the model step', () => {
+  /** A draft with these views listed, each with a round and a pick, approved. */
+  const ready = (list) => {
+    let d = setViews(approveConcept(pickConcept(withConcept(), img('c1', 1))), { list });
+    for (const v of d.views.list) {
+      let r; ({ draft: d, round: r } = startRound(d, v, { prompt: 'p', count: 1, folder: `v-${v}`, at: 2 }));
+      d = pickView(settleRound(d, v, r.id, { images: [img(`v-${v}`)] }), v, img(`v-${v}`));
+    }
+    return approveViews(d);
+  };
+  it('bottom is a view that can be listed, after top', () => {
+    const d = setViews(withConcept(), { list: ['bottom', 'front', 'top'] });
+    assert.deepEqual(d.views.list, ['front', 'top', 'bottom']);
+    assert.match(viewPrompt(d, 'bottom'), /straight up from below/);
+    assert.match(viewPrompt(d, 'top'), /front of the object pointing to the top of the picture/);
+    assert.doesNotMatch(viewPrompt(d, 'front'), /pointing to the top of the picture/);
+    assert.match(viewPrompt(d, 'front'), /nothing cropped/);
+  });
+  it('whereOf names the ninth of the picture', () => {
+    assert.equal(whereOf(0, 0), 'upper left'); assert.equal(whereOf(0.5, 0.5), 'centre');
+    assert.equal(whereOf(1, 1), 'lower right'); assert.equal(whereOf(0.5, 0.1), 'top centre'); assert.equal(whereOf(0.9, 0.5), 'right side');
+    assert.equal(whereOf(0.1, 0.5), 'left side'); assert.equal(whereOf(0.5, 0.9), 'bottom centre'); assert.equal(whereOf(0.9, 0.1), 'upper right'); assert.equal(whereOf(0.1, 0.9), 'lower left');
+  });
+  it('cleanNotes clamps, cuts and refuses', () => {
+    const c = cleanNotes({ pins: [{ x: -1, y: 2, note: ' wrong window ' }, { x: 0.5, y: 0.5, note: '' }], note: 'x'.repeat(1200) });
+    assert.deepEqual(c.pins, [{ x: 0, y: 1, note: 'wrong window' }]); assert.equal(c.note.length, 1000);
+    assert.equal(cleanNotes({ pins: [{ x: 0, y: 0, note: 'n'.repeat(400) }] }).pins[0].note.length, 300);
+    assert.throws(() => cleanNotes({ pins: [{ x: 'a', y: 0, note: 'n' }] }), /pins/);
+    assert.throws(() => cleanNotes({ pins: [{ x: NaN, y: 0, note: 'n' }] }), /pins/);
+    assert.throws(() => cleanNotes({ pins: 'nope', note: 'n' }), /pins/);
+    assert.throws(() => cleanNotes({ pins: Array.from({ length: 13 }, () => ({ x: 0, y: 0, note: 'n' })) }), /at most 12/);
+    assert.throws(() => cleanNotes({ pins: [], note: '  ' }), /say what to change/);
+    assert.throws(() => cleanNotes(), /say what to change/);
+    assert.deepEqual(cleanNotes({ note: ' wider ' }), { pins: [], note: 'wider' });
+  });
+  it('a revision is a new round of the step, made from the image', () => {
+    const d0 = withConcept();
+    const { draft, round } = startRevision(d0, 'concept', { image: img('c1', 1), pins: [{ x: 0.1, y: 0.1, note: 'no antenna' }], note: 'keep the glass', folder: 'f2', at: 2, marked: 'm.png' });
+    assert.equal(round.from, img('c1', 1)); assert.equal(round.count, 2); assert.equal(round.state, 'pending'); assert.equal(round.marked, 'm.png');
+    assert.deepEqual(round.pins, [{ x: 0.1, y: 0.1, note: 'no antenna' }]); assert.equal(round.note, 'keep the glass');
+    assert.ok(round.prompt.startsWith('p\n\nRevise the first reference image'));
+    assert.match(round.prompt, /1 \(upper left\): no antenna/); assert.match(round.prompt, /Also: keep the glass/); assert.match(round.prompt, /markers are not part of the picture/);
+    assert.doesNotMatch(round.prompt, /concept the object comes from/);
+    assert.equal(draft.concept.rounds.length, 2); assert.equal(d0.concept.rounds.length, 1);
+    assert.throws(() => startRevision(d0, 'concept', { image: 'zzz.png', pins: [], note: 'n', folder: 'f', at: 1 }), /not an image/);
+    assert.throws(() => startRevision(d0, 'concept', { image: img('c1', 1), pins: [], note: '', folder: 'f', at: 1 }), /say what to change/);
+    // without a marked copy the prompt does not speak of one
+    assert.doesNotMatch(startRevision(d0, 'concept', { image: img('c1', 1), note: 'n', folder: 'f', at: 1 }).round.prompt, /markers/);
+    assert.equal(startRevision(d0, 'concept', { image: img('c1', 1), note: 'n', count: 5, folder: 'f', at: 1 }).round.count, 5);
+  });
+  it('a view is revised from a round of the approved concept only, and the concept goes with it', () => {
+    let d = withViews({ approve: true });
+    const { draft, round } = startRevision(d, 'front', { image: img('v-front'), note: 'door on the other side', folder: 'f', at: 3 });
+    assert.equal(round.concept, d.concept.approved); assert.match(round.prompt, /The last reference image is the concept the object comes from/);
+    assert.equal(draft.status, 'views'); assert.equal(draft.views.approved, false);
+    d = approveConcept(pickConcept(d, img('c1', 2)), { confirm: true });
+    assert.throws(() => startRevision(d, 'front', { image: img('v-front'), note: 'n', folder: 'f', at: 4 }), /made from the approved concept/);
+    assert.equal(revisionPrompt(d, 'concept', { prompt: 'base' }, { pins: [], note: 'n', marked: null }), 'base\n\nRevise the first reference image: make the same picture again with only the changes listed here, and leave everything not mentioned exactly as it is.\nAlso: n');
+  });
+  it('modelViews: four sides needed, the poles only as a pair', () => {
+    assert.deepEqual(MODEL_SIDES, ['front', 'left', 'back', 'right']); assert.deepEqual(MODEL_POLES, ['top', 'bottom']);
+    assert.deepEqual(modelViews(ready(['front', 'back', 'left', 'right', 'top'])), { views: ['front', 'left', 'back', 'right'], missing: [] });
+    assert.deepEqual(modelViews(ready(['front', 'back', 'left', 'right', 'top', 'bottom'])).views, ['front', 'left', 'back', 'right', 'top', 'bottom']);
+    assert.deepEqual(modelViews(ready(['front', 'back', 'three-quarter'])).missing, ['left', 'right']);
+    assert.deepEqual(modelViews(withViews()), { views: [], missing: [] });   // picked but not approved: nothing to make a model from yet
+  });
+  it('setModel records the model on a ready draft only', () => {
+    const d = setModel(withViews({ approve: true }), { path: 'models/lantern/lantern.glb', length: 0.6, at: 9 });
+    assert.deepEqual(d.model, { path: 'models/lantern/lantern.glb', length: 0.6, at: 9 });
+    assert.throws(() => setModel(withViews(), { path: 'x', length: 1, at: 1 }), /approve the views/);
   });
 });
