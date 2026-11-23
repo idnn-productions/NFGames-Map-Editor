@@ -6,6 +6,8 @@
 //     concept: { rounds: [round], pick: image | null, approved: image | null },
 //     views: { list: [view], prompts: { view: text }, rounds: { view: [round] }, picks: { view: image }, approved: boolean } }
 //   round: { id, folder, prompt, count, state: 'pending' | 'done' | 'failed', images: [paths], error, at }
+//   a view's round also has `concept`: the approved concept image it was made from. Rounds made from another
+//   concept stay listed but are not this concept's views: their images cannot be picked.
 export const VIEWS = ['front', 'back', 'left', 'right'];
 export const EXTRA_VIEWS = ['three-quarter', 'top'];
 const ALL_VIEWS = [...VIEWS, ...EXTRA_VIEWS];
@@ -57,7 +59,7 @@ export function startRound(draft, step, { prompt, count, folder, at }) {
   const d = copy(draft), rounds = roundsOf(d, step);
   if (step !== 'concept' && !d.concept.approved) refuse('concept: approve a concept image before making views');
   if (typeof prompt !== 'string' || !prompt.trim()) refuse('prompt: describe the image');
-  const round = { id: `r${rounds.reduce((n, r) => Math.max(n, Number(r.id.slice(1)) || 0), 0) + 1}`, folder, prompt, count: Math.max(1, Math.min(8, Math.round(Number(count)) || 1)), state: 'pending', images: [], error: null, at };
+  const round = { id: `r${rounds.reduce((n, r) => Math.max(n, Number(r.id.slice(1)) || 0), 0) + 1}`, folder, prompt, count: Math.max(1, Math.min(8, Math.round(Number(count)) || 1)), state: 'pending', images: [], error: null, at, ...(step === 'concept' ? {} : { concept: d.concept.approved }) };
   rounds.push(round);
   if (step !== 'concept') reopenViews(d);
   return { draft: d, round: { ...round } };
@@ -92,7 +94,7 @@ export function pickConcept(draft, image) {
 }
 export function pickView(draft, view, image) {
   const d = copy(draft);
-  if (!has(roundsOf(d, view), image)) refuse(`image: not an image of this draft's ${view} view`);
+  if (!has(roundsOf(d, view).filter((r) => r.concept === d.concept.approved), image)) refuse(`image: not an image of this draft's ${view} view, made from the approved concept`);
   d.views.picks[view] = image; reopenViews(d);
   return d;
 }

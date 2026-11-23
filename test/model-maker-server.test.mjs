@@ -2,7 +2,7 @@
 // and approvals copied into the draft's folder, a run that outlived its tab, and paths that must stay inside.
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHost } from '../src/host.mjs';
@@ -94,6 +94,30 @@ describe('the model maker', () => {
     assert.equal(draft.status, 'ready'); assert.deepEqual(readdirSync(inDraft('brass-lantern', 'views')).sort(), ['back.png', 'front.png', 'left.png', 'right.png']);
     assert.deepEqual(readFileSync(inDraft('brass-lantern', 'views', 'left.png')), readFileSync(join(copy.root, draft.views.picks.left)));
     assert.deepEqual((await get('/drafts')).body.drafts.find((d) => d.slug === 'brass-lantern'), { slug: 'brass-lantern', name: 'Brass lantern', status: 'ready' });
+  });
+  it('tidying the image rounds away does not break an approved draft, nor turn the plugin off', async () => {
+    const d0 = (await get('/draft?slug=brass-lantern')).body.draft, hold = join(top, 'held-images');
+    cpSync(join(copy.root, '.nfgames', 'images'), hold, { recursive: true }); rmSync(join(copy.root, '.nfgames', 'images'), { recursive: true });
+    const kept = readFileSync(inDraft('brass-lantern', 'views', 'left.png'));
+    assert.equal((await ok('/draft/save', { slug: 'brass-lantern', description: 'a small brass street lantern, dented' })).draft.status, 'ready');   // nothing it keeps changed
+    assert.deepEqual(readFileSync(inDraft('brass-lantern', 'views', 'left.png')), kept); assert.ok(existsSync(inDraft('brass-lantern', 'concept.png')));
+    const gone = await post('/draft/pick', { slug: 'brass-lantern', step: 'concept', image: d0.concept.rounds[0].images[0] });   // picking is only a note in the draft
+    assert.equal(gone.status, 200);
+    const no = await post('/draft/approve', { slug: 'brass-lantern', step: 'concept', confirm: true });   // ...but approving needs the image itself
+    assert.equal(no.status, 400); assert.match(no.body.error, /no longer there/);
+    const still = (await get('/draft?slug=brass-lantern')).body.draft;
+    assert.equal(still.status, 'ready'); assert.equal(still.concept.approved, d0.concept.approved); assert.deepEqual(readFileSync(inDraft('brass-lantern', 'views', 'left.png')), kept);
+    assert.equal((await (await fetch(`${origin}/api/plugins`)).json()).plugins.find((p) => p.id === 'nfgames.model-maker').state, 'active');
+    cpSync(hold, join(copy.root, '.nfgames', 'images'), { recursive: true });
+    await ok('/draft/pick', { slug: 'brass-lantern', step: 'concept', image: d0.concept.approved });
+  });
+  it('a link among the drafts that leads out of the project is passed over; the other drafts go on', async () => {
+    const outside = join(top, 'elsewhere'); mkdirSync(outside); writeFileSync(join(outside, 'draft.json'), '{}');
+    symlinkSync(outside, inDraft('sneaky'));
+    const list = await get('/drafts');
+    assert.equal(list.status, 200); assert.ok(list.body.drafts.some((d) => d.slug === 'brass-lantern')); assert.ok(!list.body.drafts.some((d) => d.slug === 'sneaky'));
+    assert.equal((await get('/draft?slug=brass-lantern')).status, 200); assert.equal((await get('/draft?slug=sneaky')).status, 404);
+    rmSync(inDraft('sneaky'));
   });
   it('another concept after that asks first, then clears the views', async () => {
     const d0 = (await get('/draft?slug=brass-lantern')).body.draft;

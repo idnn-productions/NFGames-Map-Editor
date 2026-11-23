@@ -11,7 +11,9 @@ const refuse = (code, text) => { throw Object.assign(new Error(text), { code });
 export function activate(api) {
   const f = api.files;
   const dirOf = (slug) => `${DRAFTS}/${slug}`, fileOf = (slug) => `${dirOf(slug)}/draft.json`;
-  const slugs = () => (f.exists(DRAFTS) ? f.list(DRAFTS).filter((name) => /^[a-z0-9][a-z0-9-]{0,45}$/.test(name) && f.exists(fileOf(name))) : []);
+  // a folder the plugin may not read (a link that leads out of the project) is not a draft: the others go on
+  const isDraft = (name) => { try { return f.exists(fileOf(name)); } catch { return false; } };
+  const slugs = () => (f.exists(DRAFTS) ? f.list(DRAFTS).filter((name) => /^[a-z0-9][a-z0-9-]{0,45}$/.test(name) && isDraft(name)) : []);
   /** The slug a request names: one of the drafts there are, else 404. */
   const known = (slug) => (typeof slug === 'string' && slugs().includes(slug) ? slug : refuse(404, 'no such draft'));
   const read = (slug) => {
@@ -22,15 +24,21 @@ export function activate(api) {
   const imagesIn = (folder) => { const dir = `${IMAGES}/${folder}`; return f.exists(dir) ? f.list(dir).filter((n) => IMAGE.test(n)).sort().map((n) => `${dir}/${n}`) : []; };
   /** What the page gets: the draft, and each listed view's prompt as it would be sent (the user's own, or drafted). */
   const shown = (draft) => ({ draft, prompts: Object.fromEntries(draft.views.list.map((v) => [v, viewPrompt(draft, v)])) });
-  /** Writes the draft, and (files: true) what it keeps beside it: concept.png, and views/ only while they are approved. */
+  /** Writes the draft, and (files: true) what it keeps beside it: concept.png, and views/ only while they are approved.
+   *  A kept file is copied from its round only when the choice changed, so rounds tidied away later do no harm; a new
+   *  choice whose image is gone is refused, before anything is written. */
   const save = (draft, { files = false } = {}) => {
-    f.write(fileOf(draft.slug), `${JSON.stringify(draft, null, 2)}\n`);
     if (files) {
-      const keep = filesToKeep(draft), dir = dirOf(draft.slug);
-      if (keep.concept) f.write(`${dir}/concept.png`, f.read(keep.concept, null));
-      f.remove(`${dir}/views`);
-      for (const [view, image] of Object.entries(keep.views)) f.write(`${dir}/views/${view}.png`, f.read(image, null));
+      const dir = dirOf(draft.slug), keep = filesToKeep(draft);
+      let was = { concept: null, views: {} }; try { was = filesToKeep(read(draft.slug)); } catch { /* a new draft */ }
+      const copies = [[`${dir}/concept.png`, keep.concept, was.concept], ...Object.entries(keep.views).map(([view, image]) => [`${dir}/views/${view}.png`, image, was.views[view]])]
+        .filter(([to, from, before]) => from && !(from === before && f.exists(to)));
+      for (const [, from] of copies) if (!f.exists(from)) refuse(400, `That image is no longer there (${from}): pick another, or generate again.`);
+      for (const [to, from] of copies) f.write(to, f.read(from, null));
+      if (f.exists(`${dir}/views`)) for (const name of f.list(`${dir}/views`)) if (!Object.hasOwn(keep.views, name.replace(/\.png$/, ''))) f.remove(`${dir}/views/${name}`);
+      if (!Object.keys(keep.views).length) f.remove(`${dir}/views`);
     }
+    f.write(fileOf(draft.slug), `${JSON.stringify(draft, null, 2)}\n`);
     api.events.emit('changed', { slug: draft.slug });
     return shown(draft);
   };

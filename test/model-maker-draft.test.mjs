@@ -117,6 +117,14 @@ describe('a draft\'s steps', () => {
     assert.deepEqual(filesToKeep(back).views, {}); assert.equal(back.views.rounds.front.length, 1);   // the old rounds stay listed
     assert.equal(approveConcept(withViews({ approve: true })).status, 'ready');   // the same concept again: nothing to clear
   });
+  it('views made from another concept are not this concept\'s: they cannot be picked, so they cannot be approved', () => {
+    const d = approveConcept(pickConcept(withViews({ approve: true }), img('c1', 2)), { confirm: true });
+    assert.equal(d.views.rounds.front[0].concept, img('c1', 1));   // each view round says which concept it was made from
+    assert.throws(() => pickView(d, 'front', img('v-front')), /image/);
+    const { draft, round } = startRound(d, 'front', { prompt: 'p', count: 1, folder: 'v-front-b', at: 5 });
+    assert.equal(round.concept, img('c1', 2));
+    assert.equal(pickView(settleRound(draft, 'front', round.id, { images: [img('v-front-b')] }), 'front', img('v-front-b')).views.picks.front, img('v-front-b'));
+  });
   it('touching a view after the views were approved takes the draft back to the views step', () => {
     const ready = withViews({ approve: true });
     const again = startRound(ready, 'front', { prompt: 'p', count: 1, folder: 'v-front-2', at: 9 }).draft;

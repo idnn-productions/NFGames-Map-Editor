@@ -311,6 +311,17 @@ try {
     console.log(`workbench: ${want} problems on the map, ${rows} in the Problems tab`);
     if (!want || rows !== want) fail('the Problems tab should list the map\'s problems');
     if (await inFrame((w) => w.document.querySelector('#problems').children.length)) fail('in the workbench the map should not list its problems a second time');
+    // keys pressed while the Inspector has the focus still reach the map: undo takes the move back, and the page's own save runs
+    const moved = await inFrame((w) => w.__map.plan.pieces.find((q) => q.id === 'crate').at[0]);
+    await wb.evaluate(() => document.querySelector('#inspectorBody .lent').shadowRoot.querySelector('#sel button').focus());
+    await wb.keyboard.press('Control+z');
+    const undone = await inFrame((w) => w.__map.plan.pieces.find((q) => q.id === 'crate').at[0]);
+    if (moved !== 500 || undone === 500) fail(`Ctrl+Z with the focus in the Inspector should undo on the map (x was ${moved}, is ${undone})`);
+    await wb.keyboard.press('Control+y');
+    if ((await inFrame((w) => w.__map.plan.pieces.find((q) => q.id === 'crate').at[0])) !== 500) fail('Ctrl+Y with the focus in the Inspector should redo on the map');
+    await wb.evaluate(() => { const i = document.querySelector('#inspectorBody .lent').shadowRoot.querySelector('#sel input[type=number]'); i.focus(); });
+    await wb.keyboard.press('Delete');   // typing in a field is typing: the piece stays
+    if (!(await inFrame((w) => w.__map.plan.pieces.some((q) => q.id === 'crate')))) fail('Delete typed in an Inspector field should not remove the piece');
     await inFrame((w) => w.__map.select([]));
     await wb.locator('#bottomBody .nf-problems li').first().click();
     if ((await inFrame((w) => w.__map.sel.join())) !== 'piece:crate') fail('a click on a problem should select it on the map');

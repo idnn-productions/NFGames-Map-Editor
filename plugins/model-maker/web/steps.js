@@ -17,10 +17,14 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   // ---- talking to the server
   const take = (r) => { draft = r.draft; prompts = r.prompts || prompts; return r; };
   const call = async (path, body) => take(await api.fetch(path, post({ slug: draft.slug, ...body })));
-  const busy = async () => { try { return (await (await fetch('/api/job')).json()).state === 'running'; } catch { return false; } };
-  async function load() {
+  /** The job the editor is running now (it runs one at a time), or null. */
+  const runningJob = async () => { try { const j = await (await fetch('/api/job')).json(); return j.state === 'running' ? j : null; } catch { return null; } };
+  const busy = async () => !!(await runningJob());
+  /** The draft from the server. `fields` also takes its name, description and style into the form: only as the tab
+   *  opens, never while watching a run, when they may be half typed. */
+  async function load({ fields = false } = {}) {
     take(await api.fetch(`/draft?slug=${encodeURIComponent(slug)}${running.size || (await busy()) ? '&busy=1' : ''}`));
-    Object.assign(form, { name: draft.name, description: draft.description, style: draft.style });
+    if (fields) Object.assign(form, { name: draft.name, description: draft.description, style: draft.style });
     api.documents.setTitle(doc.id, `New model: ${draft.name}`);
   }
   async function checkService() {
@@ -34,6 +38,9 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     if (running.has(where)) return;
     running.add(where); delete notes[where]; draw();
     try {
+      // the editor is busy (a map's Apply, another generation): say so, and start nothing
+      const job = await runningJob();
+      if (job) { notes[where] = `The editor is busy (${job.label || job.kind || 'a job'} is running). Try again when it is done.`; return; }
       const { round, input } = await call('/draft/round', { step: where, prompt, count });
       draw();
       let error = null;
@@ -50,12 +57,16 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   }
   const conceptPrompt = () => [form.description.trim(), form.style.trim() && `Style: ${form.style.trim()}.`].filter(Boolean).join('\n');
   async function generateConcept() {
+    delete notes.concept;
     if (!form.description.trim()) return fail('concept', new Error('Describe it first.'));
     if (!draft) return begin({ generate: true, count: form.count });
     await saveFields();
     return generate('concept', conceptPrompt(), form.count);
   }
-  async function generateViews() { for (const v of draft.views.list) if (!(draft.views.rounds[v] || []).length && !gone) await generate(v, form.prompt[v] ?? prompts[v], form.viewCount[v] || 2); }
+  /** A view's rounds made from the approved concept (those from an earlier concept are only shown, under the fold). */
+  const mine = (v) => (draft.views.rounds[v] || []).filter((r) => r.concept === draft.concept.approved);
+  const others = (v) => (draft.views.rounds[v] || []).filter((r) => r.concept !== draft.concept.approved);
+  async function generateViews() { for (const v of draft.views.list) if (!mine(v).length && !gone && !notes[v]) await generate(v, form.prompt[v] ?? prompts[v], form.viewCount[v] || 2); }
   async function saveFields(extra = {}) {
     if (!draft) return;
     try { await call('/draft/save', { name: form.name, description: form.description, style: form.style, ...extra }); api.documents.setTitle(doc.id, `New model: ${draft.name}`); } catch (e) { toast(e.message, 'error'); }
@@ -91,15 +102,16 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   const pic = (path, { on = false, onclick = null, title = '' } = {}) => h('button', { className: `mm-pic${on ? ' on' : ''}${onclick ? '' : ' still'}`, onclick, title }, h('img', { src: src(path), alt: title || 'generated image', loading: 'lazy' }));
   const whyNot = () => (connected ? null : h('p', { className: 'mm-bad' }, 'Image generation is not connected. ', btn('Open Services', () => api.commands.execute('core/services'))));
   /** A step's rounds: the newest as a grid to pick from, the earlier ones under a fold. */
-  function rounds(where, list, picked, onPick) {
+  function rounds(where, list, picked, onPick, old = []) {
     const out = [], [latest, ...earlier] = [...list].reverse();
-    const one = (r, small) => [
+    const one = (r, small, pickable = true) => [
       r.state === 'pending' ? h('p', { className: 'mm-wait', textContent: 'Generating…' }) : null,
       r.state === 'failed' ? h('p', { className: 'mm-bad', textContent: r.error || 'It failed.' }) : null,
-      r.images.length ? h('div', { className: `mm-grid${small ? ' small' : ''}` }, ...r.images.map((i) => pic(i, { on: i === picked, onclick: act(where, () => onPick(i)), title: 'Pick this one' }))) : null,
+      r.images.length ? h('div', { className: `mm-grid${small ? ' small' : ''}` }, ...r.images.map((i) => (pickable ? pic(i, { on: i === picked, onclick: act(where, () => onPick(i)), title: 'Pick this one' }) : pic(i, { title: 'Made from an earlier concept' })))) : null,
     ];
     if (latest) out.push(...one(latest, where !== 'concept'));
-    if (earlier.length) out.push(h('details', {}, h('summary', { textContent: `earlier rounds (${earlier.length})` }), ...earlier.flatMap((r) => one(r, true))));
+    if (earlier.length || old.length) out.push(h('details', {}, h('summary', { textContent: `earlier rounds (${earlier.length + old.length})` }), ...earlier.flatMap((r) => one(r, true)),
+      ...(old.length ? [h('p', { className: 'mm-note', textContent: 'Made from an earlier concept (kept to look at, not to pick):' }), ...[...old].reverse().flatMap((r) => one(r, true, false))] : [])));
     if (notes[where] && !(latest && latest.state === 'failed')) out.push(h('p', { className: 'mm-bad', textContent: notes[where] }));
     return out;
   }
@@ -124,13 +136,13 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     ];
   }
   function views() {
-    const v = draft.views, anyRunning = v.list.some((x) => running.has(x)), unmade = v.list.filter((x) => !(v.rounds[x] || []).length);
+    const v = draft.views, anyRunning = v.list.some((x) => running.has(x)), unmade = v.list.filter((x) => !mine(x).length);
     const row = (view) => h('div', { className: 'mm-view' },
       h('div', { className: 'mm-row' }, h('h3', { textContent: view }), h('span', { className: 'grow' }), h('span', { className: 'mm-note', textContent: 'How many' }),
         field.key(h('input', { type: 'number', min: 1, max: 8, value: form.viewCount[view] || 2, oninput: (e) => { form.viewCount[view] = Math.max(1, Math.min(8, Number(e.target.value) || 1)); } }), `count:${view}`),
-        btn(running.has(view) ? 'Generating…' : (v.rounds[view] || []).length ? 'Generate again' : 'Generate', () => generate(view, form.prompt[view] ?? prompts[view], form.viewCount[view] || 2), { disabled: !connected || anyRunning })),
+        btn(running.has(view) ? 'Generating…' : mine(view).length ? 'Generate again' : 'Generate', () => generate(view, form.prompt[view] ?? prompts[view], form.viewCount[view] || 2), { disabled: !connected || anyRunning })),
       field.key(h('textarea', { value: form.prompt[view] ?? prompts[view] ?? '', oninput: (e) => { form.prompt[view] = e.target.value; }, onchange: () => saveFields({ views: { list: v.list, prompts: { [view]: form.prompt[view] } } }).then(draw) }), `prompt:${view}`),
-      ...rounds(view, v.rounds[view] || [], v.picks[view], (image) => call('/draft/pick', { step: view, image })));
+      ...rounds(view, mine(view), v.picks[view], (image) => call('/draft/pick', { step: view, image }), others(view)));
     return [h('div', { className: 'mm-views' },
       h('div', {}, h('label', { textContent: 'Approved concept' }), pic(draft.concept.approved, { title: 'The approved concept' }), h('p', { className: 'mm-note', textContent: 'Every view is made from this image.' })),
       h('div', {},
@@ -173,7 +185,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     el.replaceChildren(h('p', { className: 'nf-empty', textContent: 'Loading…' }));
     await checkService();
     if (slug) {
-      try { await load(); } catch (e) { el.replaceChildren(h('p', { className: 'nf-empty', textContent: `This draft cannot be opened: ${e.message}` })); return; }
+      try { await load({ fields: true }); } catch (e) { el.replaceChildren(h('p', { className: 'nf-empty', textContent: `This draft cannot be opened: ${e.message}` })); return; }
       step = draft.status === 'ready' ? 'model' : draft.status === 'views' ? 'views' : 'concept';
     } else { try { form.style = (await api.fetch('/drafts')).style || ''; } catch { /* no style kept yet */ } }
     draw();
