@@ -5,12 +5,12 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-/** SHA-256 over a folder's files (names and bytes; hidden files and node_modules left out). */
+/** SHA-256 over every file a plugin could load (names and bytes; only .git and .DS_Store left out). */
 export function folderHash(dir) {
   const h = createHash('sha256');
   const walk = (d) => {
     for (const e of readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      if (e.name === '.git' || e.name === '.DS_Store') continue;
       const f = join(d, e.name);
       if (e.isDirectory()) walk(f);
       else if (e.isFile()) { h.update(relative(dir, f)); h.update('\0'); h.update(readFileSync(f)); }

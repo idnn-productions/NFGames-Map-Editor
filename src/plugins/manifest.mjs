@@ -9,6 +9,8 @@ const LOCAL = /^[a-z][a-zA-Z0-9-]*$/;                                       // a
 export const POINTS = ['tools', 'editors', 'panels', 'inspectors', 'commands', 'statusItems', 'workflows', 'services'];
 const EVENT = /^(onStartup|onProject|onRoute|on(Tool|Editor|Command|Panel|Inspector|Service):[a-zA-Z][a-zA-Z0-9-]*)$/;
 const inside = (p) => typeof p === 'string' && p !== '' && !isAbsolute(p) && !normalize(p).startsWith('..');
+// an entry point must be a plain file of the plugin's own: not in a hidden folder or node_modules, which the trust hash would not cover
+const plainEntry = (p) => inside(p) && !normalize(p).split(/[\\/]/).some((s) => s.startsWith('.') || s === 'node_modules');
 
 /** What is wrong with a manifest object (empty when nothing is). */
 export function checkManifest(m) {
@@ -18,7 +20,7 @@ export function checkManifest(m) {
   if (typeof m.name !== 'string' || !m.name.trim()) say('name: a name to show');
   if (!validVersion(m.version)) say('version: x.y.z');
   if (!m.engines || typeof m.engines.nfgames !== 'string') say('engines.nfgames: the plugin API version it needs, e.g. "^1.0.0"');
-  for (const k of ['server', 'web']) if (m[k] !== undefined && !inside(m[k])) say(`${k}: a path inside the plugin's folder`);
+  for (const k of ['server', 'web']) if (m[k] !== undefined && !plainEntry(m[k])) say(`${k}: a path inside the plugin's folder, not in a hidden folder or node_modules`);
   const t = m.touches || {};
   if (t.files !== undefined && (!Array.isArray(t.files) || !t.files.every((g) => inside(String(g).replace(/\*/g, 'x'))))) say('touches.files: project-relative globs');
   if (t.commands !== undefined && (!Array.isArray(t.commands) || !t.commands.every((c) => typeof c === 'string'))) say('touches.commands: a list of program names');

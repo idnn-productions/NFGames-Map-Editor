@@ -52,6 +52,9 @@ describe('plugin sources', () => {
     trustPlugin(state, found['jacek.mine']); assert.equal(pluginTrust(state, found['jacek.mine']), 'trusted');
     writeFileSync(join(dirs.userDir, 'mine', 'server.mjs'), 'export function activate() {}\n');
     assert.equal(pluginTrust(state, found['jacek.mine']), 'ask');
+    trustPlugin(state, found['jacek.mine']);
+    mkdirSync(join(dirs.userDir, 'mine', 'node_modules', 'dep'), { recursive: true }); writeFileSync(join(dirs.userDir, 'mine', 'node_modules', 'dep', 'index.js'), 'evil');
+    assert.equal(pluginTrust(state, found['jacek.mine']), 'ask'); // code it could import is covered too
     assert.equal(pluginTrust(state, found['acme.terrain']), 'ask');
     trustPlugin(state, found['acme.terrain']); assert.equal(pluginTrust(state, found['acme.terrain']), 'trusted');
   });

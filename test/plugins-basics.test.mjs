@@ -36,7 +36,8 @@ describe('plugin.json', () => {
   it('says what is wrong', () => {
     const bad = (patch) => checkManifest({ ...good, ...patch }).join(' | ');
     assert.match(bad({ id: 'Terrain' }), /id:/); assert.match(bad({ version: 'v1' }), /version/); assert.match(bad({ engines: {} }), /engines\.nfgames/);
-    assert.match(bad({ server: '../evil.mjs' }), /server: a path inside/); assert.match(bad({ contributes: { gadgets: [] } }), /not an extension point/);
+    assert.match(bad({ server: '../evil.mjs' }), /server: a path inside/);
+    assert.match(bad({ server: '.hidden/server.mjs' }), /not in a hidden folder/); assert.match(bad({ web: 'node_modules/x/index.js' }), /node_modules/); assert.match(bad({ contributes: { gadgets: [] } }), /not an extension point/);
     assert.match(bad({ contributes: { tools: [{ id: 'a' }, { id: 'a' }] } }), /two are called "a"/);
     assert.match(bad({ activation: ['whenever'] }), /activation/); assert.match(bad({ touches: { files: ['/etc/**'] } }), /touches\.files/);
   });
