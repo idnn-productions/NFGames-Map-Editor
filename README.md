@@ -8,9 +8,9 @@ checks the plan against a JSON Schema, writes it atomically and keeps the old fi
 check warns about pieces standing in each other, things outside the map, blocked doors and similar. A
 **3D view** shows the same plan as boxes, where you lift pieces onto roofs and move them along x, y and z.
 A **model viewer** shows the game's models (GLB): pin what is wrong on a model, add notes and reference images,
-and send it to a Claude Code session that fixes it and reports back (see [Model review](#model-review)). Both pages
-share a bar with links between them and **Open project…**, which browses your home folder for another project to open,
-and a project's models appear in the palette as kinds of piece by themselves.
+and send it to a Claude Code session that fixes it and reports back (see [Model review](#model-review)). Both are
+tabs of one **workbench**, under one bar with **Open project…**, which browses your home folder for another project
+to open, and a project's models appear in the palette as kinds of piece by themselves.
 
 The editor's core works for any game. Anything specific to one game lives in a **project config file**
 (`map-editor.config.mjs`): where its kinds of piece and their sizes come from, its own compile and
@@ -63,7 +63,7 @@ npm install        # nothing to download: it only sets up the package
 npm start
 ```
 
-Then open **http://127.0.0.1:8793/** (the workbench; the map editor alone is at `/map`). `npm start` serves `examples/sample/`, a small walled square.
+Then open **http://127.0.0.1:8793/** (the workbench; `/map` and `/viewer` open it on that tab, and `?alone` after either gives the bare page, as scripts use). `npm start` serves `examples/sample/`, a small walled square.
 It has a tower, three houses, an open hall, a market stall, crates, two planters, a beacon, a person,
 a door, a walker's round, a well and three plants. The sample config uses each kind of option and
 hook once, including a **Report** Apply action and a status panel.
@@ -74,7 +74,7 @@ If 8793 is already in use (another editor, say), pick another port:
 npm start -- --port 8794
 ```
 
-The model viewer is at **http://127.0.0.1:8793/viewer**. The sample has no models: set `models` in a
+The model viewer is **Model viewer** in the bar (or **http://127.0.0.1:8793/viewer**). The sample has no models: set `models` in a
 project's config (see [Model review](#model-review)) to point it at a folder of `.glb` files.
 
 Everything the example writes goes into `examples/sample/maps/plaza/` and `examples/sample/out/`.
@@ -138,8 +138,9 @@ With no config file the editor still works:
 
 ## Opening a project
 
-The editor and the model viewer share a bar: **Map editor** | **Model viewer**, the open project's name, and
-**📁 Open project…**. Both pages always show the same project, the one the editor's server has open; `--project`
+The workbench's bar is the same in every view: the views (**Home**, **Map editor**, **Model viewer**; a dot on
+Map editor means unsaved changes), then the open project's name, which opens **Open project…**. Every view always
+shows the same project, the one the editor's server has open; `--project`
 sets the first.
 
 **Open project…** browses the folders under your **home folder** (hidden folders such as `~/.ssh` are left out). It
@@ -425,7 +426,8 @@ On a Mac, Cmd works in place of Ctrl. Keys other than Ctrl S are ignored while y
   - **A door**: with a piece selected whose kind has a `door`, a door hangs on it. With no piece selected,
     the door stands free at the middle of the view. It starts as sign `PRIVATE`, shut `Locked.`.
   - **A person's place**: asks for the person's id, then places them at the middle of the view.
-- **Show**: one checkbox per layer: the metre grid, plants, walkers' rounds, people, things to use, doors,
+- **Show**: one checkbox per layer: the metre grid (the same switch as the 3D view's grid, the model viewer's
+  and **⌘G**), plants, walkers' rounds, people, things to use, doors,
   and names, plus any layers the project adds. A lazy layer is loaded the first time you tick it.
 - **Legend**: what each colour means, including the project's own classes and layers.
 - **Keys**: a short list of the mouse and keyboard controls.
@@ -480,7 +482,7 @@ after you stop editing. Nothing is written until you save.
 and the same plan in 3D. Both views share the selection, undo and redo, the palette, Problems and the Selected
 panel, so you can switch at any time. The 3D view needs WebGL; without it the 3D button is greyed out.
 
-What it draws: the ground (a disc, or the bounds' rectangle) with the metre grid, the ring wall (2 m high,
+What it draws: the ground (a disc, or the bounds' rectangle), the metre grid over the whole floor, the ring wall (2 m high,
 open at the gate), and every piece as solid boxes of its kind's `size` (one box per entry of `boxes`, at
 full height, so an open hall is its walls), in its class's colour, standing at its `y`. A short line on the
 ground marks each piece's front. People, things, doors, rounds, the arrival and hand-placed plants are the
@@ -519,9 +521,10 @@ What it does not do (yet):
 
 ## Model review
 
-![The model viewer: a pin with a note and a reference image on a ship's bow](docs/viewer.png)
+![The model viewer: a pin with a note on an apple's stem](docs/viewer.png)
 
-The **model viewer** (`http://127.0.0.1:<port>/viewer`; the editor prints its address on start) shows a game's
+The **model viewer** (**Model viewer** in the bar, or `http://127.0.0.1:<port>/viewer`, which the editor prints on
+start; `?model=<path>` opens one model, and says so when the project has no such file) shows a game's
 models and sends what is wrong with them to a Claude Code session. Open a model, drop **pins** on the spots that
 need fixing, write a note on each (drop or paste up to four reference images onto a pin), choose a **workflow**
 and press **Send to Claude**. The job lands in an inbox folder; a Claude Code session watching it fixes the model
@@ -548,6 +551,7 @@ Nothing is fetched at any other time, and no CDN is used.
 | Drag a pin | moves it over the surface (and takes a new screenshot) |
 | **View** on a pin | flies back to the view it was placed from |
 | Drop or paste images on a pin | reference images (PNG, JPEG, WebP; at most 4), scaled to 2048 px at most |
+| **Grid** | a floor grid scaled to the model; the same switch as the map's grids (**⌘G**) |
 | **Send to Claude** | writes the job; pins and notes are kept as a draft in the browser until then |
 
 **Workflows.** **Auto**: Claude decides how to fix it (the project's build script when there is one, else Blender,
@@ -587,8 +591,12 @@ nfgames plugin list
 **The workbench.** `http://127.0.0.1:<port>/` is the workbench: an activity bar of tools, a side panel, documents
 in tabs, an inspector, a bottom panel (Jobs, Problems, Output and plugins' panels), a status bar, and **⌘K** for
 every command. Plugins add to it; **🧩 Plugins** turns them on and off and asks before trusting one, **⚙ Settings**
-edits their settings. Today's map editor (now at `/map`) and model viewer (`/viewer`) open in it as classic tools
-until they are rebuilt as plugins. Regions can be hidden (⌘K, "Toggle …"), not yet resized by dragging.
+edits their settings. The map editor and the model viewer are always its tabs (from the **Core Tools** plugin, until
+they are rebuilt as plugins): opening `/map` or `/viewer` in a browser goes to `/?view=map` or `/?view=viewer`, and
+only `?alone` (or a frame) gets the bare page. The side panel follows the view shown: the map editor's left column
+(the palette, Show, Legend, Keys) or the viewer's model list. The side panel, inspector and bottom panel hide from
+the bar or with **⌘B**, **⌘I** and **⌘J** (kept per browser), not yet resized by dragging; **⌘G** turns every grid
+on or off. On Windows and Linux, Ctrl stands for ⌘.
 
 How to write one, what it gets, and what trust means: [`docs/plugins.md`](docs/plugins.md). A small example:
 [`examples/plugins/hello`](examples/plugins/hello).
