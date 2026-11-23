@@ -12,9 +12,18 @@ const SERVICE = `export function activate(api) {
   api.services.provide('words', 'shout', async ({ text }, { secret }) => ({ text: String(text).toUpperCase() + '!', keyLength: secret('TOKEN').length }));
   api.services.provide('words', 'poem', async () => ({ text: 'roses', cost: 0.75 }));
 }`;
-// a stand-in for the codex CLI: writes one PNG where the prompt says
+// a stand-in for the codex CLI: writes one PNG where the prompt says. It reads its arguments like the real one: -i takes
+// every value after it up to the next option, so a prompt placed after -i is taken as an image and there is no prompt.
 const CODEX = `#!/usr/bin/env node
-const fs = require('fs'), path = require('path'), prompt = process.argv[process.argv.length - 1], m = /into \\.\\/(\\S+)\\/ named/.exec(prompt);
+const fs = require('fs'), path = require('path'), a = process.argv.slice(2);
+let prompt = null;
+for (let i = 1; i < a.length; i++) {
+  if (a[i] === '-C' || a[i] === '-s') { i++; continue; }
+  if (a[i] === '-i') { while (a[i + 1] !== undefined && !a[i + 1].startsWith('-')) i++; continue; }
+  if (!a[i].startsWith('-') && prompt === null) prompt = a[i];
+}
+if (!prompt) { console.error('No prompt provided via stdin.'); process.exit(1); }
+const m = /into \\.\\/(\\S+)\\/ named/.exec(prompt);
 const dir = path.join(process.argv[process.argv.indexOf('-C') + 1], m[1]); fs.mkdirSync(dir, { recursive: true });
 fs.writeFileSync(path.join(dir, 'image-1.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47])); console.log('made', dir);`;
 
@@ -99,7 +108,8 @@ describe('services', () => {
       assert.match((await post('/api/services/call', { key: 'nfgames.codex-image/image', action: 'generate', input: { prompt: 'x', references: [bad] } })).body.error, /references/, bad);
   });
   it('image generation through Codex', async () => {
-    const r = await post('/api/services/call', { key: 'nfgames.codex-image/image', action: 'generate', input: { prompt: 'a weathered hull plate' } });
+    writeFileSync(join(copy.root, 'maps', 'plaza', 'ref.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const r = await post('/api/services/call', { key: 'nfgames.codex-image/image', action: 'generate', input: { prompt: 'a weathered hull plate', references: ['maps/plaza/ref.png'] } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.result.images.length, 1); assert.match(r.body.result.images[0], /^\.nfgames\/images\/.+\/image-1\.png$/);
     assert.ok(existsSync(join(copy.root, r.body.result.images[0])));
