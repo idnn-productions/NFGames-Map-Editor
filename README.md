@@ -252,7 +252,7 @@ footprint comes from the model's own bounds, read from the GLB's header without 
 the editor's frame; quantized positions, as Meshopt writes them, are read as the GPU draws them), and its box sits
 where the model is when the model's origin is not at its middle. A part turned inside the model makes the box a little
 larger than the model, since only the parts' own boxes are read. Models are
-listed under **Models · <folder>**, in the class `model` (teal). Each file is read once per version. A `kit.json`
+listed under **Models**, by folder, in the class `model` (teal). Each file is read once per version. A `kit.json`
 entry of the same name wins (a `size` there without `boxes` uses the whole footprint), so a footprint, `door` or
 `solid` can be set by hand. A file that cannot be read is a kind of unknown size (2 x 2 m) with a `model` problem
 naming it. A model piece's Selected panel has **View model**, which opens it in the model viewer. In the 3D view
@@ -417,7 +417,9 @@ On a Mac, Cmd works in place of Ctrl. Keys other than Ctrl S are ignored while y
 ### Left column
 
 - **Add a piece**: the palette. The project's presets come first, then plants (`plants.json`), then the
-  kinds of piece under their group headings, each with its size and its class tag. Click an entry to pick
+  kinds of piece under their group headings, each with its size and its class tag. A heading opens and closes
+  its group (models nest by folder under **Models**), and what is closed is remembered for the project. The
+  filter above the palette shows only the entries whose name or kind matches, whatever is closed. Click an entry to pick
   it, then click the map wherever it should go. Click the entry again, or press Esc, to stop. A new piece
   gets an id from its kind's name (`house`, `house2` ...), a preset piece gets the next id of its series,
   and everything snaps to the grid.
@@ -549,6 +551,7 @@ Nothing is fetched at any other time, and no CDN is used.
 | Do | What happens |
 |---|---|
 | Click a model on the left | it opens and is framed. Over 200 MB asks first |
+| Click a folder on the left | it opens or closes, with how many models it holds; what is closed is remembered for the project. The filter shows every match, whatever is closed |
 | **📍 Pin** (or **P**), then click the model | a numbered pin at that point, with a note. It records the point and the surface's direction in the model's own frame (glTF, metres, Y up), the mesh, the material, the texture coordinate under it, the view, and a screenshot |
 | Drag a pin | moves it over the surface (and takes a new screenshot) |
 | **View** on a pin | flies back to the view it was placed from |

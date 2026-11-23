@@ -27,10 +27,10 @@
   .row input[type=number] { width: 84px; }
   .row input[type=text] { flex: 1; min-width: 0; }
   .dim { color: var(--dim); } .small { font-size: 12px; }
-  .pal { display: grid; grid-template-columns: 1fr; gap: 3px; }
-  .pal button { text-align: left; font-size: 12px; padding: 3px 6px; display: flex; justify-content: space-between; gap: 6px; }
-  .pal button.on { background: var(--accent); color: #1a1206; border-color: var(--accent); }
-  .pal-h { color: var(--dim); font-size: 11px; margin: 8px 0 3px; }
+  #palFilter { width: 100%; margin: 2px 0 4px; }
+  #palette .tree-kids { display: grid; grid-template-columns: 1fr; gap: 3px; }
+  #palette .tree-kids > button { text-align: left; font-size: 12px; padding: 3px 6px; display: flex; justify-content: space-between; gap: 6px; }
+  #palette .tree-kids > button.on { background: var(--accent); color: #1a1206; border-color: var(--accent); }
   .tag { font-size: 10px; border-radius: 3px; padding: 0 4px; color: #1b1917; white-space: nowrap; align-self: center; }
   #status { min-height: 1.4em; white-space: pre-wrap; margin: 6px 0; }
   #status.bad { color: var(--bad); } #status.ok { color: var(--ok); }
@@ -68,6 +68,7 @@
 <aside id="left">
   <h1>Add a piece</h1>
   <p class="keys" id="palHelp">Pick one, then click the map where it goes. It stays picked (<b>Esc</b> to stop).</p>
+  <input id="palFilter" placeholder="filter pieces" autocomplete="off">
   <div id="palette"></div>
   <h2>Add something else</h2>
   <div class="row"><button id="addThing">A thing to use</button><button id="addRound">A walker's round</button></div>
@@ -104,6 +105,7 @@
 </aside>
 <script src="/shell/lend.js"></script>
 <script src="/shell/grid.js"></script>
+<script src="/shell/tree.js"></script>
 <script>
 'use strict';
 // The plan's frame: metres, +X east, +Z south. On screen north is up: screen right is +X, screen down is +Z.
@@ -111,6 +113,7 @@
 // in its game (display.planScale about the map's centre, display.kindScale per kind): footprints here are the game's,
 // divided by the plan's scale, so what touches here touches there.
 // in the workbench, the left column (pieces, Show, Legend, Keys) is lent to its side panel: look there too
+document.head.append(Object.assign(document.createElement('style'), { textContent: nfTree.css }));   // before the column is lent: it takes the page's styles along
 const panel = window.top !== window ? nfLendPanel(document.getElementById('left'), { title: 'Map editor' }) : null;
 const $ = (id) => document.getElementById(id) || (panel && panel.byId(id));
 const canvas = $('map'), ctx = canvas.getContext('2d');
@@ -938,49 +941,58 @@ window.addEventListener('resize', resize);
 // --- the panels --------------------------------------------------------------------------------------------
 const swatch = (style) => h('i', { style: `display:inline-block;width:10px;height:10px;border-radius:50%;${style};margin-right:6px;vertical-align:-1px` });
 const tagOf = (cls, text) => { const c = classOf(cls); return h('span', { class: 'tag', textContent: text || c.tag, style: `background:${c.colour}` }); };
+let palFolders = nfTree.store('palette'), palPaths = {};   // which groups are closed (kept per project), and where each kind is
 function buildPalette() {
   const box = $('palette'); box.textContent = '';
   const tags = Object.entries(UI.classes).filter(([cls]) => Object.values(kindsInfo).some((k) => k.cls === cls));
   $('palHelp').replaceChildren('Pick one, then click the map where it goes. It stays picked (', h('b', { textContent: 'Esc' }), ' to stop).', ...(tags.length > 1 ? [' The tag says what it is: ', ...tags.flatMap(([cls, c], i) => [i ? ', ' : '', tagOf(cls), ` ${c.legend}`]), '.'] : []));
+  // one list, drawn as folders that open and close: a preset's or a kind's group is its folder, and model kinds nest
+  // by their folder under Models. A '/' in a group's or a piece's own name is not a folder.
+  const items = [], plain = (t) => String(t).replace(/\//g, '∕');
+  const add = (folder, label, search, kind, make) => items.push({ path: `${folder}/${plain(label)}`, search, kind, make });
   const presets = activePresets();
   for (const group of [...new Set(presets.map((s) => s.group))]) {
-    box.append(h('div', { class: 'pal-h', textContent: group }));
-    const grid = h('div', { class: 'pal' });
-    for (const s of presets.filter((q) => q.group === group)) {
+    for (const s of presets.filter((q) => q.group === group)) add(plain(group), s.label, `${s.kind} ${s.id}`, `preset:${s.id}`, () => {
       const b = h('button', { title: `${s.kind}${s.scale ? ` at scale ${s.scale}` : ''} with the next free ${s.idPrefix}N id.${s.note ? ' ' + s.note : ''}`, onclick: () => { placing = placing === `preset:${s.id}` ? null : `preset:${s.id}`; markPalette(); } }, h('span', {}, swatch(`background:${s.colour}`), s.label), tagOf(info(s.kind).cls));
-      b.dataset.kind = `preset:${s.id}`; grid.append(b);
-    }
-    box.append(grid);
+      return b;
+    });
   }
   if (UI.plantsOn && Object.keys(plantKinds).length) { // plants placed by hand (plants.json points)
-    box.append(h('div', { class: 'pal-h', textContent: 'Plants (plants.json)' }));
-    const grid = h('div', { class: 'pal' });
     const listed = Object.keys(plantLabels).length ? Object.keys(plantLabels) : Object.keys(plantKinds);
     for (const k of listed) {
       if (!plantKinds[k]) continue;
+      add('Plants (plants.json)', plantLabels[k] || k, `${k} ${plantKinds[k][0]}`, `plant:${k}`, () => {
       const d = plantStyle(plantKinds[k][0]);
       const b = h('button', { title: `${k}: built as ${plantKinds[k][0]}${plantKinds[k][1] !== 1 ? ` at ${plantKinds[k][1]}x` : ''}`, onclick: () => { placing = placing === `plant:${k}` ? null : `plant:${k}`; markPalette(); } }, h('span', {}, swatch(`background:${d.fill || '#7fbf6a'};${d.ring ? `box-shadow:0 0 0 2px ${d.ring}` : ''}`), plantLabels[k] || k), h('span', { class: 'tag', textContent: 'plant', style: 'background:#7fd4c1' }));
-      b.dataset.kind = `plant:${k}`; grid.append(b);
+      return b;
+      });
     }
-    box.append(grid);
   }
   const all = Object.keys(kindsInfo).filter((k) => !kindsInfo[k].hidden).sort(), seen = new Set();
   const groups = [...UI.groups, ...new Set(all.map((k) => kindsInfo[k].group).filter((g) => g && !UI.groups.includes(g))), null];
   for (const title of groups) {
     const list = all.filter((k) => !seen.has(k) && (title === null || kindsInfo[k].group === title)); if (!list.length) continue;
     list.forEach((k) => seen.add(k));
-    box.append(h('div', { class: 'pal-h', textContent: title === null ? (groups.length > 1 ? 'Other' : 'Pieces') : title }));
-    const grid = h('div', { class: 'pal' });
+    const models = title && /^Models( · |$)/.test(title) && list.every((k) => kindsInfo[k].model);   // 'Models · a/b' → Models/a/b
+    const folder = title === null ? (groups.length > 1 ? 'Other' : 'Pieces') : models ? (title === 'Models' ? title : `Models/${title.slice('Models · '.length)}`) : plain(title);
     for (const k of list) {
+      const label = kindsInfo[k].label || (k.split(':')[1] || k).replace(/_/g, ' ');
+      add(folder, label, k, k, () => {
       const s = kindsInfo[k].size, f = ((plan.kindScale || {})[k] || 1) * lookK(k);
-      const b = h('button', { title: `${k}: ${tidy(s[0] * f)} x ${tidy(s[1] * f)} m${scaled() ? ' ' + D.gameLabel : ''}`, onclick: () => { placing = placing === k ? null : k; markPalette(); } }, h('span', { textContent: `${kindsInfo[k].label || (k.split(':')[1] || k).replace(/_/g, ' ')}  ${tidy(Math.round(s[0] * f * 10) / 10)}×${tidy(Math.round(s[1] * f * 10) / 10)}` }), tagOf(kindsInfo[k].cls));
-      b.dataset.kind = k; grid.append(b);
+      const b = h('button', { title: `${k}: ${tidy(s[0] * f)} x ${tidy(s[1] * f)} m${scaled() ? ' ' + D.gameLabel : ''}`, onclick: () => { placing = placing === k ? null : k; markPalette(); } }, h('span', { textContent: `${label}  ${tidy(Math.round(s[0] * f * 10) / 10)}×${tidy(Math.round(s[1] * f * 10) / 10)}` }), tagOf(kindsInfo[k].cls));
+      return b;
+      });
     }
-    box.append(grid);
   }
+  nfTree.render(box, nfTree.build(items, { filter: $('palFilter').value, closed: palFolders.closed }), { onToggle: (path, open) => palFolders.toggle(path, open),
+    row: (item) => { const b = item.make(); b.dataset.kind = item.kind; b.classList.toggle('on', item.kind === placing); return b; } });
+  if (items.length && !box.children.length) box.append(h('div', { class: 'small dim', textContent: 'no match' }));
+  palPaths = Object.fromEntries(items.map((i) => [i.kind, i.path]));
   if (!box.children.length) box.append(h('div', { class: 'small dim', textContent: 'This project lists no kinds of piece: give it a kit.json, or a kinds hook in its config (README).' }));
 }
-function markPalette() { ghost3 = null; if (mode === '3d') draw(); $('palette').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.kind === placing)); canvas.style.cursor = placing ? 'crosshair' : 'default'; if (placing) status(`Placing ${placing.replace(/^(preset|plant):/, '')}: click on the map. Esc to stop.`); }
+$('palFilter').oninput = () => { if (plan) buildPalette(); };
+fetch('/api/projects').then((r) => r.json()).then((j) => { palFolders = nfTree.store(`palette:${j.current.root}`); if (plan) buildPalette(); }).catch(() => { /* one list of closed groups for every project */ });
+function markPalette() { ghost3 = null; if (mode === '3d') draw(); if (placing && palPaths[placing] && palFolders.reveal(palPaths[placing])) buildPalette(); $('palette').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.kind === placing)); canvas.style.cursor = placing ? 'crosshair' : 'default'; if (placing) status(`Placing ${placing.replace(/^(preset|plant):/, '')}: click on the map. Esc to stop.`); }
 nfGrid.onChange((on) => { show.grid = on; const box = $('layers'), i = box && box.querySelector('input[data-layer="grid"]'); if (i) i.checked = on; if (plan) draw(); });
 function buildLayers() {
   const box = $('layers'); box.textContent = '';

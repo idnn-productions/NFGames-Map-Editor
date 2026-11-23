@@ -28,6 +28,7 @@ describe('the workbench over HTTP', () => {
     assert.match(html, /workbench\.js/); assert.match(html, /"three":"\/vendor\/three-/); assert.match(html, /id="nfnav"/);
     assert.equal(shell.headers.get('x-frame-options'), 'SAMEORIGIN');
     assert.match(await (await ask('/map')).text(), /Add a piece/);
+    { const map = await (await ask('/map')).text(); assert.match(map, /id="palFilter"/); assert.match(map, /<script src="\/shell\/tree\.js">/); }
   });
   it('a browser opening /map or /viewer at the top goes to the workbench with that tab; frames and ?alone get the page', async () => {
     const top = { headers: { 'Sec-Fetch-Dest': 'document' }, redirect: 'manual' };
