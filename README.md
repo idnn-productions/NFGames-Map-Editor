@@ -561,6 +561,7 @@ Nothing is fetched at any other time, and no CDN is used.
 | Drag a pin | moves it over the surface (and takes a new screenshot) |
 | **View** on a pin | flies back to the view it was placed from |
 | Drop or paste images on a pin | reference images (PNG, JPEG, WebP; at most 4), scaled to 2048 px at most |
+| Click a thumbnail under **References** | that image large beside the model, which still turns; see [Reference images](#reference-images) |
 | **Grid** | a floor grid scaled to the model; the same switch as the map's grids (**⌘G**) |
 | **Send to Claude** | writes the job; pins and notes are kept as a draft in the browser until then |
 
@@ -568,11 +569,45 @@ Nothing is fetched at any other time, and no CDN is used.
 else the GLB). **Blender** and **ComfyUI** are listed but not set up yet.
 
 **A job** is a folder `<reviews>/<UTC time>-<model>/`: `job.json` (the model's path, hash and time, the note,
-the workflow with its instructions, and the pins), `overview.jpg`, `pin-N.jpg`, `pin-N-ref-M.png|jpg|webp`, and
+the workflow with its instructions, the model's `references`, and the pins), `overview.jpg`, `pin-N.jpg`, `pin-N-ref-M.png|jpg|webp`, and
 `status.json` once a session takes it: `{ "state": "working" | "needs-input" | "done" | "failed", "summary",
 "question"?, "updatedAt", "changedFiles" }`. No `status.json` means queued. A job is written to `<id>.tmp` and
 renamed, so a watcher never sees half of one. When a job is done and the model file changed, the page offers
 **Reload model**. When jobs wait more than two minutes, it says no session seems to be watching.
+
+### Reference images
+
+A model can keep the images it was made from next to it: for `<dir>/<name>.glb`, the image files in the folder
+`<dir>/<name>.refs/` (`.png`, `.jpg`, `.jpeg`, `.webp`). There is no list to write: the files are the list.
+
+```
+art/models/ships/
+  cruiser.glb
+  cruiser.refs/
+    concept.png   front.png   left.png   back.png   right.png   top.png   bottom.png
+```
+
+They are shown in this order: `concept` first, then `front`, `left`, `back`, `right`, `top`, `bottom`,
+`three-quarter` (by the file's name without its extension, in any case), then any others by name. The label is the
+name without its extension. These are the names a [New model](#new-model) draft keeps (`concept.png` and
+`views/<view>.png`), so a draft's images can be copied in as they are.
+
+| Do | What happens |
+|---|---|
+| Open a model that has references | **References (n)** appears over the foot of the 3D view: a thumbnail and a label each. A model with none shows nothing |
+| Click a thumbnail | that image opens large in a panel beside the model. The model stays live: orbit it, pin it, compare. Click the thumbnail again to close |
+| **‹** **›** (or **←** **→**) | the previous or next reference, round and round |
+| Drag the panel's left edge | makes it wider or narrower; the width is remembered |
+| Click the large image | the whole image over the page; click or **Esc** to go back |
+| **×** (or **Esc**) | closes the panel. In pin mode, **Esc** leaves pin mode first |
+| Click **References** | folds the thumbnails away, and back |
+| Open another model | a panel left open stays open, on the same view when that model has one |
+
+A job sent for a model with references names them: `job.json` has `references`, their paths from the project root
+(`"art/models/ships/cruiser.refs/concept.png"`, ...), and the job's instructions tell the session to open them and
+treat them as what the model should look like. The images are not copied into the job. The editor lists at most 24
+references per model and passes over a file larger than 40 MB, a file whose bytes are not the image its name says, and
+links. Images are put there by hand or by a script for now; the viewer does not upload them.
 
 **The Claude Code side.** Copy the skill into the game project once:
 
@@ -774,7 +809,9 @@ The editor reads and writes files on your machine, so it accepts requests only f
   under home, and runs a folder's config only once you have trusted it (see [Opening a project](#opening-a-project)).
 - **The model viewer.** `/vendor/` serves only the pinned three.js version's allow-listed files, and only after an
   install whose download matched the pinned SHA-512. Models are read only from the real `models` folder (symlinks
-  out of it refused), and only `.glb` files. Jobs are written only to server-named folders and files under
+  out of it refused), and only `.glb` files. A model's reference images are read only from the real `<name>.refs`
+  folder beside that model: a plain file name (no path), PNG, JPEG or WebP by name and by bytes, never SVG, no links,
+  at most 40 MB. Jobs are written only to server-named folders and files under
   `reviews`; images are checked by their bytes. `POST /api/review` takes up to 24 MB; everything else keeps 2 MB.
 - **Keys and agents.** Service keys never leave the host: not to the page, not to agents, not onto a command line
   (the Keychain gets them on its standard input). Agent requests are files the editor answers only with this
@@ -831,10 +868,11 @@ the config (defaults, kit, actions that are not fixed lists refused), the fit ch
 and the server over HTTP. The server tests include: refused Hosts, Origins and content types; traversal
 names; no file served; a save that writes the file in its format and keeps `layout.prev.json`; a save
 refused after the file changed on disk; `plants.json`; unknown actions refused; a real action run; and
-`--dry-run`. The model viewer's tests cover listing and confining models (`test/models.test.mjs`), the three.js
+`--dry-run`. The model viewer's tests cover listing and confining models and their reference images (`test/models.test.mjs`: the
+order, the empty cases, names that are not a plain image file refused), the three.js
 install (`test/vendor.test.mjs`: tar reader, allow-list, a hash mismatch or failed download installs nothing,
 only allow-listed files served), jobs (`test/reviews.test.mjs`: server-made names, image signatures, refused jobs
-write nothing, states, workflows), the routes (`test/viewer-server.test.mjs`) and the watcher
+write nothing, states, workflows, a model's references named in the job), the routes (`test/viewer-server.test.mjs`) and the watcher
 (`test/review-watch.test.mjs`). Opening projects and model kinds: GLB bounds (`test/glb.test.mjs`), model kind names,
 sizes, the cache and the kit's precedence (`test/modelkinds.test.mjs`), the folder browser, trust and recent projects
 (`test/home.test.mjs`), and switching over HTTP (`test/switch.test.mjs`). Plugins: versions, globs and manifests

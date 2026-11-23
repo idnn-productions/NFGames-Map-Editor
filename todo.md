@@ -1,6 +1,7 @@
 # To do
 
-Follow-ups for the model viewer and review inbox (design: `docs/superpowers/specs/2026-11-22-model-review-design.md`).
+Follow-ups for the model viewer and review inbox (design: `docs/superpowers/specs/2026-11-22-model-review-design.md`;
+reference images: `docs/superpowers/specs/2026-11-23-model-references-design.md`).
 
 ## Workflows (placeholders in the viewer today)
 
@@ -24,12 +25,18 @@ Follow-ups for the model viewer and review inbox (design: `docs/superpowers/spec
 
 - [ ] **Generate the model** from a draft's `concept.png` and `views/` (step ③ of New model, a disabled button today).
       Choose the image-to-3D service (a `services` plugin like `codex-image`), where the `.glb` lands in the models
-      folder, and how a draft is marked done.
+      folder, and how a draft is marked done. It should also copy the draft's `concept.png` and `views/*.png` into
+      `<name>.refs/` beside the new `.glb`, so the viewer shows them as the model's references.
 - [ ] A side panel and an Inspector for the New model tab (they say "nothing to show here" today): the drafts list
       on the left, the picked image large on the right.
 
 ## Viewer
 
+- [x] A model's reference images beside it in the viewer (`<name>.refs/`), and named in its review jobs.
+- [ ] References: add or remove them from the viewer (they are copied in by hand today), and link a model back to the
+      draft it came from.
+- [ ] References: thumbnails made small on the server (each thumbnail is the whole image today).
+- [ ] References: turn the model to a view's angle when its reference is opened (front, left, top ...).
 - [ ] `.gltf` files with separate `.bin` and images.
 - [ ] Before and after: show `pin-N-after.jpg` next to the pin's own screenshot in the job list.
 - [ ] Compare two models side by side (e.g. a TRELLIS test against the hard-surface rebuild).
