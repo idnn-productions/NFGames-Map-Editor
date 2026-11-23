@@ -25,7 +25,6 @@ textarea { width: 100%; resize: vertical; min-height: 48px; } select { width: 10
 .dim { color: var(--dim); } .bad { color: var(--bad); } .ok { color: var(--ok); }
 h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 14px 0 6px; }
 #filter { width: 100%; margin-bottom: 8px; }
-.group { margin: 8px 0 2px; color: var(--dim); font-size: 11px; }
 .model { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model:hover { background: #252a35; } .model.current { background: #33291c; color: var(--accent); }
 .pin { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 8px 0; }
@@ -76,10 +75,12 @@ main.pinning #view { cursor: crosshair; }
 <div id="zoom"><img alt="reference image"></div>
 <script src="/shell/lend.js"></script>
 <script src="/shell/grid.js"></script>
+<script src="/shell/tree.js"></script>
 <script type="module">
 // The model viewer: a game's .glb files, pins with notes and reference images, and Send, which writes a review job
 // for a Claude Code session (see the README, "Model review"). three.js is installed on demand from the Install button.
 // in the workbench, the model list is lent to its side panel: look there too
+document.head.append(Object.assign(document.createElement('style'), { textContent: nfTree.css }));   // before the column is lent: it takes the page's styles along
 const panel = window.top !== window ? nfLendPanel(document.getElementById('left'), { title: 'Model viewer', css: '#left { padding: 10px; }' }) : null;
 const $ = (id) => document.getElementById(id) || (panel && panel.byId(id));
 if (window.top !== window) document.body.classList.add('framed');
@@ -181,18 +182,19 @@ function frame() {
 async function listModels() {
   if (!info.models) { $('models').textContent = 'No models folder: add models: \'<folder>\' to map-editor.config.mjs.'; return; }
   models = (await api('/api/models')).models;
+  try { folders = nfTree.store(`viewer:${(await api('/api/projects')).current.root}`); } catch { /* one list of closed folders for every project */ }
   drawModelList();
 }
+// Folders open and close; which are closed is kept per project. A filter shows every match with its folders open.
+let folders = nfTree.store('viewer');
 function drawModelList() {
-  const q = $('filter').value.trim().toLowerCase(), box = $('models'), shown = models.filter((m) => m.path.toLowerCase().includes(q));
-  if (!shown.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : `no .glb files in ${info.models}/`; return; }
-  const kids = []; let group = null;
-  for (const m of shown) {
-    const dir = m.path.includes('/') ? m.path.slice(0, m.path.lastIndexOf('/')) : '';
-    if (dir !== group) { group = dir; kids.push(el('div', { className: 'group', textContent: dir ? `${dir}/` : `${info.models}/` })); }
-    kids.push(el('button', { className: `model${m.path === modelPath ? ' current' : ''}`, textContent: m.path.slice(dir ? dir.length + 1 : 0), title: `${m.path} · ${(m.size / MB).toFixed(1)} MB`, onclick: () => openModel(m) }));
-  }
-  box.className = ''; box.replaceChildren(...kids);
+  const box = $('models'), root = `${info.models}/`;
+  // models directly in the models folder go under a folder named after it, as the others go under theirs
+  const nodes = nfTree.build(models.map((m) => ({ ...m, path: m.path.includes('/') ? m.path : `${root}${m.path}`, model: m })), { filter: $('filter').value, closed: folders.closed });
+  if (!nodes.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : `no .glb files in ${root}`; return; }
+  box.className = '';
+  nfTree.render(box, nodes, { onToggle: (path, open) => folders.toggle(path, open),
+    row: ({ model: m }, n) => el('button', { className: `model${m.path === modelPath ? ' current' : ''}`, textContent: n.label, title: `${m.path} · ${(m.size / MB).toFixed(1)} MB`, onclick: () => openModel(m) }) });
 }
 async function openModel(m, { keepCamera = false } = {}) {
   if (!T) return;
@@ -204,7 +206,7 @@ async function openModel(m, { keepCamera = false } = {}) {
   model = gltf.scene; scene.add(model); // the scene root stays at identity, so world coordinates are the model's own
   if (wire) setWire(true);
   placeGrid(new T.Box3().setFromObject(model));
-  modelPath = m.path; drawModelList();
+  modelPath = m.path; folders.reveal(m.path.includes('/') ? m.path : `${info.models}/${m.path}`); drawModelList();
   history.replaceState(null, '', `/viewer?model=${encodeURIComponent(m.path)}`);
   if (!keepCamera) frame();
   $('overlayBody').replaceChildren();

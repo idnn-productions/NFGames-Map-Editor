@@ -32,7 +32,7 @@
     const draw = (list, depth) => list.map((n) => {
       if (n.type === 'item') return row(n.item, n);
       const wrap = doc.createElement('div'), head = doc.createElement('button'), count = doc.createElement('span');
-      wrap.className = 'tree-group'; head.type = 'button'; head.className = 'tree-folder'; head.style.paddingLeft = `${4 + depth * 12}px`; head.title = n.path;
+      wrap.className = 'tree-group'; head.type = 'button'; head.className = 'tree-folder'; head.title = n.path;
       count.className = 'tree-count'; count.textContent = n.count;
       let kids = null;
       const show = (open) => {
@@ -65,7 +65,7 @@
   /** The styles a page needs for the list (each page adds them once; a lent column carries them into its shadow root). */
   const css = `.tree-folder { display: flex; width: 100%; gap: 6px; align-items: baseline; background: none; border: 0; color: var(--dim, #8a93a6); font: inherit; font-size: 11px; text-align: left; padding: 6px 4px 3px; margin: 0; cursor: pointer; border-radius: 4px; }
 .tree-folder:hover { color: var(--ink, #d8dee9); } .tree-folder:focus-visible { outline: 1px solid var(--accent, #ffb366); }
-.tree-count { margin-left: auto; opacity: .7; } .tree-kids[hidden] { display: none; }`;
+.tree-count { margin-left: auto; opacity: .7; } .tree-kids { margin-left: 10px; } .tree-kids[hidden] { display: none; }`;
 
   globalThis.nfTree = { build, render, store, css };
 })();

@@ -32,6 +32,11 @@ describe('the model viewer over HTTP', () => {
     assert.equal(r.status, 200);
     assert.match(await r.text(), /"three":"\/vendor\/three-[\d.]+\/build\/three\.module\.js"/);
   });
+  it('the page loads the folding list, which is served as a script', async () => {
+    assert.match(await (await ask('/viewer')).text(), /<script src="\/shell\/tree\.js">/);
+    const r = await ask('/shell/tree.js');
+    assert.equal(r.status, 200); assert.match(r.headers.get('content-type'), /javascript/);
+  });
   it('says three.js is not installed, and serves none of it', async () => {
     const v = await (await ask('/api/viewer')).json();
     assert.equal(v.three.installed, false); assert.equal(v.models, 'models'); assert.equal(v.workflows[0].id, 'auto');
