@@ -44,5 +44,3 @@ window.nfLend = function nfLend(parts) {
     },
   };
 };
-// until the pages lend more than their left column
-window.nfLendPanel = (aside, opts) => { const l = window.nfLend({ side: { el: aside, ...opts } }); window.__nfPanel = window.__nfLent.side; return l; };

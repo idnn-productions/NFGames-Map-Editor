@@ -11,7 +11,8 @@
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
 body { display: grid; grid-template-columns: 260px 1fr 340px; grid-template-rows: 40px 1fr; height: 100vh; }
 /* inside the workbench (a tab) the workbench's top bar is the only one */
-body.framed { grid-template-rows: 1fr; } body.framed > header { display: none; } body.lent-side { grid-template-columns: 1fr 340px; }
+body.framed { grid-template-rows: 1fr; } body.framed > header { display: none; } body.framed { grid-template-columns: 260px 1fr; } body.framed.lent-side { grid-template-columns: 1fr; } body.framed #right { display: none; }
+#review, #reviews { background: var(--panel); padding: 0 12px 20px; } #review h2:first-child { margin-top: 4px; }
 header { grid-column: 1 / 4; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 header h1 { font-size: 14px; margin: 0; font-weight: 600; } header .grow { flex: 1; } header a { color: var(--dim); }
 aside { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px; }
@@ -70,7 +71,7 @@ main.pinning #view { cursor: crosshair; }
   <h2>Workflow</h2><select id="workflow"></select>
   <p id="warn" class="bad"></p>
   <p><button class="primary" id="send" disabled>Send to Claude</button> <span id="sendState" class="dim"></span></p>
-  <h2>Jobs</h2><div id="jobs" class="dim">none yet</div>
+  <h2 id="jobsHead">Jobs</h2><div id="jobs" class="dim">none yet</div>
 </aside>
 <div id="zoom"><img alt="reference image"></div>
 <script src="/shell/lend.js"></script>
@@ -81,9 +82,19 @@ main.pinning #view { cursor: crosshair; }
 // for a Claude Code session (see the README, "Model review"). three.js is installed on demand from the Install button.
 // in the workbench, the model list is lent to its side panel: look there too
 document.head.append(Object.assign(document.createElement('style'), { textContent: nfTree.css }));   // before the column is lent: it takes the page's styles along
-const panel = window.top !== window ? nfLendPanel(document.getElementById('left'), { title: 'Model viewer', css: '#left { padding: 10px; }' }) : null;
+// In the workbench the page keeps the model and its toolbar: the model list is lent to the side panel, the review
+// (pins, note, workflow, Send) to the Inspector, and the review jobs to the bottom panel as "Reviews".
+const embedded = window.top !== window;
+if (embedded) {
+  const byId = (id) => document.getElementById(id), right = byId('right'), div = (id) => Object.assign(document.createElement('div'), { id });
+  document.body.classList.add('framed');
+  const review = div('review'), reviews = div('reviews');
+  review.append(...[...right.children].filter((e) => e.id !== 'jobs' && e.id !== 'jobsHead')); reviews.append(byId('jobs'));
+  right.append(review, reviews);
+}
+const panel = embedded ? nfLend({ side: { el: document.getElementById('left'), title: 'Model viewer', css: '#left { padding: 10px; }' },
+  inspector: { el: document.getElementById('review'), title: 'Review' }, bottom: { el: document.getElementById('reviews'), title: 'Reviews', key: 'reviews' } }) : null;
 const $ = (id) => document.getElementById(id) || (panel && panel.byId(id));
-if (window.top !== window) document.body.classList.add('framed');
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); for (const k of kids) e.append(k); return e; };
 const api = async (path, options) => { const r = await fetch(path, options), j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || `${r.status} ${r.statusText}`); return j; };
 const post = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

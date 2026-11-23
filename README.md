@@ -362,8 +362,12 @@ Any other section (a project's planting rules, say) is kept as it is; the editor
 
 ## Using the editor
 
-The page has three columns: the palette and layers on the left, the map in the middle, and the map's
-state and the selection on the right.
+The bare page (`/map?alone`) has three columns: the palette and layers on the left, the map in the middle, and the
+map's state and the selection on the right. In the workbench the map takes the room instead: the left column is the
+side panel; **Save**, **Undo**, **Redo**, snap, the map's name and the status line are a bar over the map, beside
+**Top / 3D**; the map's Apply box and the selection are the **Inspector** (titled *Map* with nothing selected,
+*Selected* otherwise); and problems are listed once, in the bottom panel's **Problems** tab, where a click pans to
+one and selects it.
 
 ### The map
 
@@ -599,8 +603,12 @@ every command. Plugins add to it; **🧩 Plugins** turns them on and off and ask
 edits their settings. The map editor and the model viewer are always its tabs (from the **Core Tools** plugin, until
 they are rebuilt as plugins): opening `/map` or `/viewer` in a browser goes to `/?view=map` or `/?view=viewer`, and
 only `?alone` (or a frame) gets the bare page. The side panel follows the view shown: the map editor's left column
-(the palette, Show, Legend, Keys) or the viewer's model list. The side panel, inspector and bottom panel hide from
-the bar or with **⌘B**, **⌘I** and **⌘J** (kept per browser), not yet resized by dragging; **⌘G** turns every grid
+(the palette, Show, Legend, Keys) or the viewer's model list. The Inspector follows it too: the map's Apply box and
+selection, or the viewer's review (pins, note, workflow, **Send to Claude**); the viewer's review jobs are the bottom
+panel's **Reviews** tab. The bottom panel rests as a one-line strip of its tabs, with the number of problems and a
+● on Jobs while one runs: a tab opens it, the same tab or **⌘J** closes it, and it never opens by itself. The side
+panel and the Inspector hide from the bar or with **⌘B** and **⌘I**, and their inner edges drag to set their widths
+(at least 200 px each; the documents always keep 320). All of this is kept per browser. **⌘G** turns every grid
 on or off. On Windows and Linux, Ctrl stands for ⌘.
 
 How to write one, what it gets, and what trust means: [`docs/plugins.md`](docs/plugins.md). A small example:

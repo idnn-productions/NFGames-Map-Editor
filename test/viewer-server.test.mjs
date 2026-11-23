@@ -37,6 +37,10 @@ describe('the model viewer over HTTP', () => {
     const r = await ask('/shell/tree.js');
     assert.equal(r.status, 200); assert.match(r.headers.get('content-type'), /javascript/);
   });
+  it('the page lends its parts by region; the one-column way of lending is gone', async () => {
+    assert.match(await (await ask('/viewer')).text(), /nfLend\(\{ side:/);
+    assert.doesNotMatch(await (await ask('/shell/lend.js')).text(), /nfLendPanel|__nfPanel/);
+  });
   it('says three.js is not installed, and serves none of it', async () => {
     const v = await (await ask('/api/viewer')).json();
     assert.equal(v.three.installed, false); assert.equal(v.models, 'models'); assert.equal(v.workflows[0].id, 'auto');
