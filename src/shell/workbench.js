@@ -1,0 +1,277 @@
+// The workbench: the regions, the page half of the plugin API, plugins' page parts loaded on demand, the ⌘K palette,
+// the Plugins and Settings screens, and the Jobs, Problems and Output panels. Plugin parts only reach the page through
+// the api object they are given; everything they register is undone when they are turned off or reloaded.
+import { createRegistry } from './core/registry.js';
+import { matches, parseKeys, showKeys } from './core/keys.js';
+import { createCommands, rank } from './core/commands.js';
+import { createSelection } from './core/selection.js';
+import { createDocuments } from './core/documents.js';
+import { contributionsOf } from './core/contributions.js';
+import { h, toast, dialog, confirmDialog } from './ui.js';
+
+const $ = (id) => document.getElementById(id);
+const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+const json = async (url, options) => { const r = await fetch(url, options), j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || `${r.status} ${r.statusText}`); return j; };
+const post = (url, body = {}) => json(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+// ---- state
+let plugins = [], model = contributionsOf([]), activeTool = null, bottomTab = 'core/jobs';
+const commands = createCommands(), selection = createSelection(), documents = createDocuments();
+const tools = createRegistry(), editors = createRegistry(), panels = createRegistry(), inspectors = createRegistry(), statusItems = createRegistry();
+const problems = new Map(), output = [], listeners = new Map(), loaded = new Map(), declared = [];
+const mounted = new Map();   // document id → { el, cleanup }
+
+// ---- events from the host
+// EventSource only delivers named events it subscribed to: each name is subscribed the first time someone asks for it;
+// '*' hears every event the page is subscribed to (the workbench's own, and any a plugin asked for).
+const stream = new EventSource('/api/events'), subscribed = new Set();
+function subscribe(name) { if (name === '*' || subscribed.has(name)) return; subscribed.add(name); stream.addEventListener(name, (e) => dispatch(name, JSON.parse(e.data || '{}'))); }
+function onEvent(name, fn) { subscribe(name); if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); return { dispose: () => listeners.get(name)?.delete(fn) }; }
+function dispatch(name, data) { for (const fn of listeners.get(name) || []) try { fn(data); } catch (e) { log(`listener for ${name}: ${e.message}`); } for (const fn of listeners.get('*') || []) try { fn(name, data); } catch { /* a listener's problem */ } }
+for (const name of ['plugins/changed', 'plugins/failed', 'jobs/started', 'jobs/done', 'settings/changed', 'project/changed']) subscribe(name);
+function log(text) { output.push(`${new Date().toLocaleTimeString()}  ${text}`); if (output.length > 500) output.shift(); if (bottomTab === 'core/output') renderBottom(); }
+
+// ---- the page plugin API, one per plugin
+function makeApi(p, rec) {
+  const own = (d) => { rec.disposers.push(() => d.dispose()); return d; };
+  const full = (id) => (id.includes('/') ? id : `${p.id}/${id}`);
+  const reg = (registry) => ({ register: (id, factory) => own(registry.add(`${p.id}/${id}`, factory)) });
+  return {
+    id: p.id,
+    tools: reg(tools), editors: reg(editors), panels: reg(panels), inspectors: reg(inspectors), statusItems: reg(statusItems),
+    commands: { register: (id, fn) => own(commands.handle(full(id), fn)), execute: (id, ...a) => commands.execute(full(id), ...a) },
+    documents: { open: (o) => documents.open({ ...o, editor: full(o.editor) }), close: documents.close, setDirty: documents.setDirty, setTitle: documents.setTitle },
+    fetch: (path, options = {}) => json(`/api/p/${p.id}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } }),
+    events: { on: (name, fn) => own(onEvent(name, fn)) },
+    ui: { toast, dialog, confirm: confirmDialog, palette: openPalette },
+    selection: { get: selection.get, set: (type, items) => selection.set(type, items), on: (fn) => own(selection.on(fn)) },
+    problems: { set: (list) => { problems.set(p.id, (list || []).map((x) => ({ ...x, plugin: p.id }))); own({ dispose: () => problems.delete(p.id) }); renderStatus(); if (bottomTab === 'core/problems') renderBottom(); } },
+    settings: { get: () => json(`/api/plugins/${p.id}/settings`).then((s) => s.values), set: (key, value) => post(`/api/plugins/${p.id}/settings`, { key, value }) },
+    three: () => import('three'),
+  };
+}
+
+// ---- loading plugins' page parts (and server parts) on demand
+async function ensure(id) {
+  if (loaded.has(id)) return loaded.get(id);
+  const run = (async () => {
+    const p = plugins.find((x) => x.id === id);
+    if (!p) throw new Error(`no plugin ${id}`);
+    await post(`/api/plugins/${id}/activate`);
+    const rec = { disposers: [], mod: null };
+    if (p.web) { rec.mod = await import(`/p/${id}/${p.web}?v=${Date.now()}`); if (typeof rec.mod.activate === 'function') await rec.mod.activate(makeApi(p, rec)); }
+    return rec;
+  })();
+  loaded.set(id, run);
+  try { return await run; } catch (e) { loaded.delete(id); log(`${id}: ${e.message}`); toast(`${id} could not start: ${e.message}`, 'error'); throw e; }
+}
+async function unload(id) {
+  const run = loaded.get(id); if (!run) return; loaded.delete(id);
+  const rec = await run.catch(() => null); if (!rec) return;
+  try { await rec.mod?.deactivate?.(); } catch (e) { log(`${id} deactivate: ${e.message}`); }
+  for (const d of rec.disposers.splice(0).reverse()) try { d(); } catch (e) { log(`${id} clean-up: ${e.message}`); }
+}
+
+// ---- the manifests: tools, commands, panels the workbench shows before any plugin code runs
+async function refreshPlugins() {
+  plugins = (await json('/api/plugins')).plugins;
+  for (const id of [...loaded.keys()]) if (!['ready', 'active'].includes(plugins.find((p) => p.id === id)?.state)) await unload(id);
+  model = contributionsOf(plugins);
+  for (const d of declared.splice(0)) d.dispose();
+  for (const c of model.commands) declared.push(commands.declare(c.key, { title: c.title, keys: c.keys, plugin: c.plugin, category: c.category, load: () => ensure(c.plugin) }));
+  for (const s of model.statusItems) ensure(s.plugin).catch(() => {});
+  render();
+}
+
+// ---- core commands
+const core = (id, title, fn, keys = null) => { commands.declare(id, { title, keys, category: 'Workbench' }); commands.handle(id, fn); };
+core('core/palette', 'Search commands', () => openPalette(), 'Mod+K');
+core('core/toggle-side', 'Toggle the side panel', () => $('wb').classList.toggle('no-side'));
+core('core/toggle-inspector', 'Toggle the inspector', () => $('wb').classList.toggle('no-inspector'));
+core('core/toggle-bottom', 'Toggle the bottom panel', () => $('wb').classList.toggle('no-bottom'));
+core('core/plugins', 'Plugins: manage', () => documents.open({ title: 'Plugins', editor: 'core/plugins', uri: 'plugins' }));
+core('core/settings', 'Settings', () => documents.open({ title: 'Settings', editor: 'core/settings', uri: 'settings' }));
+core('core/close-document', 'Close the document', () => { const d = documents.active(); if (d) documents.close(d.id); }, 'Alt+W');
+core('core/open-project', 'Open project…', () => document.getElementById('nfOpen')?.click());
+
+// ---- rendering
+function render() { renderActivity(); renderSide(); renderDocs(); renderInspector(); renderBottom(); renderStatus(); }
+
+function renderActivity() {
+  const btn = (t) => h('button', { className: `act${activeTool === t.key ? ' on' : ''}`, textContent: t.icon, title: t.title, onclick: () => setTool(activeTool === t.key ? null : t.key) });
+  $('activityTools').replaceChildren(...model.tools.map(btn));
+  $('activityCore').replaceChildren(btn({ key: 'core/plugins', icon: '🧩', title: 'Plugins' }), btn({ key: 'core/settings', icon: '⚙', title: 'Settings' }));
+}
+async function setTool(key) {
+  activeTool = key; renderActivity();
+  if (key === 'core/plugins' || key === 'core/settings') { activeTool = null; renderActivity(); return commands.execute(key); }
+  const t = model.tools.find((x) => x.key === key);
+  if (t) { $('wb').classList.remove('no-side'); renderSide(); try { await ensure(t.plugin); } catch { return; } }
+  renderSide();
+}
+let sideCleanup = null;
+function renderSide() {
+  if (typeof sideCleanup === 'function') sideCleanup(); sideCleanup = null;
+  const t = model.tools.find((x) => x.key === activeTool), body = $('sideBody');
+  $('sideTitle').textContent = t ? t.title : 'Tools';
+  if (!t) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: model.tools.length ? 'Pick a tool on the left.' : 'No tools yet: add plugins (🧩).' })); return; }
+  const factory = tools.get(t.key);
+  if (!factory) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: loaded.has(t.plugin) ? `${t.title} has no side panel.` : 'Loading…' })); return; }
+  body.replaceChildren(); try { sideCleanup = factory(body, {}); } catch (e) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: `${t.title} failed: ${e.message}` })); }
+}
+tools.onChange(renderSide);
+
+function renderDocs() {
+  const docs = documents.list(), active = documents.active();
+  $('tabs').replaceChildren(...docs.map((d) => h('div', { className: `doc-tab${active && d.id === active.id ? ' on' : ''}${d.dirty ? ' dirty' : ''}`, title: d.uri || d.title, onclick: () => documents.focus(d.id) },
+    h('span', { textContent: d.title }), h('span', { className: 'x', textContent: '✕', onclick: (e) => { e.stopPropagation(); documents.close(d.id); } }))));
+  for (const [id, m] of mounted) if (!docs.some((d) => d.id === id)) { if (typeof m.cleanup === 'function') m.cleanup(); m.el.remove(); mounted.delete(id); }
+  for (const d of docs) if (!mounted.has(d.id)) mountDoc(d);
+  for (const [id, m] of mounted) m.el.hidden = !active || id !== active.id;
+  if (!docs.length && !$('docBody').querySelector('.nf-empty')) $('docBody').append(h('div', { className: 'nf-empty', textContent: 'Open something from a tool, or press ⌘K.' }));
+  if (docs.length) $('docBody').querySelector(':scope > .nf-empty')?.remove();
+}
+async function mountDoc(d) {
+  const el = h('div', { className: 'doc-pane' }); $('docBody').append(el); const m = { el, cleanup: null }; mounted.set(d.id, m);
+  if (d.editor === 'core/plugins') { m.cleanup = renderPluginsScreen(el); return; }
+  if (d.editor === 'core/settings') { m.cleanup = renderSettingsScreen(el); return; }
+  const owner = d.editor.split('/')[0];
+  if (!editors.has(d.editor)) { el.append(h('p', { className: 'nf-empty', textContent: 'Loading…' })); try { await ensure(owner); } catch { return; } }
+  const factory = editors.get(d.editor);
+  el.replaceChildren();
+  if (!factory) { el.append(h('p', { className: 'nf-empty', textContent: `No editor ${d.editor}.` })); return; }
+  try { m.cleanup = factory(el, d); } catch (e) { el.append(h('p', { className: 'nf-empty', textContent: `${d.editor} failed: ${e.message}` })); }
+}
+documents.on(() => { renderDocs(); renderStatus(); });
+
+let inspectorCleanups = [];
+function renderInspector() {
+  for (const c of inspectorCleanups.splice(0)) if (typeof c === 'function') c();
+  const sel = selection.get(), body = $('inspectorBody');
+  if (!sel.type) { body.replaceChildren(h('p', { className: 'nf-muted', textContent: 'Nothing selected.' })); return; }
+  const wanted = model.inspectors.filter((i) => i.for === sel.type);
+  body.replaceChildren(h('p', { className: 'nf-muted', textContent: `${sel.items.length} selected (${sel.type})` }));
+  for (const i of wanted) {
+    const box = h('nf-panel', { title: i.title }); body.append(box);
+    const show = () => { const f = inspectors.get(i.key); if (f) { const inner = box.querySelector('.nf-panel-body') || box; inner.replaceChildren(); inspectorCleanups.push(f(inner, sel)); } };
+    if (inspectors.has(i.key)) show(); else ensure(i.plugin).then(show).catch(() => {});
+  }
+}
+selection.on(() => { renderInspector(); renderStatus(); });
+
+function renderBottom() {
+  const tabs = [{ key: 'core/jobs', title: 'Jobs' }, { key: 'core/problems', title: `Problems${countProblems() ? ` (${countProblems()})` : ''}` }, { key: 'core/output', title: 'Output' }, ...model.panels.filter((p) => p.region === 'bottom')];
+  $('bottomTabs').replaceChildren(...tabs.map((t) => h('span', { className: `nf-tab${bottomTab === t.key ? ' on' : ''}`, textContent: t.title, onclick: () => { bottomTab = t.key; renderBottom(); } })));
+  const body = $('bottomBody');
+  if (bottomTab === 'core/jobs') return renderJobs(body);
+  if (bottomTab === 'core/problems') { const all = [...problems.values()].flat(); body.replaceChildren(all.length ? h('ul', { className: 'nf-log' }, ...all.map((p) => h('li', { textContent: `${p.kind || 'problem'}  ${p.text}  (${p.plugin})` }))) : h('p', { className: 'nf-muted', textContent: 'No problems.' })); return; }
+  if (bottomTab === 'core/output') { body.replaceChildren(h('pre', { className: 'nf-log', textContent: output.join('\n') || 'Nothing yet.' })); return; }
+  const panel = model.panels.find((p) => p.key === bottomTab);
+  if (!panel) { bottomTab = 'core/jobs'; return renderBottom(); }
+  const mount = () => { const f = panels.get(panel.key); body.replaceChildren(); if (f) f(body, {}); else body.append(h('p', { className: 'nf-muted', textContent: 'Nothing to show.' })); };
+  if (panels.has(panel.key)) mount(); else { body.replaceChildren(h('p', { className: 'nf-muted', textContent: 'Loading…' })); ensure(panel.plugin).then(mount).catch(() => {}); }
+}
+const countProblems = () => [...problems.values()].reduce((n, l) => n + l.length, 0);
+async function renderJobs(body) {
+  const j = await json('/api/job').catch(() => null);
+  if (bottomTab !== 'core/jobs') return;
+  if (!j || j.state === 'idle') { body.replaceChildren(h('p', { className: 'nf-muted', textContent: 'No job has run yet.' })); return; }
+  body.replaceChildren(h('p', {}, h('nf-tag', { textContent: j.state, tone: j.state === 'done' ? 'ok' : j.state === 'failed' ? 'error' : 'accent' }), ` ${j.label || j.kind}`), ...(j.state === 'running' ? [h('nf-progress')] : []), h('pre', { className: 'nf-log', textContent: j.log }));
+  for (const t of body.querySelectorAll('nf-tag')) t.setAttribute('tone', t.tone);
+}
+
+function renderStatus() {
+  const sel = selection.get(), doc = documents.active();
+  $('statusLeft').replaceChildren(h('span', { textContent: doc ? `${doc.title}${doc.dirty ? ' · unsaved' : ''}` : 'No document' }), ...(sel.items.length ? [h('span', { textContent: `${sel.items.length} selected` })] : []), ...(countProblems() ? [h('span', { textContent: `⚠ ${countProblems()}` })] : []));
+  const right = $('statusRight'); right.replaceChildren();
+  for (const s of model.statusItems) { const f = statusItems.get(s.key); if (!f) continue; const el = h('span'); right.append(el); try { f(el, {}); } catch (e) { el.textContent = `${s.plugin}: ${e.message}`; } }
+  right.append(h('span', { textContent: mac ? '⌘K commands' : 'Ctrl+K commands' }));
+}
+statusItems.onChange(renderStatus);
+panels.onChange(() => { if (model.panels.some((p) => p.key === bottomTab)) renderBottom(); });
+
+// ---- Plugins and Settings screens
+function renderPluginsScreen(el) {
+  const draw = () => {
+    const page = h('div', { className: 'doc-page' }, h('h2', { textContent: 'Plugins' }), h('p', { className: 'nf-muted', textContent: 'Built-in plugins are trusted. Every other plugin runs only once you trust it, and asks again when it changes.' }));
+    for (const p of plugins) {
+      const tone = { active: 'ok', ready: 'ok', 'needs-trust': 'warn', off: '', failed: 'error', invalid: 'error', incompatible: 'warn' }[p.state] || '';
+      const act = async (verb) => { try { await post(`/api/plugins/${p.id}/${verb}`); if (verb !== 'trust') await unload(p.id); await refreshPlugins(); draw(); } catch (e) { toast(e.message, 'error'); } };
+      const buttons = [];
+      if (p.state === 'needs-trust') buttons.push(h('button', { className: 'nf-btn primary', textContent: 'Trust…', onclick: async () => {
+        const body = h('div', {}, h('p', { textContent: `${p.name} ${p.version} (${p.source}) runs with your rights once trusted.` }), h('p', { textContent: `Touches: ${JSON.stringify(p.touches)}` }), h('p', { textContent: `Adds: ${Object.entries(p.contributes || {}).map(([k, v]) => `${k} (${Array.isArray(v) ? v.length : Object.keys(v).length})`).join(', ') || 'nothing'}` }));
+        if (await confirmDialog(`Trust ${p.name}?`, body, 'Trust it')) act('trust');
+      } }));
+      if (['ready', 'active', 'failed', 'needs-trust'].includes(p.state)) buttons.push(h('button', { className: 'nf-btn', textContent: 'Turn off', onclick: () => act('disable') }));
+      if (p.state === 'off') buttons.push(h('button', { className: 'nf-btn', textContent: 'Turn on', onclick: () => act('enable') }));
+      if (['active', 'failed'].includes(p.state)) buttons.push(h('button', { className: 'nf-btn', textContent: 'Reload', onclick: () => act('reload') }));
+      page.append(h('div', { className: 'plugin-row' }, h('header', {}, h('b', { textContent: `${p.name} ` }, h('span', { className: 'nf-muted', textContent: `${p.id} ${p.version || ''} · ${p.source}` })), h('nf-tag', { textContent: p.state, tone }), ...buttons),
+        ...(p.errors.length ? [h('div', { className: 'why', textContent: p.errors.join('; ') })] : []), ...(p.failure ? [h('div', { className: 'why', textContent: p.failure })] : []),
+        ...(p.state === 'incompatible' ? [h('div', { className: 'why', textContent: `needs editor plugin API ${p.needs}` })] : [])));
+    }
+    for (const t of page.querySelectorAll('nf-tag')) if (t.tone) t.setAttribute('tone', t.tone);
+    el.replaceChildren(page);
+  };
+  draw(); const sub = onEvent('plugins/changed', () => refreshPlugins().then(draw)); return () => sub.dispose();
+}
+function renderSettingsScreen(el) {
+  const page = h('div', { className: 'doc-page' }, h('h2', { textContent: 'Settings' }));
+  if (!model.settings.length) page.append(h('p', { className: 'nf-muted', textContent: 'No plugin has settings.' }));
+  for (const s of model.settings) {
+    const box = h('nf-panel', { title: s.name }); page.append(box);
+    json(`/api/plugins/${s.plugin}/settings`).then(({ schema, values }) => {
+      const inner = box.querySelector('.nf-panel-body') || box;
+      for (const [key, def] of Object.entries(schema)) {
+        const save = (value) => post(`/api/plugins/${s.plugin}/settings`, { key, value }).then(() => toast(`Saved ${def.title || key}`)).catch((e) => toast(e.message, 'error'));
+        const type = def.type || typeof def.default, title = def.title || key;
+        let field;
+        if (Array.isArray(def.enum)) { field = h('nf-select'); field.setAttribute('label', title); field.options = def.enum.map((v) => ({ value: String(v) })); field.value = String(values[key]); field.addEventListener('change', () => save(type === 'number' ? Number(field.value) : field.value)); }
+        else if (type === 'boolean') { const box2 = h('input', { type: 'checkbox', checked: !!values[key], onchange: () => save(box2.checked) }); field = h('nf-field', {}, box2); field.setAttribute('label', title); }
+        else if (type === 'number') { field = h('nf-number'); field.setAttribute('label', title); field.setAttribute('value', values[key]); field.addEventListener('change', () => save(field.value)); }
+        else { const input = h('input', { className: 'nf-input', value: values[key] ?? '', onchange: () => save(input.value) }); field = h('nf-field', {}, input); field.setAttribute('label', title); }
+        inner.append(field);
+      }
+    }).catch((e) => box.append(h('p', { className: 'nf-muted', textContent: e.message })));
+  }
+  el.replaceChildren(page); return null;
+}
+
+// ---- the palette
+function openPalette(initial = '') {
+  if (document.querySelector('.palette')) return;
+  const input = h('input', { placeholder: 'Type a command…', value: initial }), list = h('ul'), wrap = h('div', { className: 'palette' }, h('div', {}, input, list));
+  const items = () => [...commands.list(), ...model.tools.map((t) => ({ id: `tool:${t.key}`, title: `Open tool: ${t.title}`, category: 'Tools', tool: t.key }))];
+  let shown = [], at = 0;
+  const run = async (item) => { close(); try { if (item.tool) await setTool(item.tool); else await commands.execute(item.id); } catch (e) { toast(e.message, 'error'); } };
+  const draw = () => { shown = rank(items(), input.value).slice(0, 40).map((r) => r.item); at = Math.min(at, Math.max(0, shown.length - 1));
+    list.replaceChildren(...shown.map((c, i) => h('li', { className: i === at ? 'on' : '', onclick: () => run(c) }, h('span', { textContent: c.title }), h('span', { className: 'cat', textContent: [c.category, c.keys && showKeys(parseKeys(c.keys, { mac }), { mac })].filter(Boolean).join('  ') })))); };
+  const close = () => wrap.remove();
+  input.addEventListener('input', () => { at = 0; draw(); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { at = Math.min(at + 1, shown.length - 1); draw(); e.preventDefault(); } else if (e.key === 'ArrowUp') { at = Math.max(at - 1, 0); draw(); e.preventDefault(); } else if (e.key === 'Enter' && shown[at]) run(shown[at]); else if (e.key === 'Escape') close(); });
+  wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(); });
+  document.body.append(wrap); draw(); input.focus();
+}
+$('paletteOpen').textContent = `Search commands…   ${mac ? '⌘K' : 'Ctrl+K'}`;
+$('paletteOpen').onclick = () => openPalette();
+
+// ---- keys
+addEventListener('keydown', (e) => {
+  if (document.querySelector('.palette, dialog[open]')) return;
+  const typing = e.target.closest && e.target.closest('input, textarea, select, [contenteditable]');
+  for (const c of commands.list()) {
+    if (!c.keys) continue;
+    let chord; try { chord = parseKeys(c.keys, { mac }); } catch { continue; }
+    if (matches(chord, e) && (!typing || chord.ctrl || chord.meta)) { e.preventDefault(); commands.execute(c.id).catch((err) => toast(err.message, 'error')); return; }
+  }
+});
+
+// ---- live updates
+onEvent('plugins/changed', () => refreshPlugins());
+onEvent('plugins/failed', ({ id, message }) => { log(`${id}: ${message}`); toast(`${id} was turned off: ${message}`, 'error'); unload(id); refreshPlugins(); });
+onEvent('jobs/started', ({ label }) => { $('jobInd').textContent = `● ${label}`; if (bottomTab === 'core/jobs') renderBottom(); });
+onEvent('jobs/done', ({ label, state }) => { $('jobInd').textContent = ''; toast(`${label}: ${state}`, state === 'done' ? '' : 'error'); if (bottomTab === 'core/jobs') renderBottom(); });
+onEvent('project/changed', () => location.reload());
+
+// ---- start
+await refreshPlugins();
+window.__workbench = { commands, selection, documents, get plugins() { return plugins; }, ensure, unload, openPalette, problems };

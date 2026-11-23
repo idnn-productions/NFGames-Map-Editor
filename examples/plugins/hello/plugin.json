@@ -2,12 +2,57 @@
   "id": "example.hello",
   "name": "Hello",
   "version": "1.0.0",
-  "engines": { "nfgames": "^1.0.0" },
-  "server": "server.mjs",
-  "touches": { "files": [".hello/**"], "commands": [], "network": false },
-  "contributes": {
-    "commands": [{ "id": "greet", "title": "Say hello" }],
-    "settings": { "greeting": { "type": "string", "default": "Hello", "title": "What to say" } }
+  "engines": {
+    "nfgames": "^1.0.0"
   },
-  "activation": ["onRoute", "onCommand:greet"]
+  "server": "server.mjs",
+  "web": "web/index.js",
+  "touches": {
+    "files": [
+      ".hello/**"
+    ],
+    "commands": [],
+    "network": false
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "greet",
+        "title": "Say hello"
+      }
+    ],
+    "settings": {
+      "greeting": {
+        "type": "string",
+        "default": "Hello",
+        "title": "What to say"
+      }
+    },
+    "tools": [
+      {
+        "id": "hello",
+        "title": "Hello",
+        "icon": "👋"
+      }
+    ],
+    "panels": [
+      {
+        "id": "log",
+        "title": "Hello log",
+        "region": "bottom"
+      }
+    ],
+    "statusItems": [
+      {
+        "id": "greeting",
+        "align": "right"
+      }
+    ]
+  },
+  "activation": [
+    "onRoute",
+    "onCommand:greet",
+    "onTool:hello",
+    "onPanel:log"
+  ]
 }
