@@ -34,6 +34,7 @@ It runs on your machine only: the server listens on `127.0.0.1` and refuses ever
 - [The map file format](#the-map-file-format)
 - [Using the editor](#using-the-editor)
 - [Model review](#model-review)
+- [Plugins](#plugins)
 - [Save and backups](#save-and-backups)
 - [The fit check](#the-fit-check)
 - [Apply actions](#apply-actions)
@@ -570,6 +571,22 @@ Then, in a Claude Code session in the game project, say **"watch the review inbo
 once per waiting job, and each line wakes the session. A Monitor watch lasts at most 30 minutes; the skill
 restarts it. Jobs wait on disk while nobody watches, so nothing is lost.
 
+## Plugins
+
+The editor can be extended with **plugins**: folders with a `plugin.json` and, optionally, a server part and a page
+part. A plugin can add server routes, checks for the Problems list, jobs, settings and (with the workbench) tools,
+panels and commands. Plugins come with the editor, from your user folder (`~/.nfgames-editor/plugins/`), or from the
+project's `nfgames.json`, which can also pin shared plugins from npm or git:
+
+```sh
+nfgames plugin add @acme/nfgames-terrain@2.1.0   # or a git URL; pinned in nfgames.json
+nfgames plugin install                           # install everything the project pins
+nfgames plugin list
+```
+
+How to write one, what it gets, and what trust means: [`docs/plugins.md`](docs/plugins.md). A small example:
+[`examples/plugins/hello`](examples/plugins/hello).
+
 ## Save and backups
 
 Save (the button, or Ctrl S) sends the plan and, if the map has one, the planting plan. The server then
@@ -676,6 +693,11 @@ The editor reads and writes files on your machine, so it accepts requests only f
   install whose download matched the pinned SHA-512. Models are read only from the real `models` folder (symlinks
   out of it refused), and only `.glb` files. Jobs are written only to server-named folders and files under
   `reviews`; images are checked by their bytes. `POST /api/review` takes up to 24 MB; everything else keeps 2 MB.
+- **Plugins.** A plugin is trusted code: the user is asked once per version (built-in and project plugins are trusted
+  with the editor and the project), shown what it declares it touches. Its routes (`/api/p/<id>/…`) get the same Host,
+  Origin and JSON checks, its files are served only from its own folder (`/p/<id>/…`, no hidden files), and its
+  routes, settings and storage are namespaced by its id. `touches` is enforced through the plugin API (files and
+  programs), not against code that reaches around it. A plugin that fails is turned off alone.
 - **Fixed commands.** Apply actions run only what the config lists, with `shell: false`. The action's id
   is looked up as the config's own key, and the only value from the request that reaches a command is
   the checked map name, as one whole argument.
@@ -720,7 +742,10 @@ only allow-listed files served), jobs (`test/reviews.test.mjs`: server-made name
 write nothing, states, workflows), the routes (`test/viewer-server.test.mjs`) and the watcher
 (`test/review-watch.test.mjs`). Opening projects and model kinds: GLB bounds (`test/glb.test.mjs`), model kind names,
 sizes, the cache and the kit's precedence (`test/modelkinds.test.mjs`), the folder browser, trust and recent projects
-(`test/home.test.mjs`), and switching over HTTP (`test/switch.test.mjs`).
+(`test/home.test.mjs`), and switching over HTTP (`test/switch.test.mjs`). Plugins: versions, globs and manifests
+(`test/plugins-basics.test.mjs`), sources, precedence and trust (`test/plugins-sources.test.mjs`), the event stream
+and plugin jobs (`test/events-jobs.test.mjs`), the manager (`test/plugins-manager.test.mjs`), npm and git installs
+(`test/plugins-install.test.mjs`), and plugins over HTTP (`test/plugins-server.test.mjs`).
 
 ```sh
 npm run check:browser    # the page in headless Chrome, against a copy of the sample project
