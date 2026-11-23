@@ -8,6 +8,7 @@ import { createSelection } from './core/selection.js';
 import { createDocuments } from './core/documents.js';
 import { contributionsOf } from './core/contributions.js';
 import { lentFor } from './core/lent.js';
+import { createProblems } from './core/problems.js';
 import { h, toast, dialog, confirmDialog } from './ui.js';
 
 const $ = (id) => document.getElementById(id);
@@ -19,7 +20,7 @@ const post = (url, body = {}) => json(url, { method: 'POST', headers: { 'Content
 let plugins = [], model = contributionsOf([]), activeTool = null, bottomTab = 'core/jobs';
 const commands = createCommands(), selection = createSelection(), documents = createDocuments();
 const tools = createRegistry(), editors = createRegistry(), panels = createRegistry(), inspectors = createRegistry(), statusItems = createRegistry();
-const problems = new Map(), output = [], listeners = new Map(), loaded = new Map(), declared = [];
+const problems = createProblems(), output = [], listeners = new Map(), loaded = new Map(), declared = [];
 const mounted = new Map();   // document id → { el, cleanup }
 
 // ---- events from the host
@@ -46,7 +47,7 @@ function makeApi(p, rec) {
     events: { on: (name, fn) => own(onEvent(name, fn)) },
     ui: { toast, dialog, confirm: confirmDialog, palette: openPalette },
     selection: { get: selection.get, set: (type, items) => selection.set(type, items), on: (fn) => own(selection.on(fn)) },
-    problems: { set: (list) => { problems.set(p.id, (list || []).map((x) => ({ ...x, plugin: p.id }))); own({ dispose: () => problems.delete(p.id) }); renderStatus(); if (bottomTab === 'core/problems') renderBottom(); } },
+    problems: { set: (list) => { problems.set(p.id, list); own({ dispose: () => problems.drop(p.id) }); } },
     settings: { get: () => json(`/api/plugins/${p.id}/settings`).then((s) => s.values), set: (key, value) => post(`/api/plugins/${p.id}/settings`, { key, value }) },
     three: () => import('three'),
     services: { call: (key, action, input) => callService(key, action, input) },
@@ -112,6 +113,26 @@ function renderViews() {
   for (const b of document.querySelectorAll('#nfnav .view')) { const on = b.dataset.view === shown; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.classList.toggle('dirty', dirty.has(b.dataset.view)); }
 }
 document.addEventListener('nf:view', (e) => showView(e.detail));
+/** The frame of a view's page (the map editor's, the model viewer's), once its tab is there. */
+const frameOf = (view) => { const d = documents.list().find((x) => x.uri === `/${view}`), m = d && mounted.get(d.id); return (m && m.el.querySelector('iframe')) || null; };
+/** Shows a view's tab and, with a query, takes its page there ('viewer', { model }) unless it is there already. */
+async function openView(view, query = null) {
+  if (!VIEWS[view]) return;
+  await commands.execute(VIEWS[view]);
+  if (!query) return;
+  const target = `/${view}?${new URLSearchParams(query)}`;
+  for (let i = 0; i < 40; i++) {   // the tab's frame is made once its plugin has loaded
+    const f = frameOf(view);
+    if (f) { let at = null; try { at = f.contentWindow.location.pathname + f.contentWindow.location.search; } catch { /* still loading */ } if (at !== target) f.src = target; return; }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+// what the pages in frames ask of the workbench (same origin: they call window.top.nfWorkbench)
+window.nfWorkbench = {
+  /** A page's problems for the Problems tab: [{ kind, text, error? }]; goTo(index) shows one. An empty list clears. */
+  setProblems: (source, list, goTo) => problems.set(String(source), list, goTo),
+  openView: (view, query) => openView(view, query).catch((e) => toast(e.message, 'error')),
+};
 
 // ---- which panels show: the side panel (tools), the inspector and the bottom panel (Jobs, Problems, Output), each
 // hidden or shown from the bar's buttons, its key or the palette, and remembered in this browser
@@ -234,6 +255,7 @@ async function mountDoc(d) {
 let shownDoc = null;
 documents.on(() => {
   renderDocs(); renderStatus(); renderViews();
+  for (const view of ['map', 'viewer']) if (!documents.list().some((d) => d.uri === `/${view}`)) problems.drop(view);   // a closed page's problems go with it
   const now = documents.active()?.id ?? null;
   if (now !== shownDoc) { shownDoc = now; activeTool = null; renderActivity(); renderSide(); renderInspector(); renderBottom(); }
 });
@@ -276,14 +298,20 @@ function renderBottom() {
   const body = $('bottomBody');
   if (part && bottomTab === lentKey) return showLent('bottom', part, body);
   if (bottomTab === 'core/jobs') return renderJobs(body);
-  if (bottomTab === 'core/problems') { const all = [...problems.values()].flat(); body.replaceChildren(all.length ? h('ul', { className: 'nf-log' }, ...all.map((p) => h('li', { textContent: `${p.kind || 'problem'}  ${p.text}  (${p.plugin})` }))) : h('p', { className: 'nf-muted', textContent: 'No problems.' })); return; }
+  if (bottomTab === 'core/problems') {
+    const all = problems.all();
+    body.replaceChildren(all.length ? h('ul', { className: 'nf-log nf-problems' }, ...all.map((p) => h('li', { className: `${problems.canGo(p) ? 'go' : ''}${p.error ? ' error' : ''}`, title: problems.canGo(p) ? 'click to show it' : '', onclick: () => problems.go(p) },
+      h('b', { textContent: `${p.kind || 'problem'} ` }), p.text, h('span', { className: 'nf-muted', textContent: `  ${p.source}` })))) : h('p', { className: 'nf-muted', textContent: 'No problems.' }));
+    return;
+  }
   if (bottomTab === 'core/output') { body.replaceChildren(h('pre', { className: 'nf-log', textContent: output.join('\n') || 'Nothing yet.' })); return; }
   const panel = model.panels.find((p) => p.key === bottomTab);
   if (!panel) { bottomTab = 'core/jobs'; return renderBottom(); }
   const mount = () => { const f = panels.get(panel.key); body.replaceChildren(); if (f) f(body, {}); else body.append(h('p', { className: 'nf-muted', textContent: 'Nothing to show.' })); };
   if (panels.has(panel.key)) mount(); else { body.replaceChildren(h('p', { className: 'nf-muted', textContent: 'Loading…' })); ensure(panel.plugin).then(mount).catch(() => {}); }
 }
-const countProblems = () => [...problems.values()].reduce((n, l) => n + l.length, 0);
+const countProblems = () => problems.count();
+problems.on(() => { renderStatus(); renderBottom(); });
 async function renderJobs(body) {
   const j = await json('/api/job').catch(() => null);
   if (bottomTab !== 'core/jobs') return;

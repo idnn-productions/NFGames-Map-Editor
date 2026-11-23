@@ -49,3 +49,6 @@
 .layout button:hover { color: var(--nf-text); background: var(--nf-raised); } .layout button[aria-pressed=true] { color: var(--nf-accent); }
 .region-body.flush { padding: 0; } .region-body > .lent { height: 100%; }
 .act-sep { width: 22px; border: 0; border-top: 1px solid var(--nf-line); margin: 4px auto; } .layout-sep { width: 1px; margin: 4px 2px; background: var(--nf-line); }
+
+.nf-problems { list-style: none; padding: 0 var(--nf-s3); } .nf-problems li { padding: 2px 0; } .nf-problems li.go { cursor: pointer; } .nf-problems li.go:hover { color: var(--nf-accent); }
+.nf-problems li b { color: var(--nf-warn); font-weight: 600; } .nf-problems li.error b { color: var(--nf-error); }

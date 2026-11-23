@@ -9,6 +9,7 @@ import { createSelection } from '../src/shell/core/selection.js';
 import { createDocuments } from '../src/shell/core/documents.js';
 import { contributionsOf } from '../src/shell/core/contributions.js';
 import { lentFor } from '../src/shell/core/lent.js';
+import { createProblems } from '../src/shell/core/problems.js';
 
 const ev = (key, mods = {}) => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
 
@@ -78,5 +79,22 @@ describe('what a framed page lends', () => {
   it('nothing is lent without a frame, or for a region the page keeps', () => {
     assert.equal(lentFor('bottom', { activeTool: null, frame: null }), null);
     assert.equal(lentFor('inspector', { activeTool: null, frame: { side: frame.side } }), null);
+  });
+});
+
+describe('problems, from plugins and from the shown page', () => {
+  it('a source sets its list, clears it, and is dropped; clicking one goes to it', () => {
+    const p = createProblems(); let changes = 0, went = null; p.on(() => changes++);
+    p.set('map', [{ kind: 'door', text: 'x' }, { kind: 'fit', text: 'y' }], (i) => { went = i; });
+    p.set('nfgames.hello', [{ kind: 'hello', text: 'z' }]);
+    assert.equal(p.count(), 3);
+    assert.deepEqual(p.all().map((x) => [x.source, x.kind, x.text]), [['map', 'door', 'x'], ['map', 'fit', 'y'], ['nfgames.hello', 'hello', 'z']]);
+    p.go(p.all()[1]); assert.equal(went, 1);
+    p.go(p.all()[2]);   // a source with nowhere to go: nothing happens
+    p.set('map', []); assert.equal(p.count(), 1);
+    p.drop('nfgames.hello'); assert.equal(p.count(), 0); assert.equal(changes, 4);
+  });
+  it('a list that is not one is no problems', () => {
+    const p = createProblems(); p.set('map', null); assert.equal(p.count(), 0);
   });
 });

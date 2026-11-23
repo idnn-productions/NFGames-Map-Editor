@@ -62,6 +62,15 @@
   table.what { border-collapse: collapse; font-size: 12px; width: 100%; } table.what td { padding: 2px 4px; border-bottom: 1px solid var(--line); vertical-align: top; } table.what td:last-child { color: var(--dim); }
   [hidden] { display: none !important; }
   body.lent-side { grid-template-columns: 1fr 372px; }
+  /* in the workbench: Save and the rest in a bar over the map, Selected in the workbench's Inspector, problems in its bottom panel */
+  body.wb { grid-template-columns: 250px 1fr; } body.wb.lent-side { grid-template-columns: 1fr; } body.wb #right { display: none; }
+  body.wb #toolbar { position: absolute; inset: 0 0 auto 0; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px; background: var(--panel); border-bottom: 1px solid var(--line); white-space: nowrap; }
+  body.wb #toolbar #viewBar { position: static; flex: none; } body.wb #toolbar #viewBar button { background: none; }
+  body.wb #toolbar #viewBar button.on { background: var(--accent); }
+  body.wb #toolbar #tools { margin: 0; flex: none; flex-wrap: nowrap; } body.wb #toolbar #head { margin: 0; font-size: 13px; flex: none; display: flex; gap: 8px; align-items: center; } body.wb #toolbar #maps { float: none !important; }
+  body.wb #toolbar #status { margin: 0; min-height: 0; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--dim); }
+  body.wb canvas { top: 36px; height: calc(100% - 36px); } body.wb #hud { left: 10px; top: 44px; } body.wb #banner { top: 44px; }
+  #insp { background: var(--panel); padding: 4px 12px 30px; } #insp #selHead, #insp #probPart { display: none; } #insp h2:first-child { border-top: 0; padding-top: 0; }
 </style>
 </head>
 <body>
@@ -82,12 +91,13 @@
   <div class="keys"><b>drag</b> move · <b>drag empty ground</b> (or the right button anywhere) pan · <b>wheel</b> zoom · <b>Shift drag</b> box select · <b>Shift/Ctrl click</b> add to selection · <b>handle</b> or <b>R</b> / <b>Shift R</b> turn 15° (<b>Alt</b>: free, 1°) · <b>arrows</b> nudge one snap step (<b>Shift</b> 1 m) · <b>Page Up</b> / <b>Page Down</b> lift, lower · <b>Ctrl D</b> duplicate · <b>Del</b> remove · <b>Ctrl Z</b> / <b>Ctrl Y</b> undo, redo · <b>Ctrl S</b> save · <b>F</b> fit · <b>Esc</b> stop / deselect · <b>Tab</b> top view / 3D</div>
   <div class="keys" style="margin-top:6px"><b>In 3D:</b> <b>drag empty space</b> orbit · <b>right drag</b> pan · <b>wheel</b> zoom · <b>click</b> select · <b>drag the red, green, blue arrow</b> move along x, y (up), z · <b>drag a box</b> slide it on the ground · <b>drag the white ring</b> turn · a piece lifted near the top of what is under it lands on it</div>
 </aside>
-<main><canvas id="gl"></canvas><canvas id="map"></canvas><div id="viewBar"><button id="viewTop" class="on" title="The plan from above (Tab switches)">Top</button><button id="view3d" title="The plan in 3D: boxes from the kinds' sizes (Tab switches)">3D</button></div><div id="hud"></div><div id="banner"></div></main>
+<main><canvas id="gl"></canvas><canvas id="map"></canvas><div id="toolbar" hidden></div><div id="viewBar"><button id="viewTop" class="on" title="The plan from above (Tab switches)">Top</button><button id="view3d" title="The plan in 3D: boxes from the kinds' sizes (Tab switches)">3D</button></div><div id="hud"></div><div id="banner"></div></main>
 <aside id="right">
-  <h1><span id="title">Map</span> <select id="maps" style="float:right;display:none"></select></h1>
-  <div class="row"><button class="primary" id="save" title="Ctrl S">Save</button><button id="undo" title="Ctrl Z">Undo</button><button id="redo" title="Ctrl Y">Redo</button><label style="min-width:0"><input type="checkbox" id="snap" checked> <span id="snapText">snap 0.25 m</span></label><span id="dirty"></span></div>
+  <h1 id="head"><span id="title">Map</span> <select id="maps" style="float:right;display:none"></select></h1>
+  <div class="row" id="tools"><button class="primary" id="save" title="Ctrl S">Save</button><button id="undo" title="Ctrl Z">Undo</button><button id="redo" title="Ctrl Y">Redo</button><label style="min-width:0"><input type="checkbox" id="snap" checked> <span id="snapText">snap 0.25 m</span></label><span id="dirty"></span></div>
   <div id="status">Loading…</div>
 
+  <div id="mapPart">
   <div id="applyBox" hidden>
     <h2>Apply</h2>
     <div class="row" id="actions"></div><div class="row"><span id="busy">running</span></div>
@@ -96,11 +106,14 @@
   <div id="statusPanels"></div>
   <details id="helpBox" hidden><summary class="small dim">Which edit needs what</summary><table class="what" id="help"></table></details>
   <pre id="log" hidden></pre>
+  </div>
 
+  <div id="probPart">
   <h2>Problems <span id="probCount" class="dim"></span></h2>
   <ul class="list" id="problems"></ul>
+  </div>
 
-  <h2>Selected</h2>
+  <h2 id="selHead">Selected</h2>
   <div id="sel"></div>
 </aside>
 <script src="/shell/lend.js"></script>
@@ -114,7 +127,18 @@
 // divided by the plan's scale, so what touches here touches there.
 // in the workbench, the left column (pieces, Show, Legend, Keys) is lent to its side panel: look there too
 document.head.append(Object.assign(document.createElement('style'), { textContent: nfTree.css }));   // before the column is lent: it takes the page's styles along
-const panel = window.top !== window ? nfLendPanel(document.getElementById('left'), { title: 'Map editor' }) : null;
+// In the workbench the page keeps the map and a bar over it: its left column (pieces, Show, Legend, Keys) is lent to
+// the side panel, what it says about the map and the selection to the Inspector, and its problems go to the Problems tab.
+const embedded = window.top !== window;
+if (embedded) {
+  const byId = (id) => document.getElementById(id);
+  document.body.classList.add('wb');
+  byId('toolbar').hidden = false; byId('toolbar').append(byId('viewBar'), byId('head'), byId('tools'), byId('status'));
+  const insp = Object.assign(document.createElement('div'), { id: 'insp' });
+  byId('right').append(insp); insp.append(byId('mapPart'), byId('selHead'), byId('sel'));
+}
+const panel = embedded ? nfLend({ side: { el: document.getElementById('left'), title: 'Map editor' }, inspector: { el: document.getElementById('insp'), title: 'Map' } }) : null;
+const workbench = () => { try { return (embedded && window.top.nfWorkbench) || null; } catch { return null; } };
 const $ = (id) => document.getElementById(id) || (panel && panel.byId(id));
 const canvas = $('map'), ctx = canvas.getContext('2d');
 const mapName = new URLSearchParams(location.search).get('map');
@@ -563,7 +587,7 @@ function applyPreview(body) {
   if (layerList().map((l) => l.id).join() !== had) buildLayers();
   renderProblems(); renderStatus(); draw(); if (sel.length === 1) renderSelected(); window.__map.previews++;
 }
-function status(text, kind = '') { const e = $('status'); e.textContent = text; e.className = kind; }
+function status(text, kind = '') { const e = $('status'); e.textContent = text; e.className = kind; e.title = embedded ? text : ''; }
 function uniqueId(base) { base = String(base).toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/^[^a-z]+/, '').replace(/\d+$/, '') || 'piece'; const pre = activePresets().find((s) => s.idPrefix === base); if (pre) return nextSeriesId(base); const used = new Set(pieces().map((p) => p.id)); let id = base, n = 1; while (used.has(id) || (RESERVED && RESERVED.test(id))) id = `${base}${++n}`; return id; }
 function select(keys, add = false) { sel = add ? [...new Set([...sel, ...keys])] : keys; sel = sel.filter((k) => handle(k)); draw(); renderSelected(); }
 const selectedPieces = () => sel.filter((k) => k.startsWith('piece:')).map((k) => pieceById(k.slice(6))).filter(Boolean);
@@ -1012,6 +1036,12 @@ function buildLayers() {
   for (const [colour, text] of rows) legend.append(h('div', {}, h('i', { style: `background:${colour}` }), text));
 }
 function renderProblems() {
+  const wb = workbench();
+  if (wb) {   // in the workbench they are listed once, in its Problems tab; a click there shows one here
+    const go = (p) => { if (p.sel && p.sel.length) select(p.sel.filter((k) => handle(k))); if (p.at) focusOn(p.at, 9); };
+    wb.setProblems('map', [...pv.errors.map((text) => ({ kind: 'schema', text, error: true })), ...pv.problems.map((p) => ({ kind: p.kind, text: p.text }))], (i) => { const p = pv.problems[i - pv.errors.length]; if (p) go(p); });
+    return;
+  }
   const box = $('problems'); box.textContent = '';
   for (const text of pv.errors) box.append(h('li', { class: 'error' }, h('b', { textContent: 'schema ' }), text));
   for (const p of pv.problems) box.append(h('li', { title: 'click to show it', onclick: () => { if (p.sel && p.sel.length) select(p.sel.filter((k) => handle(k))); if (p.at) focusOn(p.at, 9); } }, h('b', { textContent: p.kind + ' ' }), p.text));
@@ -1040,9 +1070,10 @@ const num = (value, step, apply, extra = {}) => h('input', { type: 'number', ste
 const txt = (value, apply, extra = {}) => h('input', { type: 'text', value: value ?? '', ...extra, onchange: (e) => { remember(); apply(e.target.value); changed(); } });
 const area = (value, apply) => h('textarea', { value: value ?? '', onchange: (e) => { remember(); apply(e.target.value); changed(); } });
 const optional = (object, key) => (v) => { if (v === null || v === '' || v === undefined) delete object[key]; else object[key] = v; };
-const note = (text) => (text ? h('div', { class: 'small dim', textContent: text }) : null);
+const note = (text) => (text ? h('div', { class: 'small dim', textContent: text }) : document.createDocumentFragment());   // no text draws nothing (append(null) would print "null")
 function renderSelected() {
   const box = $('sel'); box.textContent = '';
+  if (embedded) { $('mapPart').hidden = sel.length > 0; panel.setTitle('inspector', sel.length ? 'Selected' : 'Map'); }   // the Inspector shows the map's own things until something is selected
   if (!plan) return;
   if (sel.length > 1) {
     const ps = selectedPieces();
@@ -1056,7 +1087,7 @@ function renderSelected() {
   const place = (set = x.set, at = x.at) => row('x, z', num(at[0], snapStep(), (v) => set([v, handle(key).at[1]])), num(at[1], snapStep(), (v) => set([handle(key).at[0], v])));
   if (type === 'piece') {
     const p = x.piece, k = info(p.kind), g = toGame(drawAt(p)), [w, d] = footprint(p), seat = pv.seated[p.id], pre = presetOf(p);
-    box.append(h('div', { class: 'row' }, h('b', { textContent: p.id }), tagOf(k.cls), h('span', { class: 'dim', textContent: p.kind }), ...(k.model ? [h('a', { href: `/viewer?model=${encodeURIComponent(k.model)}`, textContent: 'View model', title: 'Open this model in the model viewer', style: 'margin-left:auto;color:#5fc9c0' })] : [])),
+    box.append(h('div', { class: 'row' }, h('b', { textContent: p.id }), tagOf(k.cls), h('span', { class: 'dim', textContent: p.kind }), ...(k.model ? [h('a', { href: `/viewer?model=${encodeURIComponent(k.model)}`, textContent: 'View model', title: 'Open this model in the model viewer', style: 'margin-left:auto;color:#5fc9c0', onclick: (e) => { const wb = workbench(); if (wb) { e.preventDefault(); wb.openView('viewer', { model: k.model }); } } })] : [])),
       note((pre && pre.note ? pre.note : classOf(k.cls).note) + (k.unknown ? ' (No size is known for this kind: drawn as 2 x 2 m.)' : '')),
       place(),
       row('turn °', num(p.rot || 0, 15, (v) => { p.rot = v; }), h('span', { class: 'dim small', textContent: '0 faces south (+Z), 90 east' })),

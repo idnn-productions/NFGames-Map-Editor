@@ -280,6 +280,42 @@ try {
   console.log(`foreign Host: ${host}; foreign Origin on a write: ${origin}`);
   if (host !== 403 || origin !== 403) fail('a foreign Host and a foreign Origin must get 403');
 
+  // through the workbench: Save sits in a bar over the map, Selected in the Inspector, and a problem is listed once,
+  // in the bottom panel, where a click selects it on the map
+  {
+    const wb = await context.newPage();
+    wb.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`workbench: ${m.text()}`); });
+    wb.on('pageerror', (e) => errors.push(`workbench: ${e}`));
+    await wb.goto(new URL('?view=map', url).href);
+    await wb.waitForFunction(() => { try { return document.querySelector('iframe').contentWindow.__map.ready; } catch { return false; } }, null, { timeout: 15000 });
+    const inFrame = (fn, arg) => wb.evaluate(([f, a]) => new Function('w', 'a', `return (${f})(w, a)`)(document.querySelector('iframe').contentWindow, a), [fn.toString(), arg]);
+    const lentIn = (region, sel) => wb.evaluate(([r, q]) => { const host = document.querySelector(`#${r} .lent`); return !!(host && host.shadowRoot && host.shadowRoot.querySelector(q)); }, [region, sel]);
+    if (!(await inFrame((w) => !!w.document.querySelector('#toolbar #save') && !!w.document.querySelector('#toolbar #viewBar')))) fail('in the workbench, Save and Top/3D should be in the bar over the map');
+    if (!(await lentIn('inspectorBody', '#sel')) || !(await lentIn('sideBody', '#palette'))) fail('in the workbench, Selected should be in the Inspector and the palette in the side panel');
+    if ((await wb.locator('#inspectorTitle').textContent()) !== 'Map') fail('with nothing selected the Inspector should be titled Map');
+    const text = await wb.evaluate(() => document.querySelector('#inspectorBody .lent').shadowRoot.querySelector('#sel').textContent);
+    if (/null/.test(text)) fail(`the Inspector should not print "null": ${text}`);
+    const mapW = await inFrame((w) => w.document.querySelector('#map').getBoundingClientRect().width), winW = await wb.evaluate(() => innerWidth);
+    console.log(`workbench: the map is ${Math.round(mapW)} px of ${winW}`);
+    if (mapW < winW * 0.5) fail(`in the workbench the map should have at least half the window (${Math.round(mapW)} of ${winW} px)`);
+    // a piece moved far outside the map is a problem
+    await inFrame((w) => w.__map.select(['piece:crate']));
+    if ((await wb.locator('#inspectorTitle').textContent()) !== 'Selected') fail('with a piece selected the Inspector should be titled Selected');
+    const before = await inFrame((w) => w.__map.previews);
+    await wb.evaluate(() => { const i = document.querySelector('#inspectorBody .lent').shadowRoot.querySelector('#sel input[type=number]'); i.value = '500'; i.dispatchEvent(new Event('change')); });
+    await wb.waitForFunction((n) => document.querySelector('iframe').contentWindow.__map.previews > n, before, { timeout: 10000 });
+    const want = await inFrame((w) => w.__map.problems.errors.length + w.__map.problems.problems.length);
+    await wb.locator('#bottomTabs .nf-tab', { hasText: 'Problems' }).click();
+    const rows = await wb.locator('#bottomBody .nf-problems li').count();
+    console.log(`workbench: ${want} problems on the map, ${rows} in the Problems tab`);
+    if (!want || rows !== want) fail('the Problems tab should list the map\'s problems');
+    if (await inFrame((w) => w.document.querySelector('#problems').children.length)) fail('in the workbench the map should not list its problems a second time');
+    await inFrame((w) => w.__map.select([]));
+    await wb.locator('#bottomBody .nf-problems li').first().click();
+    if ((await inFrame((w) => w.__map.sel.join())) !== 'piece:crate') fail('a click on a problem should select it on the map');
+    await wb.close({ runBeforeUnload: false });
+  }
+
   if (errors.length) fail(`console errors:\n  ${errors.join('\n  ')}`); else console.log('console: no errors or warnings');
   await context.close();
 } finally {
