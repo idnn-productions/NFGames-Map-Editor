@@ -17,7 +17,7 @@ import { plantEditing } from './plan.mjs';
 import { view3d } from './view3d.mjs';
 import { checkFit, checkPlants } from './check.mjs';
 import { createJobs } from './jobs.mjs';
-import { listModels, resolveModel } from './models.mjs';
+import { listModels, listRefs, resolveModel, resolveRef } from './models.mjs';
 import { createReview, listReviews, publicWorkflows, LIMITS } from './reviews.mjs';
 import { installThree, vendorBase, vendorFile, vendorState } from './vendor.mjs';
 import { HOME, addRecent, browse, configTrust, insideHome, recentProjects, trustConfig } from './home.mjs';
@@ -181,6 +181,14 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
         if (!file) return send(404, { error: 'no such model' });
         res.writeHead(200, { 'Content-Type': 'model/gltf-binary', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
         return createReadStream(file).pipe(res);
+      }
+      // a model's reference images: only image files of the .refs folder beside it, named plainly (models.mjs)
+      if (req.method === 'GET' && path === '/api/model/refs') return send(200, { refs: listRefs(project.modelsDir, url.searchParams.get('path')) });
+      if (req.method === 'GET' && path === '/api/model/ref') {
+        const ref = resolveRef(project.modelsDir, url.searchParams.get('path'), url.searchParams.get('name'));
+        if (!ref) return send(404, { error: 'no such reference' });
+        res.writeHead(200, { 'Content-Type': ref.type, 'Content-Length': ref.size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
+        return createReadStream(ref.file).pipe(res);
       }
       if (req.method === 'POST' && path === '/api/review') { const job = await body(LIMITS.body); try { return send(200, createReview(project, job)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
       if (req.method === 'GET' && path === '/api/reviews') return send(200, { reviews: listReviews(project) });

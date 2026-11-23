@@ -1,11 +1,11 @@
 // The review inbox: jobs the model viewer writes for a Claude Code session to pick up. A job is a folder under the
 // project's `reviews` folder: job.json, a screenshot per pin, the user's reference images and, once a session has it,
-// status.json. Every name in it is made here; nothing from the page becomes a path. A job is written to <id>.tmp and
+// status.json. The model's own references (models.mjs) are named in job.json by their paths, not copied. Every name in it is made here; nothing from the page becomes a path. A job is written to <id>.tmp and
 // renamed into place, so a watcher never sees half of one.
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
-import { resolveModel } from './models.mjs';
+import { IMAGE_SIGNATURES as SIGNATURES, modelRefs, resolveModel } from './models.mjs';
 
 export const LIMITS = { body: 24 * 1024 * 1024, image: 6 * 1024 * 1024, pins: 40, refs: 4, note: 20000, name: 200 };
 export const STATES = ['working', 'needs-input', 'done', 'failed'];
@@ -43,12 +43,6 @@ export function normaliseWorkflows(list, root) {
 
 /** What the page lists: no file paths. */
 export const publicWorkflows = (workflows) => workflows.map(({ id, label, description, enabled }) => ({ id, label, description, enabled }));
-
-const SIGNATURES = {
-  png: (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
-  jpg: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
-  webp: (b) => b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP',
-};
 
 /** An image from the page (a data: URL): its extension and bytes, checked by their signature, not their label. */
 export function imageFromDataUrl(url, what) {
@@ -105,13 +99,16 @@ export function createReview(project, job, { now = new Date() } = {}) {
   if (job.overview) { const img = imageFromDataUrl(job.overview, 'overview'); overview = `overview.${img.ext}`; files.push([overview, img.bytes]); }
 
   const st = statSync(modelFile);
-  const instructions = [workflow.instructions, workflow.instructionsFile && existsSync(workflow.instructionsFile) ? readFileSync(workflow.instructionsFile, 'utf8') : ''].filter(Boolean).join('\n\n');
+  // the model's own reference images (<name>.refs/ beside it) are named, not copied: the job stays small and there is one set of them
+  const refsDir = project.rel(modelFile).replace(/\.glb$/i, '.refs'), references = modelRefs(project.modelsDir, job.model).map((r) => `${refsDir}/${r.name}`);
+  const refText = references.length ? `Reference images of this model (paths from the project root): ${references.join(', ')}. They are what the model was made from: open them, and treat them as the ground truth for what it should look like.` : '';
+  const instructions = [workflow.instructions, workflow.instructionsFile && existsSync(workflow.instructionsFile) ? readFileSync(workflow.instructionsFile, 'utf8') : '', refText].filter(Boolean).join('\n\n');
   mkdirSync(project.reviewsDir, { recursive: true });
   const id = jobId(project.reviewsDir, job.model, now), dir = join(project.reviewsDir, id), tmp = `${dir}.tmp`;
   const record = {
     id, createdAt: now.toISOString(),
     model: { path: job.model, file: project.rel(modelFile), sha256: createHash('sha256').update(readFileSync(modelFile)).digest('hex'), size: st.size, mtime: Math.round(st.mtimeMs) },
-    note, workflow: { id: workflow.id, label: workflow.label, instructions }, overview, pins: cleanPins,
+    note, workflow: { id: workflow.id, label: workflow.label, instructions }, references, overview, pins: cleanPins,
   };
   try {
     mkdirSync(tmp);

@@ -1,13 +1,13 @@
 // The model viewer's routes: its page, three.js only once installed (and only when the download matches), models only
-// from the models folder, review jobs only from this page.
+// from the models folder, a model's reference images only from its .refs folder, review jobs only from this page.
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
 import { createEditor } from '../src/server.mjs';
-import { sampleCopy, makeGlb, JPEG_SIG } from './helpers.mjs';
+import { sampleCopy, makeGlb, dataBytes, JPEG_SIG, PNG_1PX } from './helpers.mjs';
 
 describe('the model viewer over HTTP', () => {
   const port = 19393 + (process.pid % 500), origin = `http://127.0.0.1:${port}`;
@@ -18,7 +18,9 @@ describe('the model viewer over HTTP', () => {
   before(async () => {
     copy = sampleCopy();
     mkdirSync(join(copy.root, 'models'), { recursive: true });
-    writeFileSync(join(copy.root, 'models', 'cruiser.glb'), makeGlb());
+    writeFileSync(join(copy.root, 'models', 'cruiser.glb'), makeGlb()); writeFileSync(join(copy.root, 'models', 'bare.glb'), makeGlb());
+    mkdirSync(join(copy.root, 'models', 'cruiser.refs'));
+    for (const [name, data] of [['front.jpg', dataBytes(JPEG_SIG)], ['concept.png', dataBytes(PNG_1PX)], ['icon.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>'], ['fake.png', '<script>']]) writeFileSync(join(copy.root, 'models', 'cruiser.refs', name), data);
     editorRoot = mkdtempSync(join(tmpdir(), 'nfgames-editor-root-'));
     const project = await loadProject({ root: copy.root, config: { models: 'models' } });
     const fetchImpl = async () => { fetched++; return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(8) }; };
@@ -55,11 +57,30 @@ describe('the model viewer over HTTP', () => {
     assert.equal(fetched, 1); assert.deepEqual(readdirSync(editorRoot), []);
   });
   it('lists and streams models, nothing else', async () => {
-    assert.deepEqual((await (await ask('/api/models')).json()).models.map((m) => m.path), ['cruiser.glb']);
+    assert.deepEqual((await (await ask('/api/models')).json()).models.map((m) => m.path), ['bare.glb', 'cruiser.glb']);
     const r = await ask('/api/model?path=cruiser.glb');
     assert.equal(r.status, 200); assert.equal(r.headers.get('content-type'), 'model/gltf-binary');
     assert.equal(Buffer.from(await r.arrayBuffer()).length, makeGlb().length);
     for (const bad of ['../maps/plaza/layout.json', '..%2Fmaps%2Fplaza%2Flayout.json', 'nope.glb', '']) assert.equal((await ask(`/api/model?path=${bad}`)).status, 404, bad);
+  });
+  it('lists a model\'s reference images in order, and none for a model without them', async () => {
+    const r = await ask('/api/model/refs?path=cruiser.glb');
+    assert.equal(r.status, 200); assert.equal(r.headers.get('x-content-type-options'), 'nosniff'); assert.equal(r.headers.get('cache-control'), 'no-store');
+    const { refs } = await r.json();
+    assert.deepEqual(refs.map((x) => x.name), ['concept.png', 'front.jpg']); assert.deepEqual(Object.keys(refs[0]), ['name', 'size', 'mtime']);
+    for (const none of ['bare.glb', 'nope.glb', '../maps/plaza/layout.json', 'cruiser.refs', '']) { const e = await ask(`/api/model/refs?path=${encodeURIComponent(none)}`); assert.equal(e.status, 200, none); assert.deepEqual(await e.json(), { refs: [] }, none); }
+    assert.deepEqual(await (await ask('/api/model/refs')).json(), { refs: [] });
+  });
+  it('serves a reference image as that image, and nothing else from the project', async () => {
+    const r = await ask('/api/model/ref?path=cruiser.glb&name=concept.png');
+    assert.equal(r.status, 200); assert.equal(r.headers.get('content-type'), 'image/png'); assert.equal(r.headers.get('x-content-type-options'), 'nosniff'); assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(Buffer.from(await r.arrayBuffer()), dataBytes(PNG_1PX));
+    assert.equal((await ask('/api/model/ref?path=cruiser.glb&name=front.jpg')).headers.get('content-type'), 'image/jpeg');
+    for (const bad of ['../cruiser.glb', '..%2Fcruiser.glb', '..%5Ccruiser.glb', '..%2F..%2Fmaps%2Fplaza%2Flayout.json', 'cruiser.refs%2Fconcept.png', '%2Fetc%2Fpasswd', 'concept.png%00.jpg', '.', 'icon.svg', 'fake.png', 'Concept.PNG', 'missing.png', ''])
+      assert.equal((await ask(`/api/model/ref?path=cruiser.glb&name=${bad}`)).status, 404, bad);
+    for (const model of ['bare.glb', 'nope.glb', '..%2Fmodels%2Fcruiser.glb%2F..%2F..%2Fmaps%2Fplaza%2Flayout.json', '']) assert.equal((await ask(`/api/model/ref?path=${model}&name=concept.png`)).status, 404, model);
+    assert.equal((await ask('/api/model/ref')).status, 404);
+    assert.equal((await ask('/models/cruiser.refs/concept.png')).status, 404);   // only through the route: no file of the project is served by its path
   });
   it('takes a review from this page only, and lists it', async () => {
     const job = { model: 'cruiser.glb', workflow: 'auto', note: 'check the nose', pins: [{ note: 'x', position: [0, 0, 0], normal: [0, 1, 0], camera: { position: [1, 1, 1], target: [0, 0, 0], fov: 50 }, screenshot: JPEG_SIG }] };
@@ -67,6 +88,7 @@ describe('the model viewer over HTTP', () => {
     const r = await post('/api/review', job);
     assert.equal(r.status, 200);
     const { id } = await r.json(), list = (await (await ask('/api/reviews')).json()).reviews;
+    assert.deepEqual(JSON.parse(readFileSync(join(copy.root, '.review', id, 'job.json'), 'utf8')).references, ['models/cruiser.refs/concept.png', 'models/cruiser.refs/front.jpg']);
     assert.equal(list[0].id, id); assert.equal(list[0].state, 'queued');
     assert.equal((await post('/api/review', { ...job, workflow: 'comfyui' })).status, 400);
   });
