@@ -1,7 +1,7 @@
 // The plugin manager: on-demand activation, the server API, everything undone on unload, failures isolated.
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPluginManager } from '../src/plugins/manager.mjs';
@@ -29,6 +29,11 @@ describe('the plugin manager', () => {
     mkdirSync(join(root, 'maps'), { recursive: true }); writeFileSync(join(root, 'maps', 'secret.json'), '{}');
     writePlugin(join(dirs.builtinDir, 'hello'), { id: 'nfgames.hello', server: 'server.mjs', touches: { files: ['models/**'] }, activation: ['onRoute', 'onCommand:greet'],
       contributes: { commands: [{ id: 'greet', title: 'Greet' }], settings: { greeting: { type: 'string', default: 'hi' } } } }, { 'server.mjs': SERVER, 'web/app.js': 'export {}', '.secret': 'x' });
+    writePlugin(join(dirs.builtinDir, 'filer'), { id: 'nfgames.filer', server: 'server.mjs', touches: { files: ['.x/**'] }, activation: ['onRoute'] }, { 'server.mjs': `
+export function activate(api) {
+  const f = api.files;
+  api.routes.post('/do', ({ body: { op, rel, data } }) => ({ result: op === 'write' ? (f.write(rel, data), true) : op === 'remove' ? (f.remove(rel), true) : op === 'exists' ? f.exists(rel) : op === 'list' ? f.list(rel) : f.read(rel) }));
+}` });
     writePlugin(join(dirs.builtinDir, 'broken'), { id: 'nfgames.broken', server: 'server.mjs', activation: ['onStartup'] }, { 'server.mjs': 'export function activate() { throw new Error("cannot start"); }' });
     writePlugin(join(dirs.userDir, 'stranger'), { id: 'someone.stranger', server: 'server.mjs', activation: ['onStartup'] }, { 'server.mjs': 'export function activate() { globalThis.__stranger = true; }' });
     writePlugin(join(dirs.builtinDir, 'future'), { id: 'nfgames.future', engines: { nfgames: '^9.0.0' } });
@@ -60,6 +65,25 @@ describe('the plugin manager', () => {
     assert.equal(readFileSync(join(root, 'models', 'notes.txt'), 'utf8'), 'ok');
     const r = await mgr.route('nfgames.hello', 'GET', 'escape', { url: '/x' }, null, null);
     assert.equal(r.status, 500); assert.match(r.body.error, /did not declare maps\/secret\.json/);
+  });
+  const filer = async (op, rel, data) => { const r = await mgr.route('nfgames.filer', 'POST', 'do', { url: '/x' }, null, async () => ({ op, rel, data })); return r.status === 200 ? r.body.result : r.body.error; };
+  it('files.remove takes a file or a folder with what is in it, only where touches.files says', async () => {
+    assert.equal(await filer('write', '.x/a/b.txt', 'one'), true); assert.equal(await filer('write', '.x/a/c/d.txt', 'two'), true);
+    assert.equal(await filer('remove', '.x/a/b.txt'), true); assert.equal(await filer('exists', '.x/a/b.txt'), false); assert.equal(await filer('exists', '.x/a/c/d.txt'), true);
+    assert.equal(await filer('remove', '.x/a'), true); assert.equal(await filer('exists', '.x/a'), false);
+    assert.equal(await filer('remove', '.x/never-was'), true);   // nothing there: not an error
+    assert.match(await filer('remove', 'maps/secret.json'), /did not declare maps\/secret\.json/); assert.ok(existsSync(join(root, 'maps', 'secret.json')));
+    assert.match(await filer('remove', '.'), /outside the project/); assert.match(await filer('remove', '../game'), /outside the project/); assert.ok(existsSync(root));
+  });
+  it('files: a link inside a declared folder cannot lead out of the project', async () => {
+    const outside = join(top, 'outside'); mkdirSync(outside); writeFileSync(join(outside, 'secret.txt'), 'keep');
+    mkdirSync(join(root, '.x'), { recursive: true }); symlinkSync(outside, join(root, '.x', 'link')); symlinkSync(join(outside, 'secret.txt'), join(root, '.x', 'file-link'));
+    for (const [op, rel] of [['read', '.x/link/secret.txt'], ['write', '.x/link/new.txt'], ['remove', '.x/link/secret.txt'], ['list', '.x/link'], ['exists', '.x/link/secret.txt'], ['read', '.x/file-link'], ['write', '.x/file-link'], ['write', '.x/link/deep/er/new.txt']])
+      assert.match(String(await filer(op, rel, 'changed')), /outside the project/, `${op} ${rel}`);
+    assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'keep'); assert.ok(!existsSync(join(outside, 'new.txt'))); assert.ok(!existsSync(join(outside, 'deep')));
+    assert.equal(await filer('remove', '.x/link'), true);   // the link itself is the project's: it goes, what it pointed at stays
+    assert.ok(!existsSync(join(root, '.x', 'link'))); assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'keep');
+    assert.equal(state_('nfgames.filer'), 'active');   // a refusal is not a crash
   });
   it('hooks run across active plugins', async () => {
     await mgr.reload('nfgames.hello');

@@ -1,13 +1,17 @@
 // The plugin manager: the open project's plugins, which are trusted and on, and their server parts, loaded on demand
 // (an activation event) and undone completely when unloaded. A plugin that fails is turned off alone; the rest go on.
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { discoverPlugins } from './sources.mjs';
 import { pluginTrust, trustPlugin } from './trust.mjs';
 import { matchesAny } from './glob.mjs';
 
 const readJson = (f, fallback) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return fallback; } };
+/** What a route answers with when it sends a project file (api.routes.file): the bytes go out with this type. */
+class FileAnswer { constructor(path, type) { this.path = path; this.type = type; } }
+// what a browser shows but does not run; anything else is sent as bytes to save
+const FILE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.json': 'application/json', '.txt': 'text/plain; charset=utf-8' };
 const writeJson = (f, v) => { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, `${JSON.stringify(v, null, 2)}\n`); };
 
 export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir, project, jobs, events, providers = new Map(), log = () => {} }) {
@@ -40,11 +44,26 @@ export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir
   function makeApi(p, rec) {
     const own = (fn) => { rec.disposers.push(fn); return { dispose: fn }; };
     const globs = p.manifest.touches?.files || [], programs = p.manifest.touches?.commands || [];
-    const inProject = (rel) => {
+    const outside = (rel) => new Error(`${p.id}: ${rel} is outside the project`);
+    /** Throws unless `at`, or the nearest thing above it that exists, really is in the project (links followed). */
+    const reallyInside = (at, rel) => {
+      const root = realpathSync(project.root);
+      for (let cur = at; ; cur = dirname(cur)) {
+        let real = null, there = true;
+        try { lstatSync(cur); } catch { there = false; }
+        if (there) { try { real = realpathSync(cur); } catch { throw outside(rel); } }   // a link to nowhere: writing it would make its target
+        if (real !== null) { if (real !== root && !real.startsWith(root + sep)) throw outside(rel); return; }
+        if (dirname(cur) === cur) throw outside(rel);
+      }
+    };
+    /** The path of project file `rel`, which must be declared in touches.files and really in the project. `self: false`
+     *  checks the folder it is in and not what it is, for removing a link without following it. */
+    const inProject = (rel, { self = true } = {}) => {
       const abs = resolve(project.root, String(rel)), r = relative(project.root, abs);
-      if (!r || r.startsWith('..') || isAbsolute(r)) throw new Error(`${p.id}: ${rel} is outside the project`);
+      if (!r || r.startsWith('..') || isAbsolute(r)) throw outside(rel);
       const path = r.split(sep).join('/');
       if (!matchesAny(path, globs)) throw new Error(`${p.id} did not declare ${path} in touches.files`);
+      reallyInside(self ? abs : dirname(abs), rel);
       return abs;
     };
     const defaults = Object.fromEntries(Object.entries(p.manifest.contributes?.settings || {}).map(([k, v]) => [k, v && v.default]));
@@ -59,6 +78,8 @@ export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir
         write: (rel, data) => { const f = inProject(rel); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, data); },
         exists: (rel) => existsSync(inProject(rel)),
         list: (rel) => readdirSync(inProject(rel)),
+        /** Removes a file, or a folder with what is in it. Nothing there is not an error. A link goes; what it points at stays. */
+        remove: (rel) => rmSync(inProject(rel, { self: false }), { recursive: true, force: true }),
       },
       jobs: {
         run: (label, steps) => {
@@ -71,6 +92,8 @@ export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir
       routes: {
         get: (path, fn) => { rec.routes.set(`GET ${path}`, fn); return own(() => rec.routes.delete(`GET ${path}`)); },
         post: (path, fn) => { rec.routes.set(`POST ${path}`, fn); return own(() => rec.routes.delete(`POST ${path}`)); },
+        /** For a route to return: the project file `rel` itself, sent with its type (an image, JSON, text; else as bytes). */
+        file: (rel) => new FileAnswer(inProject(rel), FILE_TYPES[extname(String(rel)).toLowerCase()] || 'application/octet-stream'),
       },
       events: { emit: (name, data) => events.emit(`${p.id}/${name}`, data) },
       services: {
@@ -136,8 +159,15 @@ export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir
     const fn = live.get(id)?.routes.get(`${method} /${rest}`);
     if (!fn) return { status: 404, body: { error: 'not here' } };
     const query = Object.fromEntries(new URL(req.url, 'http://x').searchParams), payload = method === 'POST' ? await body() : undefined;
-    try { return { status: 200, body: (await fn({ query, body: payload })) ?? {} }; }
-    catch (e) { if (/did not declare|outside the project/.test(e.message)) return { status: 500, body: { error: e.message } }; fail(id, `route /${rest} failed: ${e.message}`); return { status: 500, body: { error: `${id} failed: ${e.message}` } }; }
+    try {
+      const answer = await fn({ query, body: payload });
+      if (answer instanceof FileAnswer) { let isFile = false; try { isFile = statSync(answer.path).isFile(); } catch { /* not there */ } return isFile ? { status: 200, file: { path: answer.path, type: answer.type } } : { status: 404, body: { error: 'not here' } }; }
+      return { status: 200, body: answer ?? {} };
+    }
+    catch (e) {
+      if (/did not declare|outside the project/.test(e.message)) return { status: 500, body: { error: e.message } };
+      // a refusal the route means (400 to 499 as the error's code) is an answer, not the plugin failing
+      if (Number.isInteger(e.code) && e.code >= 400 && e.code < 500) return { status: e.code, body: { error: e.message, ...(e.needsConfirm === true ? { needsConfirm: true } : {}) } }; fail(id, `route /${rest} failed: ${e.message}`); return { status: 500, body: { error: `${id} failed: ${e.message}` } }; }
   }
   /** Runs a hook in every active plugin: their results, in order. A hook that throws turns its plugin off. */
   async function runHook(name, payload) {

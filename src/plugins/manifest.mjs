@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
 import { satisfies, validVersion } from './semver.mjs';
 
-export const API_VERSION = '1.0.0';
+export const API_VERSION = '1.1.0';
 export const ID = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/;               // reverse-domain style: "nfgames.model-review"
 const LOCAL = /^[a-z][a-zA-Z0-9-]*$/;                                       // a contribution's own id
 export const POINTS = ['tools', 'editors', 'panels', 'inspectors', 'commands', 'statusItems', 'workflows', 'services'];

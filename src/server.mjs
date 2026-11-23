@@ -169,7 +169,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       { const m = /^\/api\/plugins\/([a-z0-9.-]+)\/settings$/.exec(path);
         if (m) { try { if (req.method === 'GET') return send(200, plugins.getSettings(m[1])); const { key, value } = await body(); return send(200, plugins.setSetting(m[1], key, value)); } catch (e) { return send(e.code || 500, { error: e.message }); } } }
       { const m = /^\/api\/p\/([a-z0-9.-]+)\/(.*)$/.exec(path);
-        if (m) { const r = await plugins.route(m[1], req.method, m[2], req, res, () => body()); return send(r.status, r.body); } }
+        if (m) { const r = await plugins.route(m[1], req.method, m[2], req, res, () => body()); return r.file ? send(r.status, readFileSync(r.file.path), r.file.type) : send(r.status, r.body); } }
       if (req.method === 'GET' && path === '/api/projects') return send(200, { current: { root: project.root, name: basename(project.root), title: project.options.title || null, maps: project.listMaps().length }, recent: recentProjects(stateDir), home: insideHome(home, home) });
       if (req.method === 'GET' && path === '/api/browse') { try { return send(200, browse(home, url.searchParams.get('path') || home)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
       if (req.method === 'POST' && path === '/api/project') { const b = await body(); try { return send(200, await switchProject(b && b.root, { trust: !!b && b.trust === true })); } catch (e) { return send(e.code || 500, { error: e.message }); } }
