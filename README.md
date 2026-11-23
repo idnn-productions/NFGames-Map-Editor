@@ -249,7 +249,9 @@ ctx = { root, editorRoot, mapsDir, mapDir(name), planFile(name), plantsFile(name
 entry needed. It is named `model:<file name>` (lower case, other characters as `_`, an `m` in front of a leading
 digit; where two files would share a name, their folders are added: `model:ships_crate`, `model:ruins_crate`). Its
 footprint comes from the model's own bounds, read from the GLB's header without loading the model (glTF metres, Y up,
-the editor's frame), and its box sits where the model is when the model's origin is not at its middle. Models are
+the editor's frame; quantized positions, as Meshopt writes them, are read as the GPU draws them), and its box sits
+where the model is when the model's origin is not at its middle. A part turned inside the model makes the box a little
+larger than the model, since only the parts' own boxes are read. Models are
 listed under **Models · <folder>**, in the class `model` (teal). Each file is read once per version. A `kit.json`
 entry of the same name wins (a `size` there without `boxes` uses the whole footprint), so a footprint, `door` or
 `solid` can be set by hand. A file that cannot be read is a kind of unknown size (2 x 2 m) with a `model` problem

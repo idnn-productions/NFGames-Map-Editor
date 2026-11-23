@@ -32,6 +32,11 @@ export function localMatrix(node) {
   ];
 }
 
+// Normalized integer positions (KHR_mesh_quantization, as Meshopt writes them) keep min and max in the integers' own
+// units; the GPU reads them as these (glTF 2.0, "Animation" and "Meshes": a signed type is never below -1).
+const UNNORMALIZE = { 5120: (c) => Math.max(c / 127, -1), 5121: (c) => c / 255, 5122: (c) => Math.max(c / 32767, -1), 5123: (c) => c / 65535 };
+const asDrawn = (a, v) => { const f = a.normalized && UNNORMALIZE[a.componentType]; return f ? v.map(f) : v; };
+
 /** The bounds of everything the default scene draws, in the model's frame (glTF: metres, Y up): { min, max }. */
 export function sceneBounds(gltf) {
   const nodes = gltf.nodes || [], meshes = gltf.meshes || [], acc = gltf.accessors || [];
@@ -46,8 +51,9 @@ export function sceneBounds(gltf) {
     for (const prim of (node.mesh !== undefined && meshes[node.mesh] && meshes[node.mesh].primitives) || []) {
       const a = acc[prim.attributes && prim.attributes.POSITION];
       if (!a || !Array.isArray(a.min) || !Array.isArray(a.max)) continue;
+      const lo = asDrawn(a, a.min), hi = asDrawn(a, a.max);
       for (let c = 0; c < 8; c++) {
-        const p = [c & 1 ? a.max[0] : a.min[0], c & 2 ? a.max[1] : a.min[1], c & 4 ? a.max[2] : a.min[2]];
+        const p = [c & 1 ? hi[0] : lo[0], c & 2 ? hi[1] : lo[1], c & 4 ? hi[2] : lo[2]];
         for (let k = 0; k < 3; k++) { const v = m[k] * p[0] + m[4 + k] * p[1] + m[8 + k] * p[2] + m[12 + k]; if (v < min[k]) min[k] = v; if (v > max[k]) max[k] = v; }
       }
     }

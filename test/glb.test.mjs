@@ -35,5 +35,21 @@ describe('a model\'s bounds from its GLB header', () => {
     const b = sceneBounds(gltf);
     assert.ok(near(b.min, [2, 0, 0]) && near(b.max, [3, 1, 4]), JSON.stringify(b));
   });
+  it('reads quantized positions as the GPU does (KHR_mesh_quantization)', () => {
+    // normalized integers: min and max are stored in the integers' own units; the GPU divides by the type's largest
+    const apple = boxScene([{ min: [-32767, -28535, -32143], max: [32767, 28535, 32143], node: { scale: [0.0487, 0.0487, 0.0487] } }]); // as Meshopt writes a 10 cm apple
+    Object.assign(apple.accessors[0], { componentType: 5122, normalized: true });
+    const a = sceneBounds(apple);
+    assert.ok(near(a.min, [-0.0487, -0.0487 * 28535 / 32767, -0.0487 * 32143 / 32767]) && near(a.max, [0.0487, 0.0487 * 28535 / 32767, 0.0487 * 32143 / 32767]), JSON.stringify(a));
+    const u8 = boxScene([{ min: [0, 0, 0], max: [255, 51, 255] }]); Object.assign(u8.accessors[0], { componentType: 5121, normalized: true });
+    assert.ok(near(sceneBounds(u8).max, [1, 0.2, 1]));
+    const s8 = boxScene([{ min: [-128, -127, 0], max: [127, 127, 127] }]); Object.assign(s8.accessors[0], { componentType: 5120, normalized: true });
+    assert.ok(near(sceneBounds(s8).min, [-1, -1, 0]), 'a signed type\'s smallest value is -1, not below');
+    const u16 = boxScene([{ min: [0, 0, 0], max: [65535, 65535, 13107] }]); Object.assign(u16.accessors[0], { componentType: 5123, normalized: true });
+    assert.ok(near(sceneBounds(u16).max, [1, 1, 0.2]));
+    // integers that are not normalized are positions as they are
+    const raw = boxScene([{ min: [0, 0, 0], max: [3, 2, 1] }]); Object.assign(raw.accessors[0], { componentType: 5122 });
+    assert.ok(near(sceneBounds(raw).max, [3, 2, 1]));
+  });
   it('a scene with nothing sized says so', () => assert.throws(() => sceneBounds({ asset: { version: '2.0' }, nodes: [{}] }), /nothing with a size/));
 });
