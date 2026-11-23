@@ -15,7 +15,7 @@ import { join, relative, sep } from 'node:path';
 
 /** Writes `text` to `to` without following links: a new file under a random name (exclusive: it fails if anything is
  *  there), then renamed over `to`, which replaces the name, never what a link there pointed to. */
-function writeSafely(to, text, mode = 0o644) {
+export function writeSafely(to, text, mode = 0o644) {
   const tmp = `${to}.${randomBytes(8).toString('hex')}.tmp`;
   try { writeFileSync(tmp, text, { flag: 'wx', mode }); renameSync(tmp, to); } catch (e) { rmSync(tmp, { force: true }); throw e; }
 }
