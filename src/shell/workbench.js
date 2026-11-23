@@ -73,7 +73,11 @@ async function unload(id) {
 }
 
 // ---- the manifests: tools, commands, panels the workbench shows before any plugin code runs
-async function refreshPlugins() {
+// one refresh at a time, in order: a button's refresh and the host's live event must not race (a stale list would try
+// to start a plugin that was just turned off)
+let refreshing = Promise.resolve();
+function refreshPlugins() { refreshing = refreshing.then(doRefresh, doRefresh); return refreshing; }
+async function doRefresh() {
   plugins = (await json('/api/plugins')).plugins;
   for (const id of [...loaded.keys()]) if (!['ready', 'active'].includes(plugins.find((p) => p.id === id)?.state)) await unload(id);
   model = contributionsOf(plugins);

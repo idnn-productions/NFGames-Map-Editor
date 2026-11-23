@@ -30,6 +30,8 @@
 // project…", a browser of the folders under your home folder. Opening one switches the project for both pages.
 const q = (id) => document.getElementById(id);
 const node = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+// inside the workbench (a classic tool's frame) the workbench's own bar is enough
+if (window.top !== window) q('nfnav').hidden = true;
 const here = location.pathname.startsWith('/viewer') ? 'viewer' : location.pathname.startsWith('/map') ? 'editor' : 'workbench';
 for (const a of document.querySelectorAll('#nfnav a')) a.classList.toggle('here', a.dataset.page === here);
 let at = null, trustFor = null;
