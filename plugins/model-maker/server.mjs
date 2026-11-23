@@ -2,7 +2,7 @@
 // the user's reference images, and what the model step will read: concept.png and views/<view>.png once approved).
 // The rules are in draft.mjs; here they meet the files. The page runs each generation through the image service and
 // tells these routes when a round starts and ends; a round whose tab went away is settled from what is in its folder.
-import { slugOf, newDraft, folderFor, startRound, settleRound, reconcile, pickConcept, pickView, approveConcept, setViews, approveViews, filesToKeep } from './draft.mjs';
+import { slugOf, newDraft, viewPrompt, folderFor, startRound, settleRound, reconcile, pickConcept, pickView, approveConcept, setViews, approveViews, filesToKeep } from './draft.mjs';
 
 const DRAFTS = '.nfgames/drafts', IMAGES = '.nfgames/images', STYLE = `${DRAFTS}/style.txt`;
 const IMAGE = /\.(png|jpe?g|webp)$/i, MAX_REFS = 8;
@@ -20,6 +20,8 @@ export function activate(api) {
     return d;
   };
   const imagesIn = (folder) => { const dir = `${IMAGES}/${folder}`; return f.exists(dir) ? f.list(dir).filter((n) => IMAGE.test(n)).sort().map((n) => `${dir}/${n}`) : []; };
+  /** What the page gets: the draft, and each listed view's prompt as it would be sent (the user's own, or drafted). */
+  const shown = (draft) => ({ draft, prompts: Object.fromEntries(draft.views.list.map((v) => [v, viewPrompt(draft, v)])) });
   /** Writes the draft, and (files: true) what it keeps beside it: concept.png, and views/ only while they are approved. */
   const save = (draft, { files = false } = {}) => {
     f.write(fileOf(draft.slug), `${JSON.stringify(draft, null, 2)}\n`);
@@ -30,7 +32,7 @@ export function activate(api) {
       for (const [view, image] of Object.entries(keep.views)) f.write(`${dir}/views/${view}.png`, f.read(image, null));
     }
     api.events.emit('changed', { slug: draft.slug });
-    return { draft };
+    return shown(draft);
   };
   const style = () => (f.exists(STYLE) ? f.read(STYLE).trim() : '');
   const keepStyle = (text) => { if (typeof text === 'string' && text.trim()) f.write(STYLE, `${text.trim()}\n`); };
@@ -48,7 +50,7 @@ export function activate(api) {
   // a round left pending is settled here, unless the page says the editor is still busy (it asks /api/job: a plugin cannot)
   api.routes.get('/draft', ({ query }) => {
     const draft = read(known(query.slug)), now = reconcile(draft, { imagesIn, busy: query.busy === '1' });
-    return now === draft ? { draft } : save(now);
+    return now === draft ? shown(draft) : save(now);
   });
   api.routes.post('/draft/save', ({ body = {} }) => {
     let draft = read(known(body.slug));

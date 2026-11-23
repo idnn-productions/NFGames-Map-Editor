@@ -25,7 +25,8 @@ button.primary { background: var(--accent); color: #1a1206; border-color: var(--
 textarea { width: 100%; resize: vertical; min-height: 48px; } select { width: 100%; }
 .dim { color: var(--dim); } .bad { color: var(--bad); } .ok { color: var(--ok); }
 h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 14px 0 6px; }
-#filter { width: 100%; margin-bottom: 8px; }
+#filter { width: 100%; margin-bottom: 8px; } #newModel { width: 100%; margin-bottom: 8px; }
+.draft-step { color: var(--dim); font-size: 11px; margin-left: 6px; }
 .model { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model:hover { background: #252a35; } .model.current { background: #33291c; color: var(--accent); }
 .pin { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 8px 0; }
@@ -52,7 +53,7 @@ main.pinning #view { cursor: crosshair; }
 </head>
 <body>
 <header><h1>Model review</h1><span class="grow"></span></header>
-<aside id="left"><input id="filter" placeholder="filter models" autocomplete="off"><div id="models" class="dim">loading…</div></aside>
+<aside id="left"><button id="newModel" class="primary" hidden title="Describe a model, approve a concept image and its views">＋ New model</button><input id="filter" placeholder="filter models" autocomplete="off"><div id="drafts"></div><div id="models" class="dim">loading…</div></aside>
 <main id="main">
   <canvas id="view"></canvas>
   <div id="toolbar" hidden>
@@ -189,8 +190,28 @@ function frame() {
   camera.near = r / 1000; camera.far = r * 1000; camera.updateProjectionMatrix(); controls.update();
 }
 
+// ---- drafts of new models (the New model plugin, when it is on; only in the workbench, where its screen opens as a tab)
+const MAKER = 'nfgames.model-maker';
+let drafts = [], draftFolders = nfTree.store('viewer-drafts');
+const workbench = () => { try { return (embedded && window.top.nfWorkbench) || null; } catch { return null; } };
+async function listDrafts() {
+  const wb = workbench(); if (!wb || !wb.run) return;
+  try {
+    const on = (await api('/api/plugins')).plugins.some((p) => p.id === MAKER && ['ready', 'active'].includes(p.state));
+    $('newModel').hidden = !on; $('newModel').onclick = () => wb.run(`${MAKER}/new-model`);
+    drafts = on ? (await api(`/api/p/${MAKER}/drafts`)).drafts : [];
+  } catch { drafts = []; }
+  const box = $('drafts');
+  if (!drafts.length) { box.replaceChildren(); return; }
+  nfTree.render(box, nfTree.build(drafts.map((d) => ({ ...d, path: `Drafts/${d.slug}` })), { closed: draftFolders.closed }), { onToggle: (path, open) => draftFolders.toggle(path, open),
+    row: (d) => el('button', { className: 'model', title: `A draft of a new model: ${d.status}`, onclick: () => wb.run(`${MAKER}/new-model`, { slug: d.slug, name: d.name }) }, d.name, el('span', { className: 'draft-step', textContent: d.status })) });
+}
+// the list is shown again whenever this tab is (the side panel being lent back resizes the page)
+let draftsTimer = null; addEventListener('resize', () => { clearTimeout(draftsTimer); draftsTimer = setTimeout(listDrafts, 150); });
+
 // ---- models
 async function listModels() {
+  listDrafts();
   if (!info.models) { $('models').textContent = 'No models folder: add models: \'<folder>\' to map-editor.config.mjs.'; return; }
   models = (await api('/api/models')).models;
   try { folders = nfTree.store(`viewer:${(await api('/api/projects')).current.root}`); } catch { /* one list of closed folders for every project */ }

@@ -34,6 +34,7 @@ It runs on your machine only: the server listens on `127.0.0.1` and refuses ever
 - [The map file format](#the-map-file-format)
 - [Using the editor](#using-the-editor)
 - [Model review](#model-review)
+- [New model](#new-model)
 - [Plugins](#plugins)
 - [Save and backups](#save-and-backups)
 - [The fit check](#the-fit-check)
@@ -583,6 +584,37 @@ Then, in a Claude Code session in the game project, say **"watch the review inbo
 `node <editor>/bin/review-watch.mjs --project <game>` with its Monitor tool. That prints `NEW JOB <reviews>/<id>`
 once per waiting job, and each line wakes the session. A Monitor watch lasts at most 30 minutes; the skill
 restarts it. Jobs wait on disk while nobody watches, so nothing is lost.
+
+## New model
+
+**＋ New model**, at the top of the model viewer's side panel (or **New model** in ⌘K), opens a tab with three steps.
+It comes from the built-in **New model** plugin and makes its images through the **Image generation** service
+(Codex, with your ChatGPT login: see [Agents and services](#agents-and-services)). Nothing is generated until you
+press a Generate button.
+
+1. **① Concept.** Give it a name, describe it, and optionally write a style (kept for the project and filled in next
+   time) and add up to 8 reference images from your disk (pick, drop or paste; large ones are shrunk). **Generate**
+   makes 1 to 8 candidates (4 unless you say otherwise). Change the words and generate again as often as you like:
+   earlier rounds stay under a fold. Click the one you want, then **Use this one → Views**.
+2. **② Views.** One image per view, each made from the approved concept: **front, back, left, right** unless you
+   tick others (**three-quarter**, **top**) or untick some. Each view has its own prompt, drafted from your
+   description and editable. **Generate views** makes those that have no images yet, one after another; a view's own
+   **Generate** makes it again. Pick one image per view, then **Approve views**.
+3. **③ Model.** Shows what is kept and where. Generating the model itself comes in a later update.
+
+A draft is one folder in the project, `.nfgames/drafts/<name>/`: `draft.json`, your references, and, once approved,
+`concept.png` and `views/<view>.png` (what the model step will read). Every generated round stays under
+`.nfgames/images/`. Drafts are listed under **Drafts** above the viewer's models, each with its step; click one to
+go on where you left it. If you close the tab or reload while images are being made, the run still finishes and
+its images are there when you open the draft again.
+
+Going back: approving a different concept after views were made asks first, then clears the views you chose (their
+images stay under "earlier rounds"). Generating or picking a view again after **Approve views** takes the draft
+back to step ②, and `views/` is removed until you approve again, so the files never disagree with the concept.
+**Delete draft** removes the draft's folder and leaves the generated rounds.
+
+The editor runs one job at a time: while a map's Apply action or another generation runs, Generate says what is
+running and does nothing else. With no `codex` on the PATH the Generate buttons are off and say why.
 
 ## Plugins
 

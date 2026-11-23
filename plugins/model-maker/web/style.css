@@ -1,0 +1,25 @@
+/* New model: three steps across the top, the step shown below. */
+.mm { max-width: 980px; margin: 0 auto; padding: var(--nf-s4); display: flex; flex-direction: column; gap: var(--nf-s3); }
+.mm-steps { display: flex; align-items: center; gap: var(--nf-s2); }
+.mm-step { font: inherit; background: none; border: 1px solid var(--nf-line); border-radius: 999px; color: var(--nf-dim); padding: 4px 14px; cursor: pointer; }
+.mm-step.on { color: var(--nf-on-accent); background: var(--nf-accent); border-color: var(--nf-accent); font-weight: 600; }
+.mm-step:disabled { opacity: .45; cursor: default; } .mm-steps .line { flex: 0 0 28px; height: 1px; background: var(--nf-line); } .mm-steps .grow { flex: 1; }
+.mm label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--nf-dim); margin: var(--nf-s3) 0 4px; }
+.mm input[type=text], .mm input[type=number], .mm textarea { width: 100%; font: inherit; color: var(--nf-text); background: var(--nf-raised); border: 1px solid var(--nf-line); border-radius: var(--nf-radius); padding: 6px 8px; box-sizing: border-box; }
+.mm textarea { min-height: 64px; resize: vertical; } .mm input[type=number] { width: 64px; }
+.mm-row { display: flex; align-items: center; gap: var(--nf-s3); flex-wrap: wrap; } .mm-row .grow { flex: 1; }
+.mm-btn { font: inherit; color: var(--nf-text); background: var(--nf-raised); border: 1px solid var(--nf-line); border-radius: var(--nf-radius); padding: 5px 12px; cursor: pointer; }
+.mm-btn.primary { background: var(--nf-accent); border-color: var(--nf-accent); color: var(--nf-on-accent); font-weight: 600; } .mm-btn.danger { color: var(--nf-error); }
+.mm-btn:disabled { opacity: .45; cursor: default; }
+.mm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--nf-s3); } .mm-grid.small { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+.mm-pic { position: relative; padding: 0; border: 2px solid var(--nf-line); border-radius: var(--nf-radius); background: var(--nf-raised); cursor: pointer; overflow: hidden; aspect-ratio: 1; }
+.mm-pic img { width: 100%; height: 100%; object-fit: contain; display: block; } .mm-pic.on { border-color: var(--nf-accent); }
+.mm-pic.on::after { content: '✓'; position: absolute; right: 6px; top: 4px; color: var(--nf-on-accent); background: var(--nf-accent); border-radius: 999px; width: 20px; height: 20px; line-height: 20px; text-align: center; font-weight: 700; }
+.mm-pic.still { cursor: default; } .mm-pic .x { position: absolute; right: 4px; top: 4px; background: #000a; color: #fff; border: 0; border-radius: 999px; width: 20px; height: 20px; cursor: pointer; }
+.mm-note { color: var(--nf-dim); } .mm-bad { color: var(--nf-error); } .mm-wait { color: var(--nf-accent); }
+.mm-wait::before { content: ''; display: inline-block; width: 9px; height: 9px; border: 2px solid var(--nf-accent); border-right-color: transparent; border-radius: 50%; margin-right: 6px; vertical-align: -1px; animation: mm-spin .8s linear infinite; }
+@keyframes mm-spin { to { transform: rotate(360deg); } }
+.mm details summary { cursor: pointer; color: var(--nf-dim); margin: var(--nf-s2) 0; }
+.mm-views { display: grid; grid-template-columns: 220px 1fr; gap: var(--nf-s4); align-items: start; } .mm-view { border-top: 1px solid var(--nf-line); padding: var(--nf-s3) 0; }
+.mm-view h3, .mm h2 { margin: 0; font-size: 14px; } .mm-checks { display: flex; gap: var(--nf-s3); flex-wrap: wrap; } .mm-checks label { display: inline; text-transform: none; letter-spacing: 0; font-size: inherit; color: var(--nf-text); margin: 0; }
+.mm-drop { border: 1px dashed var(--nf-line); border-radius: var(--nf-radius); padding: var(--nf-s2); } .mm-drop.over { border-color: var(--nf-accent); }

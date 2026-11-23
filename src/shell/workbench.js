@@ -133,6 +133,8 @@ window.nfWorkbench = {
   /** A page's problems for the Problems tab: [{ kind, text, error? }]; goTo(index) shows one. An empty list clears. */
   setProblems: (source, list, goTo) => problems.set(String(source), list, goTo),
   openView: (view, query) => openView(view, query).catch((e) => toast(e.message, 'error')),
+  /** Runs a workbench command for a page ('nfgames.model-maker/new-model', { slug }). */
+  run: (id, ...args) => commands.execute(String(id), ...args).catch((e) => toast(e.message, 'error')),
 };
 
 // ---- which panels show: the side panel (tools), the inspector and the bottom panel (Jobs, Problems, Output), each

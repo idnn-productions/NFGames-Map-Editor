@@ -20,6 +20,14 @@ Follow-ups for the model viewer and review inbox (design: `docs/superpowers/spec
 - [ ] Optional: a plugin monitor that starts the inbox watch automatically when the skill's plugin is on
       (check the plugin monitor schema first).
 
+## New model
+
+- [ ] **Generate the model** from a draft's `concept.png` and `views/` (step ③ of New model, a disabled button today).
+      Choose the image-to-3D service (a `services` plugin like `codex-image`), where the `.glb` lands in the models
+      folder, and how a draft is marked done.
+- [ ] A side panel and an Inspector for the New model tab (they say "nothing to show here" today): the drafts list
+      on the left, the picked image large on the right.
+
 ## Viewer
 
 - [ ] `.gltf` files with separate `.bin` and images.

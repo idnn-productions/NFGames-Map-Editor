@@ -131,6 +131,8 @@ describe('the model maker', () => {
   it('the views a draft lists can change; the prompts the user wrote are kept', async () => {
     const { draft } = await ok('/draft/save', { slug: 'x', description: 'a crate', views: { list: ['front', 'top'], prompts: { top: 'from above' } } });
     assert.equal(draft.description, 'a crate'); assert.deepEqual(draft.views.list, ['front', 'top']); assert.equal(draft.views.prompts.top, 'from above');
+    const seen = (await get('/draft?slug=x')).body.prompts;   // what would be sent for each view: the user's words, or drafted from the description
+    assert.deepEqual(Object.keys(seen), ['front', 'top']); assert.equal(seen.top, 'from above'); assert.match(seen.front, /a crate[\s\S]*front view/);
     assert.equal((await post('/draft/save', { slug: 'x', views: { list: ['sideways'] } })).status, 400);
     assert.equal((await ok('/draft/save', { slug: 'x', style: 'flat colours' })).draft.style, 'flat colours'); assert.equal((await get('/drafts')).body.style, 'flat colours');
   });
