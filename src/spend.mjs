@@ -20,7 +20,7 @@ export function createSpend({ stateDir, threshold = 0.5, now = () => new Date() 
       write(j);
     },
     /** { ok } or { confirm: why the user must say yes }. */
-    check(key, estimate = 0) {
+    check(key, estimate) {
       // an estimate that is missing or not a number is an unknown cost, not a free one
       const known = typeof estimate === 'number' && Number.isFinite(estimate) && estimate >= 0, est = known ? estimate : 0;
       const b = api.budget(key), spent = api.spent(key);

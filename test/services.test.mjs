@@ -56,24 +56,38 @@ describe('services', () => {
     assert.equal((await post('/api/services/call', { key: 'test.words/words', action: 'poem', confirmed: true })).body.result.text, 'roses');
     assert.equal((await ask('/api/services')).services.find((s) => s.key === 'test.words/words').spent, 0.76);
   });
-  it('an agent\'s request is answered; one that costs waits for the user', async () => {
-    const job = join(copy.root, '.review', '2026-01-01T000000-x', 'requests'); mkdirSync(job, { recursive: true });
-    writeFileSync(join(job, 'one.json'), JSON.stringify({ service: 'test.words/words', action: 'shout', input: { text: 'agent' } }));
-    const a = await until(() => existsSync(join(job, 'one.answer.json')) && JSON.parse(readFileSync(join(job, 'one.answer.json'), 'utf8')));
+  it('an agent\'s request needs the session token and a connected agent; the first use of a service asks; one that costs waits', async () => {
+    const review = join(copy.root, '.review'), job = join(review, '2026-01-01T000000-x', 'requests'); mkdirSync(job, { recursive: true });
+    const token = JSON.parse(readFileSync(join(review, '.session.json'), 'utf8')).token;
+    const answerOf = (n) => existsSync(join(job, `${n}.answer.json`)) && JSON.parse(readFileSync(join(job, `${n}.answer.json`), 'utf8'));
+    writeFileSync(join(job, 'early.json'), JSON.stringify({ token, service: 'test.words/words', action: 'shout', input: { text: 'x' } }));
+    await new Promise((r) => setTimeout(r, 400)); assert.equal(answerOf('early'), false);                    // no agent connected: nothing runs
+    writeFileSync(join(review, '.agent.json'), JSON.stringify({ agent: 'Claude Code', pid: process.pid, at: Date.now() }));
+    writeFileSync(join(job, 'forged.json'), JSON.stringify({ token: 'guess', service: 'test.words/words', action: 'shout', input: {} }));
+    assert.match((await until(() => answerOf('forged'))).error, /session token/);
+    const allow = await until(async () => (await ask('/api/services/requests')).requests.find((r) => r.kind === 'allow'));
+    assert.match(allow.reason, /Allow it for this session/);
+    await post('/api/services/requests/answer', { id: allow.id, approve: true });
+    assert.deepEqual(await until(() => { const a = answerOf('early'); return a && a.ok && a; }), { ok: true, result: { text: 'X!', keyLength: 6 } });
+    writeFileSync(join(job, 'one.json'), JSON.stringify({ token, service: 'test.words/words', action: 'shout', input: { text: 'agent' } }));
+    const a = await until(() => { const x = answerOf('one'); return x && x.ok && x; });
     assert.deepEqual(a, { ok: true, result: { text: 'AGENT!', keyLength: 6 } });
-    writeFileSync(join(job, 'two.json'), JSON.stringify({ service: 'test.words/words', action: 'poem' }));
-    const waiting = await until(async () => (await ask('/api/services/requests')).requests[0]);
+    writeFileSync(join(job, 'two.json'), JSON.stringify({ token, service: 'test.words/words', action: 'poem' }));
+    const waiting = await until(async () => (await ask('/api/services/requests')).requests.find((r) => r.kind === 'spend'));
     assert.match(waiting.reason, /about \$0\.60/); assert.match(JSON.parse(readFileSync(join(job, 'two.answer.json'), 'utf8')).waiting, /waiting for the user/);
     assert.equal((await post('/api/services/requests/answer', { id: 'not-a-request', approve: true })).status, 404);
     await post('/api/services/requests/answer', { id: waiting.id, approve: true });
     assert.equal((await until(() => { const j = JSON.parse(readFileSync(join(job, 'two.answer.json'), 'utf8')); return j.ok && j; })).result.text, 'roses');
   });
   it('the agent\'s status comes from the watcher\'s heartbeat', async () => {
-    assert.equal((await ask('/api/agent')).connected, false);
     writeFileSync(join(copy.root, '.review', '.agent.json'), JSON.stringify({ agent: 'Claude Code', pid: process.pid, at: Date.now() }));
     assert.deepEqual(await ask('/api/agent'), { connected: true, agent: 'Claude Code' });
     writeFileSync(join(copy.root, '.review', '.agent.json'), JSON.stringify({ agent: 'Claude Code', pid: process.pid, at: Date.now() - 120000 }));
     assert.equal((await ask('/api/agent')).connected, false);
+  });
+  it('image generation through Codex: references only from inside the project', async () => {
+    for (const bad of ['/etc/passwd.png', '../outside.png', 'maps/plaza/layout.json'])
+      assert.match((await post('/api/services/call', { key: 'nfgames.codex-image/image', action: 'generate', input: { prompt: 'x', references: [bad] } })).body.error, /references/, bad);
   });
   it('image generation through Codex', async () => {
     const r = await post('/api/services/call', { key: 'nfgames.codex-image/image', action: 'generate', input: { prompt: 'a weathered hull plate' } });

@@ -42,12 +42,16 @@ Do not call image, voice or 3D APIs yourself: ask the editor, which holds the ke
 
 1. See what exists: `curl -s http://127.0.0.1:<port>/api/services` (each service's `key`, its `actions`, `connected`).
    If one you need is not connected, tell the user to connect it on the **Services** screen.
-2. Write a request into the job folder: `requests/<name>.json` with
-   `{"service": "<key>", "action": "<action>", "input": { … }}`. For images: service `nfgames.codex-image/image`,
-   action `generate`, input `{"prompt": "…", "count": 2, "references": ["<project-relative image>"]}`.
-3. Wait for `requests/<name>.answer.json` to have `"ok"`: `{"ok": true, "result": …}` (for images,
+2. Read this session's token from `<reviews>/.session.json` (`.review/.session.json` by default; it changes each time
+   the editor starts). Requests are only taken while your watcher is running (the editor checks its heartbeat).
+3. Write a request into the job folder: `requests/<name>.json` with
+   `{"token": "<token>", "service": "<key>", "action": "<action>", "input": { … }}`. For images: service
+   `nfgames.codex-image/image`, action `generate`, input
+   `{"prompt": "…", "count": 2, "references": ["<project-relative image file>"]}` (references must be image files
+   inside the project).
+4. Wait for `requests/<name>.answer.json` to have `"ok"`: `{"ok": true, "result": …}` (for images,
    `result.images` are project-relative paths) or `{"ok": false, "error": "…"}`. While it says `"waiting"`, the user is
-   deciding on a cost in the editor; keep waiting.
+   deciding in the editor (the first time you use a service in a session, and whenever it costs); keep waiting.
 
 ## Rules
 

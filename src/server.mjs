@@ -98,7 +98,8 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
   const makePlugins = () => createPluginManager({ ...dirs, stateDir, project, jobs, events, providers, log: (...a) => console.error('plugins:', ...a) });
   let plugins = makePlugins();
   const services = createServices({ listPlugins: () => plugins.list(), activate: (id) => plugins.activate(id), providers, vault, spend, events });
-  let requests = createRequestLoop({ reviewsDir: project.reviewsDir, services, events, interval: requestInterval });
+  const requestLoop = () => createRequestLoop({ reviewsDir: project.reviewsDir, services, events, interval: requestInterval, agentConnected: () => agentStatus(project.reviewsDir).connected });
+  let requests = requestLoop();
   const ready = plugins.fire('onStartup', 'onProject');
   project.ctx.dryRun = dryRun;
   const fallback = () => startMap || project.defaultMap || project.listMaps()[0] || null;
@@ -116,7 +117,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
     await plugins.close();
     project = next; jobs = createJobs(project, { dryRun }); project.ctx.dryRun = dryRun; startMap = null;
     plugins = makePlugins(); await plugins.fire('onStartup', 'onProject'); events.emit('project/changed', { root: dir });
-    requests.stop(); requests = createRequestLoop({ reviewsDir: project.reviewsDir, services, events, interval: requestInterval });
+    requests.stop(); requests = requestLoop();
     addRecent(stateDir, dir);
     return { ok: true, root: dir, maps: project.listMaps() };
   }
