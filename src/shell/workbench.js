@@ -323,12 +323,15 @@ onEvent('plugins/changed', () => refreshPlugins());
 onEvent('plugins/failed', ({ id, message }) => { log(`${id}: ${message}`); toast(`${id} was turned off: ${message}`, 'error'); unload(id); refreshPlugins(); });
 onEvent('jobs/started', ({ label }) => { $('jobInd').textContent = `● ${label}`; if (bottomTab === 'core/jobs') renderBottom(); });
 onEvent('jobs/done', ({ label, state }) => { $('jobInd').textContent = ''; toast(`${label}: ${state}`, state === 'done' ? '' : 'error'); if (bottomTab === 'core/jobs') renderBottom(); });
-onEvent('project/changed', () => location.reload());
+// reload only when the editor now has another project than this page shows (a stale event must never loop)
+let shownRoot = null;
+onEvent('project/changed', ({ root }) => { if (root && root !== shownRoot) location.reload(); });
 onEvent('services/confirm', confirmAgentRequest);
 onEvent('services/started', ({ title, by }) => log(`${by === 'agent' ? 'agent' : 'you'}: ${title}…`));
 onEvent('services/done', ({ title, ok, error }) => { log(`${title}: ${ok ? 'done' : `failed: ${error}`}`); if (!ok) toast(`${title} failed: ${error}`, 'error'); });
 
 // ---- start
+shownRoot = (await json('/api/projects').catch(() => ({ current: {} }))).current.root || null;
 await refreshPlugins();
 refreshAgent(); setInterval(refreshAgent, 15000);
 for (const r of (await json('/api/services/requests').catch(() => ({ requests: [] }))).requests) confirmAgentRequest(r);

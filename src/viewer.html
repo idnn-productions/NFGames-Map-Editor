@@ -10,6 +10,8 @@
 * { box-sizing: border-box; } [hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
 body { display: grid; grid-template-columns: 260px 1fr 340px; grid-template-rows: 40px 1fr; height: 100vh; }
+/* inside the workbench (a classic tool's frame) the workbench's top bar is the only one */
+body.framed { grid-template-rows: 1fr; } body.framed > header { display: none; }
 header { grid-column: 1 / 4; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 header h1 { font-size: 14px; margin: 0; font-weight: 600; } header .grow { flex: 1; } header a { color: var(--dim); }
 aside { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px; }
@@ -75,6 +77,7 @@ main.pinning #view { cursor: crosshair; }
 // The model viewer: a game's .glb files, pins with notes and reference images, and Send, which writes a review job
 // for a Claude Code session (see the README, "Model review"). three.js is installed on demand from the Install button.
 const $ = (id) => document.getElementById(id);
+if (window.top !== window) document.body.classList.add('framed');
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); for (const k of kids) e.append(k); return e; };
 const api = async (path, options) => { const r = await fetch(path, options), j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || `${r.status} ${r.statusText}`); return j; };
 const post = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -357,6 +360,7 @@ for (const w of info.workflows) $('workflow').append(el('option', { value: w.id,
 if (info.three.installed) await startThree(); else showInstall();
 await listModels();
 const want = new URLSearchParams(location.search).get('model'), first = want && models.find((x) => x.path === want);
+if (want && !first) say(`${want} is not in this project's models (${info.models || 'none'}/): pick one on the left.`, 'bad');
 if (first && T) await openModel(first);
 pollJobs();
 </script>

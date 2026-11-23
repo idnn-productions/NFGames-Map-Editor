@@ -1,5 +1,6 @@
 // One live stream from the host to the page (Server-Sent Events): jobs, plugin state, reviews. No dependencies.
-// A page that reconnects sends Last-Event-ID and gets the events it missed (the last `keep`).
+// A page that reconnects sends Last-Event-ID and gets the events it missed (the last `keep`). A new connection gets
+// only what happens from now on: replaying the past to it re-ran old events (a project/changed reloaded pages forever).
 export function createEvents({ keep = 200 } = {}) {
   const clients = new Set(), recent = [];
   let id = 0;
@@ -13,8 +14,8 @@ export function createEvents({ keep = 200 } = {}) {
   }
   function handle(req, res) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Content-Type-Options': 'nosniff' });
-    const last = Number(req.headers['last-event-id']) || 0;
-    for (const ev of recent) if (ev.id > last) res.write(frame(ev));
+    const header = req.headers['last-event-id'];
+    if (header !== undefined) { const last = Number(header) || 0; for (const ev of recent) if (ev.id > last) res.write(frame(ev)); }
     res.write(': connected\n\n');
     clients.add(res);
     const ping = setInterval(() => res.write(': ping\n\n'), 25000);

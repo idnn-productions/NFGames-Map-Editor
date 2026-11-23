@@ -17,6 +17,17 @@ describe('events', () => {
     assert.match(text, /id: 1\nevent: jobs\/done\ndata: \{"id":1\}/); assert.match(text, /event: plugins\/changed/);
     await reader.cancel(); events.close(); await new Promise((d) => server.close(d));
   });
+  it('a new connection gets only what happens from now on, never the past (a replayed project/changed reloaded pages forever)', async () => {
+    const events = createEvents(), server = createServer((req, res) => events.handle(req, res));
+    await new Promise((d) => server.listen(0, '127.0.0.1', d));
+    events.emit('project/changed', { root: '/old' });
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/`);
+    const reader = res.body.getReader(); let text = '';
+    events.emit('jobs/started', { id: 2 });
+    while (!/jobs\/started/.test(text)) text += new TextDecoder().decode((await reader.read()).value);
+    assert.doesNotMatch(text, /project\/changed/); assert.match(text, /event: jobs\/started/);
+    await reader.cancel(); events.close(); await new Promise((d) => server.close(d));
+  });
 });
 
 describe('plugin jobs', () => {
