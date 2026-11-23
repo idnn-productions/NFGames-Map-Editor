@@ -693,8 +693,10 @@ The editor reads and writes files on your machine, so it accepts requests only f
   install whose download matched the pinned SHA-512. Models are read only from the real `models` folder (symlinks
   out of it refused), and only `.glb` files. Jobs are written only to server-named folders and files under
   `reviews`; images are checked by their bytes. `POST /api/review` takes up to 24 MB; everything else keeps 2 MB.
-- **Plugins.** A plugin is trusted code: the user is asked once per version (built-in and project plugins are trusted
-  with the editor and the project), shown what it declares it touches. Its routes (`/api/p/<id>/…`) get the same Host,
+- **Plugins.** A plugin is trusted code: the user is asked once, and again when it changes (a folder plugin's files, a
+  package's pinned bytes), shown what it declares it touches. Built-in plugins are trusted; so are the folder plugins of
+  the project the editor is started on, as they are at start. Installed packages are cached by their source and checked
+  against the pin before they load. Its routes (`/api/p/<id>/…`) get the same Host,
   Origin and JSON checks, its files are served only from its own folder (`/p/<id>/…`, no hidden files), and its
   routes, settings and storage are namespaced by its id. `touches` is enforced through the plugin API (files and
   programs), not against code that reaches around it. A plugin that fails is turned off alone.

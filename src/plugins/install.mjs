@@ -4,26 +4,31 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, normalize } from 'node:path';
+import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { integrityOf, tarEntries } from '../vendor.mjs';
 import { readManifest } from './manifest.mjs';
-import { PROJECT_FILE, packageDir, readProjectPlugins } from './sources.mjs';
+import { PROJECT_FILE, packageDir, readProjectPlugins, sourceMatches } from './sources.mjs';
 
 const REGISTRY = 'https://registry.npmjs.org';
 
 /** "@scope/name@1.2.3" or "name@1.2.3" or "name" (the latest) → { name, version }. */
 export function parseNpmSpec(spec) { const at = spec.lastIndexOf('@'); return at > 0 ? { name: spec.slice(0, at), version: spec.slice(at + 1) } : { name: spec, version: 'latest' }; }
 
-function settle(tmp, packagesDir, spec) {
-  const r = readManifest(tmp);
-  if (!r.manifest) { rmSync(tmp, { recursive: true, force: true }); throw new Error(`not a plugin: ${r.errors.join('; ')}`); }
-  const dir = packageDir(packagesDir, r.manifest.id, spec);
-  rmSync(dir, { recursive: true, force: true }); mkdirSync(dirname(dir), { recursive: true }); renameSync(tmp, dir);
+/** Moves a checked download into the cache: a valid plugin, the id the project expects, a folder inside the cache
+ *  named by its source, and a record of that source beside it. Anything else installs nothing. */
+function settle(tmp, packagesDir, spec, expectId = null) {
+  const r = readManifest(tmp), refuse = (why) => { rmSync(tmp, { recursive: true, force: true }); throw new Error(why); };
+  if (!r.manifest || r.errors.length) refuse(`not a valid plugin: ${r.errors.join('; ')}`);
+  if (expectId && r.manifest.id !== expectId) refuse(`nfgames.json pins "${expectId}" but this package is "${r.manifest.id}"; nothing installed`);
+  const dir = packageDir(packagesDir, r.manifest.id, spec), rel = relative(packagesDir, dir);
+  if (!rel || rel.startsWith('..') || isAbsolute(rel) || rel.includes(sep)) refuse('the package would land outside the plugin cache; nothing installed');
+  writeFileSync(join(tmp, '.nfgames-source.json'), `${JSON.stringify(spec)}\n`);
+  rmSync(dir, { recursive: true, force: true }); mkdirSync(packagesDir, { recursive: true }); renameSync(tmp, dir);
   return { id: r.manifest.id, dir, manifest: r.manifest, spec };
 }
 
-export async function installNpm(packagesDir, { npm, integrity = null }, { fetchImpl = fetch } = {}) {
+export async function installNpm(packagesDir, { npm, integrity = null }, { fetchImpl = fetch, expectId = null } = {}) {
   const { name, version } = parseNpmSpec(npm);
   const res = await fetchImpl(`${REGISTRY}/${name.replace('/', '%2F')}/${version}`);
   const meta = res.ok ? await res.json() : null;
@@ -42,10 +47,10 @@ export async function installNpm(packagesDir, { npm, integrity = null }, { fetch
   }
   const tmp = mkdtempSync(join(tmpdir(), 'nfgames-plugin-'));
   for (const [rel, data] of files) { const to = join(tmp, rel); mkdirSync(dirname(to), { recursive: true }); writeFileSync(to, data); }
-  return settle(tmp, packagesDir, { npm: `${name}@${meta.version}`, integrity: want });
+  return settle(tmp, packagesDir, { npm: `${name}@${meta.version}`, integrity: want }, expectId);
 }
 
-export function installGit(packagesDir, { git, commit = null }, { gitBin = 'git' } = {}) {
+export function installGit(packagesDir, { git, commit = null }, { gitBin = 'git', expectId = null } = {}) {
   if (typeof git !== 'string' || !git || git.startsWith('-')) throw new Error(`not a repository address: ${git}`);
   const tmp = mkdtempSync(join(tmpdir(), 'nfgames-plugin-'));
   const run = (args, cwd = tmp) => execFileSync(gitBin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
@@ -54,7 +59,7 @@ export function installGit(packagesDir, { git, commit = null }, { gitBin = 'git'
     if (commit) run(['checkout', '--quiet', commit]);
     const sha = run(['rev-parse', 'HEAD']);
     rmSync(join(tmp, '.git'), { recursive: true, force: true });
-    return settle(tmp, packagesDir, { git, commit: sha });
+    return settle(tmp, packagesDir, { git, commit: sha }, expectId);
   } catch (e) { rmSync(tmp, { recursive: true, force: true }); throw new Error(`git: ${(e.stderr && String(e.stderr).trim()) || e.message}`); }
 }
 
@@ -68,8 +73,10 @@ export function unpin(root, id) { const j = readProject(root); if (j.plugins) de
 export async function installMissing(root, packagesDir, opts = {}) {
   const done = [];
   for (const [id, spec] of Object.entries(readProjectPlugins(root))) {
-    if (!spec || typeof spec !== 'object' || existsSync(packageDir(packagesDir, id, spec))) continue;
-    if (spec.npm) await installNpm(packagesDir, spec, opts); else if (spec.git) installGit(packagesDir, spec, opts); else continue;
+    if (!spec || typeof spec !== 'object' || !(spec.npm || spec.git)) continue;
+    const dir = packageDir(packagesDir, id, spec);   // throws on an id that is not a plugin id
+    if (existsSync(dir) && sourceMatches(dir, spec)) continue;
+    if (spec.npm) await installNpm(packagesDir, spec, { ...opts, expectId: id }); else installGit(packagesDir, spec, { ...opts, expectId: id });
     done.push(id);
   }
   return done;

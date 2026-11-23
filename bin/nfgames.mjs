@@ -33,7 +33,7 @@ try {
   } else if (verb === 'update' && arg) {
     const old = readProjectPlugins(root)[arg];
     if (!old || typeof old !== 'object') throw new Error(`${arg} is not an npm or git plugin of this project`);
-    const got = old.npm ? await installNpm(packagesDir, { npm: old.npm.slice(0, old.npm.lastIndexOf('@')) }) : installGit(packagesDir, { git: old.git });
+    const got = old.npm ? await installNpm(packagesDir, { npm: old.npm.slice(0, old.npm.lastIndexOf('@')) }, { expectId: arg }) : installGit(packagesDir, { git: old.git }, { expectId: arg });
     pin(root, arg, got.spec);
     console.log(`${arg}: ${old.npm || old.commit.slice(0, 12)} → ${got.spec.npm || got.spec.commit.slice(0, 12)}`);
   } else if (verb === 'remove' && arg) { unpin(root, arg); console.log(`removed ${arg} from nfgames.json`); }

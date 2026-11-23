@@ -30,7 +30,7 @@ describe('installing plugins', () => {
     const tgz = makeTgz({ 'package/plugin.json': manifest('acme.terrain', '2.1.0'), 'package/server.mjs': 'export function activate() {}' });
     const pkgs = { '@acme/terrain@2.1.0': { version: '2.1.0', tgz, integrity: integrityOf(tgz) } };
     const got = await installNpm(packages, { npm: '@acme/terrain@2.1.0' }, { fetchImpl: fakeRegistry(pkgs) });
-    assert.equal(got.id, 'acme.terrain'); assert.ok(existsSync(join(packages, 'acme.terrain@2.1.0', 'server.mjs')));
+    assert.equal(got.id, 'acme.terrain'); assert.ok(existsSync(join(got.dir, 'server.mjs'))); assert.match(got.dir, /acme\.terrain@2\.1\.0-[0-9a-f]{10}$/);
     assert.deepEqual(got.spec, { npm: '@acme/terrain@2.1.0', integrity: integrityOf(tgz) });
     await assert.rejects(installNpm(packages, { npm: '@acme/terrain@2.1.0', integrity: 'sha512-AAAA' }, { fetchImpl: fakeRegistry(pkgs) }), /differs from the one pinned/);
     const lying = { '@acme/terrain@2.1.0': { ...pkgs['@acme/terrain@2.1.0'], integrity: 'sha512-AAAA' } };
@@ -38,6 +38,10 @@ describe('installing plugins', () => {
     const evil = makeTgz({ 'package/plugin.json': manifest('acme.evil', '1.0.0'), 'package/../../escaped.txt': 'x' });
     await assert.rejects(installNpm(join(top, 'p3'), { npm: 'evil@1.0.0' }, { fetchImpl: fakeRegistry({ 'evil@1.0.0': { version: '1.0.0', tgz: evil, integrity: integrityOf(evil) } }) }), /outside the package/);
     assert.ok(!existsSync(join(top, 'escaped.txt')));
+    const sneaky = makeTgz({ 'package/plugin.json': manifest('../../outside', '1.0.0') });
+    await assert.rejects(installNpm(join(top, 'p4'), { npm: 'sneaky@1.0.0' }, { fetchImpl: fakeRegistry({ 'sneaky@1.0.0': { version: '1.0.0', tgz: sneaky, integrity: integrityOf(sneaky) } }) }), /not a valid plugin/);
+    const other = makeTgz({ 'package/plugin.json': manifest('acme.other', '1.0.0') });
+    await assert.rejects(installNpm(join(top, 'p5'), { npm: 'other@1.0.0' }, { fetchImpl: fakeRegistry({ 'other@1.0.0': { version: '1.0.0', tgz: other, integrity: integrityOf(other) } }), expectId: 'acme.terrain' }), /pins "acme.terrain" but this package is "acme.other"/);
   });
   it('git: a local repository at a fixed commit, without its .git', () => {
     const repo = join(top, 'repo'); mkdirSync(repo);

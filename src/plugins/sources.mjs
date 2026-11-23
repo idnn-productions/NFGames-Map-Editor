@@ -1,9 +1,10 @@
 // Where plugins come from: built in (<editor>/plugins), the user's (~/.nfgames-editor/plugins), and the project's
 // nfgames.json, which names its own folders, built-ins, and npm / git packages installed in the shared cache. The same
 // id in several places: the project's (or a package it names) wins, then the user's, then the built-in.
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { readManifest } from './manifest.mjs';
+import { ID, readManifest } from './manifest.mjs';
 
 export const PROJECT_FILE = 'nfgames.json';
 const RANK = { builtin: 0, user: 1, package: 2, project: 2 };
@@ -16,8 +17,18 @@ export function readProjectPlugins(root) {
   return j && j.plugins && typeof j.plugins === 'object' && !Array.isArray(j.plugins) ? j.plugins : {};
 }
 
-/** An installed package's folder in the shared cache: <packagesDir>/<id>@<version, or the commit's first 12>. */
-export const packageDir = (packagesDir, id, spec) => join(packagesDir, `${id}@${spec.npm ? spec.npm.slice(spec.npm.lastIndexOf('@') + 1) : String(spec.commit).slice(0, 12)}`);
+const short = (s) => createHash('sha256').update(String(s)).digest('hex').slice(0, 10);
+/** An installed package's folder in the shared cache, named by where its bytes came from, so two sources that claim
+ *  the same id and version never share a folder: <id>@<version>-<integrity hash> or <id>@<commit>-<repository hash>. */
+export function packageDir(packagesDir, id, spec) {
+  if (typeof id !== 'string' || !ID.test(id)) throw new Error(`not a plugin id: ${JSON.stringify(id)}`);
+  const tag = spec.npm ? `${spec.npm.slice(spec.npm.lastIndexOf('@') + 1).replace(/[^A-Za-z0-9.+-]/g, '_')}-${short(spec.integrity)}` : `${String(spec.commit).slice(0, 12).replace(/[^a-f0-9]/g, '_')}-${short(spec.git)}`;
+  return join(packagesDir, `${id}@${tag}`);
+}
+/** Whether an installed folder came from exactly this pinned source (the installer writes .nfgames-source.json). */
+export function sourceMatches(dir, spec) {
+  try { const s = JSON.parse(readFileSync(join(dir, '.nfgames-source.json'), 'utf8')); return spec.npm ? s.npm === spec.npm && s.integrity === spec.integrity : s.git === spec.git && s.commit === spec.commit; } catch { return false; }
+}
 
 const subdirs = (dir) => (existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => join(dir, e.name)) : []);
 const broken = (id, dir, source, error, extra = {}) => ({ id, dir, source, manifest: null, errors: [error], compatible: false, ...extra });
@@ -44,7 +55,9 @@ export function discoverPlugins({ builtinDir, userDir, packagesDir, root }) {
       add(dir, 'project', id); continue;
     }
     if (spec && (spec.npm || spec.git)) {
-      const dir = packageDir(packagesDir, id, spec);
+      let dir;
+      try { dir = packageDir(packagesDir, id, spec); } catch (e) { found.set(id, broken(id, null, 'package', e.message)); continue; }
+      if (existsSync(dir) && !sourceMatches(dir, spec)) { found.set(id, broken(id, dir, 'package', 'the installed copy did not come from the source nfgames.json pins: run `nfgames plugin install`', { spec, missing: true })); continue; }
       if (!existsSync(dir)) { found.set(id, broken(id, dir, 'package', 'not installed yet: run `nfgames plugin install`', { spec, missing: true })); continue; }
       add(dir, 'package', id, { spec }); continue;
     }

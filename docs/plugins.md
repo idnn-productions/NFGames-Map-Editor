@@ -82,8 +82,8 @@ the editor carries on. Its own files are served at `/p/<id>/<path>` (no hidden f
 |---|---|---|
 | built in | `NFGames-Map-Editor/plugins/` | yes |
 | user | `~/.nfgames-editor/plugins/<folder>/` | asked once, and again when its files change |
-| project | a folder named in the project's `nfgames.json` | yes, with the project |
-| npm / git | named in `nfgames.json`, installed in `~/.nfgames-editor/packages/` | asked once per version |
+| project | a folder named in the project's `nfgames.json` | asked once, and again when its files change (those of the project you start the editor on are trusted at start) |
+| npm / git | named in `nfgames.json`, installed in `~/.nfgames-editor/packages/` | asked once for its exact pinned bytes (integrity, or commit) |
 
 ```jsonc
 // <project>/nfgames.json

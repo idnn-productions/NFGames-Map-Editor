@@ -9,6 +9,8 @@
 import { CONFIG_NAME, loadProject } from '../src/project.mjs';
 import { createEditor, HOST } from '../src/server.mjs';
 import { HOME, addRecent, trustConfig } from '../src/home.mjs';
+import { discoverPlugins } from '../src/plugins/sources.mjs';
+import { trustPlugin } from '../src/plugins/trust.mjs';
 import { join } from 'node:path';
 
 const USAGE = 'usage: nfgames-map-editor [map] [--project <dir>] [--config <file>] [--port <n>] [--dry-run]';
@@ -32,6 +34,8 @@ if (wanted && !project.knownMap(wanted)) {
 // the project it starts on is trusted (its config has run already) and goes to the recent list
 // (only the config file that actually ran: not the project's own when --config named another)
 try { const state = join(HOME, '.nfgames-editor'); if (project.configFile && project.configFile === join(project.root, CONFIG_NAME)) trustConfig(state, project.root); addRecent(state, project.root); } catch { /* not essential */ }
+// so are its own folder plugins as they are now (you chose to start the editor on it); other projects' plugins are asked about
+try { const state = join(HOME, '.nfgames-editor'); for (const p of discoverPlugins({ builtinDir: null, userDir: null, packagesDir: join(state, 'packages'), root: project.root })) if (p.source === 'project' && p.manifest && !p.errors.length) trustPlugin(state, p); } catch { /* not essential */ }
 const server = createEditor(project, { port, defaultMap: wanted, dryRun });
 server.on('error', (e) => {
   console.error(e.code === 'EADDRINUSE' ? `map editor: port ${port} is in use (another editor?). Start this one with --port ${port + 1}.` : `map editor: ${e.message}`);
