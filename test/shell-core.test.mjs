@@ -10,6 +10,7 @@ import { createDocuments } from '../src/shell/core/documents.js';
 import { contributionsOf } from '../src/shell/core/contributions.js';
 import { lentFor } from '../src/shell/core/lent.js';
 import { createProblems } from '../src/shell/core/problems.js';
+import { DEFAULTS, clampWidths, readLayout, writeLayout } from '../src/shell/core/layout.js';
 
 const ev = (key, mods = {}) => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
 
@@ -96,5 +97,31 @@ describe('problems, from plugins and from the shown page', () => {
   });
   it('a list that is not one is no problems', () => {
     const p = createProblems(); p.set('map', null); assert.equal(p.count(), 0);
+  });
+});
+
+describe('the workbench\'s layout', () => {
+  it('widths are kept as set when they fit', () => {
+    assert.deepEqual(clampWidths({ side: 260, inspector: 280 }, 1440), { side: 260, inspector: 280 });
+  });
+  it('a panel is at least 200 px, and the documents keep 320', () => {
+    assert.deepEqual(clampWidths({ side: 100, inspector: 900 }, 1440), { side: 200, inspector: 874 });
+    const w = clampWidths({ side: 500, inspector: 500 }, 1024);
+    assert.ok(w.side >= 200 && w.inspector >= 200 && 1024 - 46 - w.side - w.inspector >= 320, JSON.stringify(w));
+  });
+  it('a window too narrow for both panels gives up the Inspector', () => {
+    assert.deepEqual(clampWidths({ side: 260, inspector: 280 }, 700), { side: 200, inspector: 0 });
+  });
+  it('numbers that are not numbers fall back to the defaults', () => {
+    assert.deepEqual(clampWidths({ side: 'x', inspector: undefined }, 1440), { side: DEFAULTS.side, inspector: DEFAULTS.inspector });
+  });
+  it('the bottom panel rests as a strip unless it was opened; what was kept before is read', () => {
+    assert.deepEqual(readLayout('not json'), DEFAULTS); assert.deepEqual(readLayout(null), DEFAULTS);
+    assert.deepEqual(DEFAULTS.hidden, ['bottom']);
+    assert.deepEqual(readLayout('["bottom"]').hidden, ['bottom']);
+    assert.deepEqual(readLayout('["side"]').hidden.sort(), ['bottom', 'side']);   // the old list of hidden panels: the bottom was open by default then
+    const kept = readLayout(writeLayout({ hidden: ['inspector'], side: 300, inspector: 400 }));
+    assert.deepEqual(kept, { hidden: ['inspector'], side: 300, inspector: 400 });
+    assert.deepEqual(readLayout('{"hidden":["nonsense","side"],"side":"wide"}'), { hidden: ['side'], side: 260, inspector: 280 });
   });
 });

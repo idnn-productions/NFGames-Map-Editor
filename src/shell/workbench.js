@@ -9,6 +9,7 @@ import { createDocuments } from './core/documents.js';
 import { contributionsOf } from './core/contributions.js';
 import { lentFor } from './core/lent.js';
 import { createProblems } from './core/problems.js';
+import { MIN, RAIL, ROOM, clampWidths, readLayout, writeLayout } from './core/layout.js';
 import { h, toast, dialog, confirmDialog } from './ui.js';
 
 const $ = (id) => document.getElementById(id);
@@ -17,7 +18,7 @@ const json = async (url, options) => { const r = await fetch(url, options), j = 
 const post = (url, body = {}) => json(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 // ---- state
-let plugins = [], model = contributionsOf([]), activeTool = null, bottomTab = 'core/jobs';
+let plugins = [], model = contributionsOf([]), activeTool = null, bottomTab = 'core/jobs', jobsRunning = false;
 const commands = createCommands(), selection = createSelection(), documents = createDocuments();
 const tools = createRegistry(), editors = createRegistry(), panels = createRegistry(), inspectors = createRegistry(), statusItems = createRegistry();
 const problems = createProblems(), output = [], listeners = new Map(), loaded = new Map(), declared = [];
@@ -141,25 +142,47 @@ const PANELS = [
   { key: 'bottom', title: 'Jobs, Problems and Output', cmd: 'core/toggle-bottom', icon: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M1.5 9.5h13"/>' },
   { key: 'inspector', title: 'Inspector', cmd: 'core/toggle-inspector', icon: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10.5 2.5v11"/>' },
 ];
-const LAYOUT_KEY = 'nfgames.workbench.hidden';
-function togglePanel(key, hide = !$('wb').classList.contains(`no-${key}`)) {
-  $('wb').classList.toggle(`no-${key}`, hide);
-  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(PANELS.map((p) => p.key).filter((k) => $('wb').classList.contains(`no-${k}`)))); } catch { /* not kept: fine */ }
-  renderLayout();
+const LAYOUT_KEY = 'nfgames.workbench.hidden';   // the name is from when only the hidden panels were kept
+let layout = readLayout(null);
+try { layout = readLayout(localStorage.getItem(LAYOUT_KEY)); } catch { /* none kept */ }
+const keepLayout = () => { try { localStorage.setItem(LAYOUT_KEY, writeLayout(layout)); } catch { /* not kept: fine */ } };
+/** Puts the layout on the page: hidden panels, and the two widths clamped to this window (too narrow: no Inspector). */
+function applyLayout() {
+  const wb = $('wb'), w = clampWidths(layout, innerWidth);
+  for (const p of PANELS) wb.classList.toggle(`no-${p.key}`, layout.hidden.includes(p.key) || (p.key === 'inspector' && !w.inspector));
+  wb.style.setProperty('--side-w', `${w.side}px`); wb.style.setProperty('--inspector-w', `${w.inspector}px`);
+}
+/** Hides or shows a panel. The bottom panel "hidden" rests as a strip of its tabs. */
+function togglePanel(key, hide = !layout.hidden.includes(key)) {
+  layout.hidden = PANELS.map((p) => p.key).filter((k) => (k === key ? hide : layout.hidden.includes(k)));
+  keepLayout(); applyLayout(); renderLayout(); if (key === 'bottom') renderBottom();
+}
+addEventListener('resize', applyLayout);
+// the side panel's and the Inspector's inner edges drag to set their widths
+for (const [id, key] of [['sideGrip', 'side'], ['inspectorGrip', 'inspector']]) {
+  const grip = $(id);
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); grip.setPointerCapture(e.pointerId); $('wb').classList.add('dragging');   // frames would swallow the moves
+    const other = key === 'side' ? 'inspector' : 'side', shown = clampWidths(layout, innerWidth);
+    const most = innerWidth - RAIL - ROOM - (layout.hidden.includes(other) ? 0 : shown[other]);   // the other panel keeps its width, the documents their room
+    const move = (ev) => { layout[key] = Math.max(MIN, Math.min(most, Math.round(key === 'side' ? ev.clientX - RAIL : innerWidth - ev.clientX))); applyLayout(); };
+    const up = () => { grip.removeEventListener('pointermove', move); $('wb').classList.remove('dragging'); keepLayout(); };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up, { once: true }); grip.addEventListener('pointercancel', up, { once: true });
+  });
 }
 function renderLayout() {
   const g = h('button', { title: `${window.nfGrid.get() ? 'Hide' : 'Show'} the grids in every view (${showKeys(parseKeys('Mod+G', { mac }), { mac })})`, onclick: () => window.nfGrid.toggle() });
   g.setAttribute('aria-label', 'Grids'); g.setAttribute('aria-pressed', String(window.nfGrid.get()));
   g.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 5.5h13M1.5 10.5h13M5.5 1.5v13M10.5 1.5v13"/></svg>';
   $('layout').replaceChildren(g, h('span', { className: 'layout-sep' }), ...PANELS.map((p) => {
-    const shown = !$('wb').classList.contains(`no-${p.key}`), c = commands.list().find((x) => x.id === p.cmd);
-    const b = h('button', { title: `${shown ? 'Hide' : 'Show'} the ${p.title.toLowerCase()}${c && c.keys ? ` (${showKeys(parseKeys(c.keys, { mac }), { mac })})` : ''}`, onclick: () => togglePanel(p.key) });
+    const shown = !layout.hidden.includes(p.key), c = commands.list().find((x) => x.id === p.cmd);
+    const b = h('button', { title: `${p.key === 'bottom' ? (shown ? 'Close' : 'Open') : shown ? 'Hide' : 'Show'} the ${p.title.toLowerCase()}${c && c.keys ? ` (${showKeys(parseKeys(c.keys, { mac }), { mac })})` : ''}`, onclick: () => togglePanel(p.key) });
     b.setAttribute('aria-label', p.title); b.setAttribute('aria-pressed', String(shown));
     b.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">${p.icon}</svg>`;
     return b;
   }));
 }
-try { for (const k of JSON.parse(localStorage.getItem(LAYOUT_KEY) || '[]')) if (PANELS.some((p) => p.key === k)) $('wb').classList.add(`no-${k}`); } catch { /* none kept */ }
+applyLayout();
 renderLayout();
 window.nfGrid.onChange(renderLayout);
 
@@ -289,12 +312,14 @@ function renderInspector() {
 selection.on(() => { renderInspector(); renderStatus(); });
 
 function renderBottom() {
-  const tabs = [{ key: 'core/jobs', title: 'Jobs' }, { key: 'core/problems', title: `Problems${countProblems() ? ` (${countProblems()})` : ''}` }, { key: 'core/output', title: 'Output' }, ...model.panels.filter((p) => p.region === 'bottom')];
+  const strip = layout.hidden.includes('bottom');
+  const tabs = [{ key: 'core/jobs', title: `Jobs${jobsRunning ? ' ●' : ''}` }, { key: 'core/problems', title: `Problems${countProblems() ? ` (${countProblems()})` : ''}` }, { key: 'core/output', title: 'Output' }, ...model.panels.filter((p) => p.region === 'bottom')];
   const part = lent('bottom'), lentKey = part && `lent/${part.key}`;
   if (part) tabs.push({ key: lentKey, title: part.title });
   if (bottomTab.startsWith('lent/') && bottomTab !== lentKey) bottomTab = 'core/jobs';   // that page's tab is no longer shown
   if (bottomTab !== lentKey || !part) hideLent('bottom');
-  $('bottomTabs').replaceChildren(...tabs.map((t) => h('span', { className: `nf-tab${bottomTab === t.key ? ' on' : ''}`, textContent: t.title, onclick: () => { bottomTab = t.key; renderBottom(); } })));
+  $('bottomTabs').replaceChildren(...tabs.map((t) => h('span', { className: `nf-tab${!strip && bottomTab === t.key ? ' on' : ''}`, textContent: t.title, title: strip ? `Open ${t.title}` : bottomTab === t.key ? 'Close the panel' : '',
+    onclick: () => { if (!strip && bottomTab === t.key) return togglePanel('bottom', true); bottomTab = t.key; if (strip) togglePanel('bottom', false); else renderBottom(); } })));
   const body = $('bottomBody');
   if (part && bottomTab === lentKey) return showLent('bottom', part, body);
   if (bottomTab === 'core/jobs') return renderJobs(body);
@@ -454,8 +479,8 @@ addEventListener('keydown', (e) => {
 // ---- live updates
 onEvent('plugins/changed', () => refreshPlugins());
 onEvent('plugins/failed', ({ id, message }) => { log(`${id}: ${message}`); toast(`${id} was turned off: ${message}`, 'error'); unload(id); refreshPlugins(); });
-onEvent('jobs/started', ({ label }) => { $('jobInd').textContent = `● ${label}`; $('jobInd').classList.add('on'); if (bottomTab === 'core/jobs') renderBottom(); });
-onEvent('jobs/done', ({ label, state }) => { $('jobInd').textContent = 'No jobs'; $('jobInd').classList.remove('on'); toast(`${label}: ${state}`, state === 'done' ? '' : 'error'); if (bottomTab === 'core/jobs') renderBottom(); });
+onEvent('jobs/started', ({ label }) => { jobsRunning = true; $('jobInd').textContent = `● ${label}`; $('jobInd').classList.add('on'); renderBottom(); });
+onEvent('jobs/done', ({ label, state }) => { jobsRunning = false; $('jobInd').textContent = 'No jobs'; $('jobInd').classList.remove('on'); toast(`${label}: ${state}`, state === 'done' ? '' : 'error'); renderBottom(); });
 // reload only when the editor now has another project than this page shows (a stale event must never loop)
 let shownRoot = null;
 onEvent('project/changed', ({ root }) => { if (root && root !== shownRoot) location.reload(); });
