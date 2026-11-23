@@ -63,7 +63,7 @@ npm install        # nothing to download: it only sets up the package
 npm start
 ```
 
-Then open **http://127.0.0.1:8793/**. `npm start` serves `examples/sample/`, a small walled square.
+Then open **http://127.0.0.1:8793/** (the workbench; the map editor alone is at `/map`). `npm start` serves `examples/sample/`, a small walled square.
 It has a tower, three houses, an open hall, a market stall, crates, two planters, a beacon, a person,
 a door, a walker's round, a well and three plants. The sample config uses each kind of option and
 hook once, including a **Report** Apply action and a status panel.
@@ -584,6 +584,12 @@ nfgames plugin install                           # install everything the projec
 nfgames plugin list
 ```
 
+**The workbench.** `http://127.0.0.1:<port>/` is the workbench: an activity bar of tools, a side panel, documents
+in tabs, an inspector, a bottom panel (Jobs, Problems, Output and plugins' panels), a status bar, and **⌘K** for
+every command. Plugins add to it; **🧩 Plugins** turns them on and off and asks before trusting one, **⚙ Settings**
+edits their settings. Today's map editor (now at `/map`) and model viewer (`/viewer`) open in it as classic tools
+until they are rebuilt as plugins. Regions can be hidden (⌘K, "Toggle …"), not yet resized by dragging.
+
 How to write one, what it gets, and what trust means: [`docs/plugins.md`](docs/plugins.md). A small example:
 [`examples/plugins/hello`](examples/plugins/hello).
 
@@ -747,7 +753,8 @@ sizes, the cache and the kit's precedence (`test/modelkinds.test.mjs`), the fold
 (`test/home.test.mjs`), and switching over HTTP (`test/switch.test.mjs`). Plugins: versions, globs and manifests
 (`test/plugins-basics.test.mjs`), sources, precedence and trust (`test/plugins-sources.test.mjs`), the event stream
 and plugin jobs (`test/events-jobs.test.mjs`), the manager (`test/plugins-manager.test.mjs`), npm and git installs
-(`test/plugins-install.test.mjs`), and plugins over HTTP (`test/plugins-server.test.mjs`).
+(`test/plugins-install.test.mjs`), plugins over HTTP (`test/plugins-server.test.mjs`), the workbench's logic
+(`test/shell-core.test.mjs`) and the workbench over HTTP (`test/shell-server.test.mjs`).
 
 ```sh
 npm run check:browser    # the page in headless Chrome, against a copy of the sample project

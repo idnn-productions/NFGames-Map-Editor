@@ -3,8 +3,8 @@
 A plugin adds to the editor: tools, document editors, panels, commands, workflows, services, server routes and
 checks. The editor's own tools are plugins too (from sub-project 2), under the same rules as yours.
 
-This guide covers the **host side** (the server part, routes, files, jobs, hooks, installing and trust). The page
-side (tools, panels and commands in the workbench) is added with the workbench in plan 1B.
+This guide covers the **server part** (routes, files, jobs, hooks), the **page part** (tools, panels, commands and
+documents in the workbench), installing and trust.
 
 A complete small example is in [`examples/plugins/hello`](../examples/plugins/hello).
 
@@ -75,6 +75,54 @@ export function deactivate() {}   // optional
 Everything a plugin registers is undone when it unloads, so it can be turned off or reloaded without restarting the
 editor. A plugin whose `activate`, route or hook throws is turned off alone (the Plugins list says why); the rest of
 the editor carries on. Its own files are served at `/p/<id>/<path>` (no hidden files, nothing outside its folder).
+
+## The page part
+
+The workbench (`http://127.0.0.1:<port>/`) loads a plugin's `web` module the first time one of its activation events
+happens (its tool is opened, its command run, its panel shown, a document of its editor opened), or at start when it
+contributes status items. Before that, it shows the plugin's tools and commands from `plugin.json` alone. The server
+part, if there is one, is activated first.
+
+```js
+// web/index.js
+export function activate(api) {
+  api.tools.register('terrain', (el) => {                     // the side panel of the tool "terrain"
+    const b = document.createElement('nf-button'); b.textContent = 'Smooth'; b.addEventListener('click', () => api.commands.execute('smooth'));
+    el.append(b);
+  });
+  api.commands.register('smooth', async () => api.ui.toast((await api.fetch('/smooth', { method: 'POST', body: '{}' })).text));
+}
+```
+
+| `api.` | What it is |
+|---|---|
+| `tools.register(id, factory)` | the side panel of a contributed tool: `factory(element)` fills it, and may return a clean-up function |
+| `editors.register(id, factory)` | a document editor: `factory(element, doc)` where `doc` is `{ id, title, editor, uri, dirty }` |
+| `panels.register(id, factory)` | a bottom (or side) panel |
+| `inspectors.register(id, factory)` | an inspector section for a selection type (`for` in `plugin.json`): `factory(element, selection)` |
+| `statusItems.register(id, factory)` | an item in the status bar |
+| `commands.register(id, fn)`, `.execute(id, …)` | its commands (also in ⌘K and on their keys); other plugins' as `<plugin>/<command>` |
+| `documents.open({ title, editor, uri })`, `.close(id)`, `.setDirty(id, dirty)`, `.setTitle(id, title)` | tabs in the centre; the same `editor` and `uri` focus the open one |
+| `fetch(path, options)` | its own server routes (`/api/p/<id><path>`), JSON in and out |
+| `events.on(name, fn)` | the editor's live events (`jobs/started`, `jobs/done`, `plugins/changed`, `<plugin>/<name>`…); `'*'` for all the page hears |
+| `ui.toast(text, tone)`, `ui.dialog({ title, body, actions })`, `ui.confirm(title, text, ok)`, `ui.palette()` | messages and dialogs |
+| `selection.get()`, `.set(type, items)`, `.on(fn)` | the one selection every tool shares; `type` like `"studio.terrain/tile"` |
+| `problems.set(list)` | its entries in the Problems panel: `[{ kind, text }]` |
+| `settings.get()`, `.set(key, value)` | its settings (the Settings screen edits them too) |
+| `three()` | the editor's one three.js (`import('three')`) |
+
+Everything registered is undone when the plugin is turned off or reloaded.
+
+**The UI kit.** Use the shared parts so every tool looks and behaves alike: `import { h, toast, dialog, confirmDialog }
+from '/shell/ui.js'`, and the elements `<nf-button variant="primary|danger|ghost">`, `<nf-field label>`,
+`<nf-number label value step min max>`, `<nf-select label>` (`options = [{ value, label }]`), `<nf-tag tone>`,
+`<nf-progress value>`, `<nf-panel title>`, `<nf-list>` (`items`, `render`), `<nf-tree>` (`items`), `<nf-tabs>`, and
+`<nf-viewport>` (a three.js view: `await v.setObject(object3d)`, `v.frame()`, a `pick` event). Colours, type and
+spacing are CSS variables (`--nf-accent`, `--nf-panel`, `--nf-s2`…) in `/shell/theme.css`.
+
+**The rules every tool follows:** things open as documents in tabs; select, then inspect; the same verbs and keys
+(⌘S save, ⌘Z undo, ⌘K commands, Del remove, F frame, Esc stop); long work is a job (`api.jobs.run` on the server);
+problems go to the Problems panel; toasts say what happened.
 
 ## Where plugins come from
 
