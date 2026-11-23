@@ -1,24 +1,27 @@
 // The New model screen: ① Concept (describe it, generate candidates, pick one), ② Views (one image per side, made
-// from the approved concept), ③ Model (what is saved for the model step, which comes in a later update).
+// from the approved concept), ③ Model (what the step needs, and the 3D model made from the approved views by the
+// model service: ComfyUI and Blender on this computer).
 // The server part keeps the draft and its rules; this draws it and runs each generation through the image service.
 import { h, toast, confirmDialog } from '/shell/ui.js';
 import { shrink } from './shrink.js';
 import { openLarge } from './large.js';
 import { notesPanel } from './notes.js';
 
-const SERVICE = 'nfgames.codex-image/image', ALL_VIEWS = ['front', 'back', 'left', 'right', 'three-quarter', 'top'];
+const SERVICE = 'nfgames.codex-image/image', MODEL = 'nfgames.comfy-model/model', BLENDER = 'https://www.blender.org/download/', ALL_VIEWS = ['front', 'back', 'left', 'right', 'three-quarter', 'top'];
 const STEPS = [['concept', '① Concept'], ['views', '② Views'], ['model', '③ Model']];
 const post = (body) => ({ method: 'POST', body: JSON.stringify(body) });
 
 export function createScreen({ el, api, doc, slug, then, reopen }) {
   const src = (path) => `/api/p/${api.id}/image?path=${encodeURIComponent(path)}`;
   let draft = null, prompts = {}, step = 'concept', connected = true, gone = false;
-  const form = { name: '', description: '', style: '', count: 4, prompt: {}, viewCount: {} };   // what is typed, kept across redraws
+  const form = { name: '', description: '', style: '', count: 4, prompt: {}, viewCount: {}, length: '', faces: 60000, ultrashape: true };   // what is typed, kept across redraws
+  let made = { views: [], missing: [] };   // what a model would be made from now, as the server sees the draft
+  let needs = null, checking = false, modelRun = { state: 'idle' }, elsewhere = null;   // step 3: what it needs; this tab's run; a run this tab did not start
   const running = new Set(), notes = {};   // steps generating in this tab; what went wrong, per step
   let closeLarge = null;   // the large view, while one is open
 
   // ---- talking to the server
-  const take = (r) => { draft = r.draft; prompts = r.prompts || prompts; return r; };
+  const take = (r) => { draft = r.draft; prompts = r.prompts || prompts; made = r.model || made; return r; };
   const call = async (path, body) => take(await api.fetch(path, post({ slug: draft.slug, ...body })));
   /** The job the editor is running now (it runs one at a time), or null. */
   const runningJob = async () => { try { const j = await (await fetch('/api/job')).json(); return j.state === 'running' ? j : null; } catch { return null; } };
@@ -96,6 +99,48 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     }
     step = 'views';
   }
+  // ---- step 3: the model
+  /** Asks the model service what it has and what it lacks. It never throws: a service that is off is one more thing missing. */
+  async function checkModel() {
+    if (checking) return;
+    checking = true; draw();
+    try { needs = await api.services.call(MODEL, 'status', { ultrashape: form.ultrashape }); }
+    catch (e) { needs = { ready: false, queue: null, setup: null, checks: [{ id: 'service', ok: false, text: `The model service did not answer: ${e.message}`, help: 'See Plugins: "3D model generation (ComfyUI)" must be on.' }] }; }
+    checking = false; draw();
+  }
+  async function generateModel() {
+    const length = Number(form.length), slug = draft.slug;
+    if (!(length > 0)) { modelRun = { state: 'failed', error: 'Give the longest side in metres first.' }; return draw(); }
+    if (running.has('model')) return;
+    const job = await runningJob();
+    if (job) { modelRun = { state: 'failed', error: `The editor is busy (${job.label || job.kind || 'a job'} is running). Try again when it is done.` }; return draw(); }
+    await checkModel();
+    if (!needs.ready) return;
+    const input = { draft: slug, length, faces: form.faces, ultrashape: form.ultrashape };
+    if (needs.queue > 0) {
+      if (!(await confirmDialog('ComfyUI is busy', `ComfyUI is working on ${needs.queue} other prompt${needs.queue > 1 ? 's' : ''}: this one waits its turn, and the two share the graphics card.`, 'Queue it anyway'))) return;
+      input.wait = true;
+    }
+    if (draft.model) {
+      if (!(await confirmDialog('Make the model again?', `${draft.model.path} is replaced by the new one.`, 'Replace it'))) return;
+      input.replace = true;
+    }
+    running.add('model'); modelRun = { state: 'running', step: 'Starting…' }; draw();
+    const tick = setInterval(async () => { const j = await runningJob(); if (j && running.has('model')) { modelRun = { state: 'running', step: `${j.steps?.[j.step] || 'Working'} (${Math.round((Date.now() - j.startedAt) / 1000)} s)` }; draw(); } }, 2000);
+    try {
+      let result;
+      try { result = await api.services.call(MODEL, 'generate', input); }
+      catch (e) {
+        if (!/is already there/.test(e.message) || input.replace) throw e;   // a model from before this draft knew of one
+        if (!(await confirmDialog('Make the model again?', `models/${slug}/${slug}.glb is replaced by the new one.`, 'Replace it'))) { modelRun = { state: 'idle' }; return; }
+        result = await api.services.call(MODEL, 'generate', { ...input, replace: true });
+      }
+      if (gone) return;
+      await call('/draft/model', { path: result.model, length });
+      modelRun = { state: 'done', result };
+    } catch (e) { modelRun = { state: 'failed', error: e.message }; } finally { clearInterval(tick); running.delete('model'); if (!gone) draw(); }
+  }
+
   async function remove() {
     if (!(await confirmDialog('Delete this draft?', `${draft.name}: its folder .nfgames/drafts/${draft.slug}/ is deleted. The generated images under .nfgames/images/ stay.`, 'Delete'))) return;
     await api.fetch('/draft/delete', post({ slug: draft.slug })); api.documents.close(doc.id);
@@ -177,16 +222,51 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
         whyNot(), notes.views ? h('p', { className: 'mm-bad', textContent: notes.views }) : null,
         ...v.list.map(row)))];
   }
+  /** What the step needs: a tick, a cross or a question mark each, and for a cross what to do about it. */
+  function needsBox() {
+    const head = h('div', { className: 'mm-row' }, h('h3', { textContent: 'What this step needs' }), h('span', { className: 'grow' }), btn(checking ? 'Checking…' : 'Check again', () => checkModel(), { disabled: checking }));
+    if (!needs) return h('div', { className: 'mm-needs' }, head, h('p', { className: 'mm-wait', textContent: 'Checking…' }));
+    const link = (text, href) => Object.assign(h('a', { textContent: text, href }), { target: '_blank', rel: 'noopener noreferrer' });
+    const guide = needs.setup && /^https:\/\//.test(needs.setup) ? needs.setup : null;
+    const mark = { true: ['ok', '✓'], false: ['bad', '✕'], null: ['unknown', '?'] };
+    const row = (c) => h('li', { className: `mm-need ${mark[c.ok][0]}` }, h('span', { className: 'mark', textContent: mark[c.ok][1] }), h('div', {}, h('div', { textContent: c.text }),
+      c.ok === false ? h('div', { className: 'mm-note' }, c.help ? `${c.help} ` : '',
+        ['workflows', 'nodes', 'models'].includes(c.id) && guide ? link('Setup guide', guide) : null, c.id === 'blender' ? link('Get Blender', BLENDER) : null, ' ',
+        ['workflows', 'comfy', 'blender'].includes(c.id) ? btn('Open Settings', () => api.commands.execute('core/settings')) : null, c.id === 'service' ? btn('Open Plugins', () => api.commands.execute('core/plugins')) : null) : null));
+    const rows = needs.checks.map(row);
+    if (needs.checks.every((c) => c.ok === true)) return h('div', { className: 'mm-needs' }, head, h('details', {}, h('summary', { className: 'mm-need ok', textContent: '✓ Everything this step needs is there.' }), h('ul', {}, ...rows)));
+    return h('div', { className: 'mm-needs' }, head,
+      h('p', { className: 'mm-note', textContent: 'The model is made on this computer: ComfyUI with the asset3d workflow and its model files, then Blender. None of it comes with the editor.' }),
+      h('ul', {}, ...rows));
+  }
   function model() {
-    const v = draft.views;
-    return [h('h2', { textContent: draft.name }), h('p', { className: 'mm-note', textContent: `Saved in .nfgames/drafts/${draft.slug}/: concept.png and views/${v.list.join('.png, views/')}.png` }),
-      h('div', { className: 'mm-grid small' }, ...[['concept', draft.concept.approved], ...v.list.map((x) => [x, v.picks[x]])].map(([title, path], i, all) => pic(path, { title, group: all.map(([t, q]) => ({ path: q, src: src(q), caption: t })) }))),
-      h('div', { className: 'mm-row', style: 'margin-top:16px' }, btn('Generate model', null, { cls: 'primary', disabled: true }), h('span', { className: 'mm-note', textContent: 'Model generation comes in a later update.' }))];
+    const v = draft.views, all = [['concept', draft.concept.approved], ...v.list.map((x) => [x, v.picks[x]])], unused = v.list.filter((x) => !made.views.includes(x));
+    const busy = running.has('model') || !!elsewhere, can = !!needs && needs.ready && !made.missing.length && !busy && !checking;
+    const r = modelRun.result, after = r && r.report && r.report.after;
+    return [h('h2', { textContent: draft.name }),
+      h('div', { className: 'mm-grid small' }, ...all.map(([title, path]) => pic(path, { title, group: all.map(([t, q]) => ({ path: q, src: src(q), caption: t })) }))),
+      made.missing.length ? h('p', { className: 'mm-bad', textContent: `A model needs the front, left, back and right views. Missing: ${made.missing.join(', ')}. Add ${made.missing.length > 1 ? 'them' : 'it'} in Views.` })
+        : h('p', { className: 'mm-note', textContent: `The model is made from ${made.views.join(', ')}.${unused.length ? ` Not used: ${unused.join(', ')}${unused.some((x) => x === 'top' || x === 'bottom') ? ' (top and bottom are used only as a pair)' : ''}.` : ''}` }),
+      needsBox(),
+      h('div', { className: 'mm-row', style: 'margin-top:12px' },
+        h('span', { className: 'mm-note', textContent: 'Longest side (metres)' }), field.key(h('input', { type: 'number', min: 0, step: 'any', placeholder: '1.2', value: form.length, style: 'width:90px', oninput: (e) => { form.length = e.target.value; const b = el.querySelector('.mm-go'); if (b) b.disabled = !can || !(Number(form.length) > 0); } }), 'length'),
+        h('span', { className: 'mm-note', textContent: 'Triangles' }), field.key(h('input', { type: 'number', min: 1000, max: 2000000, step: 1000, value: form.faces, style: 'width:100px', oninput: (e) => { form.faces = Math.max(1000, Math.min(2000000, Math.round(Number(e.target.value)) || 60000)); } }), 'faces'),
+        h('label', { className: 'mm-inline' }, field.key(h('input', { type: 'checkbox', checked: form.ultrashape, onchange: (e) => { form.ultrashape = e.target.checked; checkModel(); } }), 'ultrashape'), ' Refine with UltraShape'),
+        h('span', { className: 'grow' }),
+        btn(running.has('model') ? 'Generating…' : draft.model ? 'Generate model again' : 'Generate model', () => generateModel(), { cls: 'primary mm-go', disabled: !can || !(Number(form.length) > 0), title: 'A few minutes on the graphics card' })),
+      modelRun.state === 'running' ? h('p', { className: 'mm-wait', textContent: `${modelRun.step}. A model takes a few minutes; Jobs shows its output.` }) : null,
+      elsewhere && !running.has('model') ? h('p', { className: 'mm-wait', textContent: `${elsewhere}. This page shows the model when it is done.` }) : null,
+      modelRun.state === 'failed' ? h('p', { className: 'mm-bad', textContent: modelRun.error }) : null,
+      draft.model && modelRun.state !== 'running' ? h('div', { className: 'mm-made' },
+        h('p', {}, `Saved as ${draft.model.path}, ${draft.model.length} m on its longest side`,
+          after ? `: ${Number(after.triangles).toLocaleString()} triangles${after.mb ? `, ${after.mb} MB` : ''}${r.seconds ? `, made in ${r.seconds} s` : ''}.` : '.'),
+        Object.assign(h('a', { className: 'mm-btn primary', textContent: 'Open in the model viewer', href: `/viewer?model=${encodeURIComponent(draft.model.path.replace(/^models\//, ''))}` }), { target: '_blank', rel: 'noopener' })) : null];
   }
   function draw() {
     if (gone) return;
     const can = { concept: true, views: !!draft && !!draft.concept.approved, model: !!draft && draft.status === 'ready' };
     if (!can[step]) step = can.views && step === 'model' ? 'views' : 'concept';
+    if (step === 'model' && !needs && !checking) queueMicrotask(checkModel);
     // what is being typed keeps the cursor across a redraw
     const active = el.contains(document.activeElement) ? document.activeElement : null, key = active && active.dataset.key, at = active && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
     const over = [...el.children].filter((c) => c.classList.contains('mm-large'));   // the large view stays open across a redraw
@@ -203,6 +283,10 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     if (gone || !draft || running.size) return;
     const pending = [...draft.concept.rounds, ...Object.values(draft.views.rounds).flat()].some((r) => r.state === 'pending');
     if (pending) { try { await load(); draw(); } catch { /* next time */ } }
+    else if (step === 'model') {   // a model being generated from before a reload: say so, and show it when it is done
+      const j = await runningJob(), now = j && j.label === `Generate model: ${draft.name}` ? `${j.steps?.[j.step] || 'Generating the model'} (${Math.round((Date.now() - j.startedAt) / 1000)} s)` : null;
+      if (now !== elsewhere) { const ended = elsewhere && !now; elsewhere = now; if (ended) { try { await load(); } catch { /* next time */ } } draw(); }
+    }
   }, 5000);
   (async () => {
     el.replaceChildren(h('p', { className: 'nf-empty', textContent: 'Loading…' }));

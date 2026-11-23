@@ -42,7 +42,8 @@ else {
   cpSync(join(REPO, 'examples', 'sample'), temp, { recursive: true, filter: (src) => !/[\\/]out([\\/]|$)|\.prev\.json$/.test(src) });
   root = temp;
   const port = Number(value('--port') || 18890);
-  server = createEditor(await loadProject({ root }), { port, defaultMap: 'plaza' });
+  // its own state folder: the check must not read, or depend on, the settings of whoever runs it
+  server = createEditor(await loadProject({ root }), { port, defaultMap: 'plaza', stateDir: `${temp}-state` });
   await new Promise((done, no) => { server.once('error', no); server.listen(port, '127.0.0.1', done); });
   url = `http://127.0.0.1:${port}/`;
 }
@@ -384,7 +385,11 @@ for (let i = 1; i <= n; i++) fs.writeFileSync(path.join(dir, 'image-' + i + '.pn
       if (!(await wb.locator('.mm-btn', { hasText: 'Approve views' }).isDisabled())) fail('New model: the views cannot be approved before each has a pick');
       for (let i = 0; i < 4; i++) { await wb.locator('.mm-view').nth(i).locator('.mm-pick').first().click(); await wb.waitForFunction((n) => document.querySelectorAll('.mm-view .mm-pic.on').length === n, i + 1); }
       await wb.locator('.mm-btn', { hasText: 'Approve views' }).click();
-      await wb.waitForSelector('.mm-btn:disabled:has-text("Generate model")');
+      // step 3 says what it needs: here no workflows folder is set, so it names that and Generate model stays off
+      await wb.waitForSelector('.mm-needs .mm-need.bad', { timeout: 20000 });
+      if (!/workflows folder/i.test(await wb.locator('.mm-needs').textContent())) fail('New model: step 3 names the workflows folder as missing');
+      await wb.locator('.mm [data-key="length"]').fill('0.4');
+      if (!(await wb.locator('.mm-go').isDisabled())) fail('New model: Generate model is off until everything it needs is there');
       const kept = join(root, '.nfgames', 'drafts', 'check-lantern');
       const views = existsSync(join(kept, 'views')) ? readdirSync(join(kept, 'views')).sort().join() : '';
       console.log(`new model: concept.png ${existsSync(join(kept, 'concept.png')) ? 'kept' : 'MISSING'}; views: ${views}`);
@@ -404,6 +409,6 @@ for (let i = 1; i <= n; i++) fs.writeFileSync(path.join(dir, 'image-' + i + '.pn
 } finally {
   await browser.close();
   if (server) await new Promise((done) => server.close(done));
-  if (temp) rmSync(temp, { recursive: true, force: true });
+  if (temp) { rmSync(temp, { recursive: true, force: true }); rmSync(`${temp}-state`, { recursive: true, force: true }); }
 }
 console.log(process.exitCode ? 'browser check: FAILED' : 'browser check: passed');

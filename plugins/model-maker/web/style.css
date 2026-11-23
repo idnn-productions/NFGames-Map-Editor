@@ -43,3 +43,10 @@
 .mm-notes textarea, .mm-notes input[type=number] { width: 100%; font: inherit; color: var(--nf-text); background: var(--nf-raised); border: 1px solid var(--nf-line); border-radius: var(--nf-radius); padding: 6px 8px; box-sizing: border-box; }
 .mm-notes textarea { min-height: 56px; resize: vertical; } .mm-notes input[type=number] { width: 64px; } .mm-notes .mm-row { margin-top: var(--nf-s3); }
 .mm-notes-pin { display: flex; gap: var(--nf-s2); align-items: flex-start; margin-top: var(--nf-s2); }
+.mm-needs { border: 1px solid var(--nf-line); border-radius: var(--nf-radius); padding: var(--nf-s3); background: var(--nf-raised); } .mm-needs h3 { margin: 0; font-size: 14px; }
+.mm-needs ul { list-style: none; margin: var(--nf-s2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--nf-s2); } .mm-needs p { margin: var(--nf-s2) 0 0; }
+.mm-need { display: flex; gap: var(--nf-s2); align-items: flex-start; overflow-wrap: anywhere; } .mm-need .mark { flex: 0 0 18px; font-weight: 700; text-align: center; }
+.mm-need.ok .mark, summary.mm-need.ok { color: var(--nf-ok, #3fb950); } .mm-need.bad .mark { color: var(--nf-error); } .mm-need.unknown .mark { color: var(--nf-dim); }
+.mm-need a { color: var(--nf-accent); margin-right: var(--nf-s2); } .mm-need .mm-btn { padding: 1px 8px; font-size: 12px; } summary.mm-need { display: list-item; margin: var(--nf-s2) 0 0; }
+.mm label.mm-inline { display: inline; text-transform: none; letter-spacing: 0; font-size: inherit; color: var(--nf-text); margin: 0; }
+.mm-made { display: flex; align-items: center; gap: var(--nf-s3); flex-wrap: wrap; } .mm-made p { margin: 0; flex: 1; } a.mm-btn { text-decoration: none; display: inline-block; }
