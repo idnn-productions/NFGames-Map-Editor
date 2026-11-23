@@ -593,6 +593,28 @@ until they are rebuilt as plugins. Regions can be hidden (⌘K, "Toggle …"), n
 How to write one, what it gets, and what trust means: [`docs/plugins.md`](docs/plugins.md). A small example:
 [`examples/plugins/hello`](examples/plugins/hello).
 
+## Agents and services
+
+**The workbench owns the workflow; your agent carries out the parts that need judgement.** Any agent that can run
+commands works (Claude Code, Codex, others): point it at [`skills/nfgames/SKILL.md`](skills/nfgames/SKILL.md), which
+says how to start the editor, watch for work, carry out a job, ask the editor for a service and report back.
+
+| Harness | How |
+|---|---|
+| Claude Code | copy the skill: `cp -r <editor>/skills/nfgames <project>/.claude/skills/` |
+| Codex | add a line to the project's `AGENTS.md`: "For the NFGames editor, follow <editor>/skills/nfgames/SKILL.md" |
+| anything else | tell it to read that file |
+
+The top bar shows **● Agent: Claude Code · watching** while an agent's watcher runs (`review-watch --agent <name>`
+writes a heartbeat), and **○ No agent connected** otherwise.
+
+**Services** are what plugins can do for you and your agent: image generation (built in, through your Codex login),
+and whatever other plugins add (voice, image to 3D, …). **🔌 Services** shows each one in plain words, with
+**Connect…** (keys go into the macOS Keychain; elsewhere a file only you can read), a status light, this month's spend
+and a budget. Costly calls ask you first. An agent never gets a key: it writes a request file in its job folder with
+this session's token, the editor runs the service and writes the answer, asking you the first time the agent uses a
+service in a session, and whenever a call costs.
+
 ## Save and backups
 
 Save (the button, or Ctrl S) sends the plan and, if the map has one, the planting plan. The server then
@@ -699,6 +721,11 @@ The editor reads and writes files on your machine, so it accepts requests only f
   install whose download matched the pinned SHA-512. Models are read only from the real `models` folder (symlinks
   out of it refused), and only `.glb` files. Jobs are written only to server-named folders and files under
   `reviews`; images are checked by their bytes. `POST /api/review` takes up to 24 MB; everything else keeps 2 MB.
+- **Keys and agents.** Service keys never leave the host: not to the page, not to agents, not onto a command line
+  (the Keychain gets them on its standard input). Agent requests are files the editor answers only with this
+  session's token (written owner-only at start), while an agent's watcher is running, for files newer than the
+  session, never through links, and after the user allows that agent to use that service; the spend guard applies too.
+  Image references for Codex must be image files inside the project.
 - **Plugins.** A plugin is trusted code: the user is asked once, and again when it changes (a folder plugin's files, a
   package's pinned bytes), shown what it declares it touches. Built-in plugins are trusted; every other plugin waits until
   approved (the Plugins screen, or `nfgames plugin trust <id>`). Installed packages are cached by their source and checked
@@ -754,7 +781,8 @@ sizes, the cache and the kit's precedence (`test/modelkinds.test.mjs`), the fold
 (`test/plugins-basics.test.mjs`), sources, precedence and trust (`test/plugins-sources.test.mjs`), the event stream
 and plugin jobs (`test/events-jobs.test.mjs`), the manager (`test/plugins-manager.test.mjs`), npm and git installs
 (`test/plugins-install.test.mjs`), plugins over HTTP (`test/plugins-server.test.mjs`), the workbench's logic
-(`test/shell-core.test.mjs`) and the workbench over HTTP (`test/shell-server.test.mjs`).
+(`test/shell-core.test.mjs`) and the workbench over HTTP (`test/shell-server.test.mjs`), the vault and the spend guard (`test/vault-spend.test.mjs`),
+and services, agent requests and agent status (`test/services.test.mjs`).
 
 ```sh
 npm run check:browser    # the page in headless Chrome, against a copy of the sample project

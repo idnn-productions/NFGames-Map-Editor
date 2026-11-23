@@ -51,6 +51,7 @@ export function createServices({ listPlugins, activate, providers, vault, spend,
       const result = await fn(input && typeof input === 'object' ? input : {}, { secret: (name) => vault.get(keyName(s.plugin, s.id, name)) });
       spend.record(key, typeof result?.cost === 'number' ? result.cost : estimate);
       events.emit('services/done', { key, action, title: `${s.title}: ${a.title}`, by, ok: true });
+      events.emit('services/changed', { key });
       return { ok: true, result };
     } catch (e) { events.emit('services/done', { key, action, title: `${s.title}: ${a.title}`, by, ok: false, error: e.message }); throw e; }
   }

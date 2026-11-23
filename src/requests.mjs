@@ -10,23 +10,27 @@
 // The first time an agent uses a service in a session the user is asked to allow it; the spend guard applies as well.
 // Answers are written to a temporary file and renamed into place. Ids are made here: nothing from the page is a path.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
+/** Writes `text` to `to` without following links: a new file under a random name (exclusive: it fails if anything is
+ *  there), then renamed over `to`, which replaces the name, never what a link there pointed to. */
+function writeSafely(to, text, mode = 0o644) {
+  const tmp = `${to}.${randomBytes(8).toString('hex')}.tmp`;
+  try { writeFileSync(tmp, text, { flag: 'wx', mode }); renameSync(tmp, to); } catch (e) { rmSync(tmp, { force: true }); throw e; }
+}
 const plainFile = (f) => { try { const s = lstatSync(f); return s.isFile() && !s.isSymbolicLink(); } catch { return false; } };
 
 export function createRequestLoop({ reviewsDir, services, events, agentConnected = () => true, interval = 2000, now = () => Date.now() }) {
   const startedAt = now(), seen = new Set(), waiting = new Map(), allowed = new Set();
   const token = randomBytes(24).toString('hex');
-  try { mkdirSync(reviewsDir, { recursive: true }); const f = join(reviewsDir, '.session.json'); writeFileSync(f, `${JSON.stringify({ token, startedAt })}\n`, { mode: 0o600 }); chmodSync(f, 0o600); } catch { /* no reviews folder: no requests */ }
+  try { mkdirSync(reviewsDir, { recursive: true }); writeSafely(join(reviewsDir, '.session.json'), `${JSON.stringify({ token, startedAt })}\n`, 0o600); } catch { /* no reviews folder: no requests */ }
 
   const answerFile = (file) => file.replace(/\.json$/, '.answer.json');
   function write(file, value) {
     const to = answerFile(file);
     if (existsSync(to) && !plainFile(to)) return;                       // never write through a link
-    const tmp = `${to}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
-    renameSync(tmp, to);                                                // replaces the name, not what it may point to
+    writeSafely(to, `${JSON.stringify(value, null, 2)}\n`);
   }
   const idOf = (file) => relative(reviewsDir, file).split(sep).join('~');
   function ask(file, req, reason, kind) {

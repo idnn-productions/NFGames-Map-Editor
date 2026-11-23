@@ -124,6 +124,41 @@ spacing are CSS variables (`--nf-accent`, `--nf-panel`, `--nf-s2`…) in `/shell
 (⌘S save, ⌘Z undo, ⌘K commands, Del remove, F frame, Esc stop); long work is a job (`api.jobs.run` on the server);
 problems go to the Problems panel; toasts say what happened.
 
+## Services
+
+A **service** is something a plugin can do for the user and for their agent: generate images, a voice line, a 3D
+model. It runs in the editor, with keys the editor keeps (the macOS Keychain) and under the user's spend guard, so
+neither the page nor an agent handles keys or endpoints. Declare it in `plugin.json` and provide its actions from the
+server part:
+
+```jsonc
+"contributes": { "services": [{
+  "id": "image", "title": "Image generation", "summary": "Makes images from a description",
+  "provider": "Codex, with your ChatGPT login",
+  "needs": [{ "kind": "cli", "command": "codex", "help": "Install the Codex app or CLI and sign in once" }],
+  // or { "kind": "key", "name": "HF_TOKEN", "help": "Your Hugging Face token: huggingface.co/settings/tokens" }
+  "actions": [{ "id": "generate", "title": "Generate images", "cost": { "estimate": 0, "note": "uses your ChatGPT plan" } }]
+}] },
+"activation": ["onService:image"]
+```
+
+```js
+// server.mjs
+export function activate(api) {
+  api.services.provide('image', 'generate', async ({ prompt }, { secret }) => {
+    // secret('HF_TOKEN') reads this service's own key from the vault; nothing else can be read
+    return { images: ['…'], cost: 0.04 };   // `cost` (dollars), when known, is what the spend guard records
+  });
+}
+```
+
+The user connects a service on the **🔌 Services** screen (a key is pasted once; a program is checked on the PATH),
+and can set a monthly budget for it. A call estimated at the threshold (default $0.50) or more, or one that would
+pass the budget, or any call once the budget is used up, asks the user first. From a page part, call a service with
+`await api.services.call('<plugin>/<service>', '<action>', input)`; it asks the user when the spend guard says so.
+Agents ask through request files (see `skills/nfgames/SKILL.md`); the first time an agent uses a service in a session,
+the user is asked to allow it. The built-in `nfgames.codex-image` plugin is a complete example.
+
 ## Where plugins come from
 
 | Source | Where | Trusted |

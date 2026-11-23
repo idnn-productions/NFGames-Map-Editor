@@ -39,6 +39,15 @@ describe('services', () => {
   });
   after(async () => { process.env.PATH = path0; await new Promise((d) => host.server.close(d)); copy.done(); rmSync(top, { recursive: true, force: true }); });
 
+  it('the session file is written without following a link planted in the project', async () => {
+    const { symlinkSync, lstatSync } = await import('node:fs');
+    const victim = join(top, 'victim.txt'); writeFileSync(victim, 'keep me');
+    const { createRequestLoop } = await import('../src/requests.mjs');
+    const dir = join(top, 'planted', '.review'); mkdirSync(dir, { recursive: true }); symlinkSync(victim, join(dir, '.session.json'));
+    const loop = createRequestLoop({ reviewsDir: dir, services: {}, events: { emit() {} } }); loop.stop();
+    assert.equal(readFileSync(victim, 'utf8'), 'keep me'); assert.ok(!lstatSync(join(dir, '.session.json')).isSymbolicLink());
+    assert.equal(lstatSync(join(dir, '.session.json')).mode & 0o777, 0o600);
+  });
   it('lists services with what they need; the key stays in the editor', async () => {
     const { services, vault } = await ask('/api/services');
     const words = services.find((s) => s.key === 'test.words/words');
