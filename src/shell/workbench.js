@@ -28,7 +28,7 @@ const stream = new EventSource('/api/events'), subscribed = new Set();
 function subscribe(name) { if (name === '*' || subscribed.has(name)) return; subscribed.add(name); stream.addEventListener(name, (e) => dispatch(name, JSON.parse(e.data || '{}'))); }
 function onEvent(name, fn) { subscribe(name); if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); return { dispose: () => listeners.get(name)?.delete(fn) }; }
 function dispatch(name, data) { for (const fn of listeners.get(name) || []) try { fn(data); } catch (e) { log(`listener for ${name}: ${e.message}`); } for (const fn of listeners.get('*') || []) try { fn(name, data); } catch { /* a listener's problem */ } }
-for (const name of ['plugins/changed', 'plugins/failed', 'jobs/started', 'jobs/done', 'settings/changed', 'project/changed']) subscribe(name);
+for (const name of ['plugins/changed', 'plugins/failed', 'jobs/started', 'jobs/done', 'settings/changed', 'project/changed', 'services/changed', 'services/confirm', 'services/started', 'services/done']) subscribe(name);
 function log(text) { output.push(`${new Date().toLocaleTimeString()}  ${text}`); if (output.length > 500) output.shift(); if (bottomTab === 'core/output') renderBottom(); }
 
 // ---- the page plugin API, one per plugin
@@ -48,6 +48,7 @@ function makeApi(p, rec) {
     problems: { set: (list) => { problems.set(p.id, (list || []).map((x) => ({ ...x, plugin: p.id }))); own({ dispose: () => problems.delete(p.id) }); renderStatus(); if (bottomTab === 'core/problems') renderBottom(); } },
     settings: { get: () => json(`/api/plugins/${p.id}/settings`).then((s) => s.values), set: (key, value) => post(`/api/plugins/${p.id}/settings`, { key, value }) },
     three: () => import('three'),
+    services: { call: (key, action, input) => callService(key, action, input) },
   };
 }
 
@@ -95,6 +96,7 @@ core('core/toggle-inspector', 'Toggle the inspector', () => $('wb').classList.to
 core('core/toggle-bottom', 'Toggle the bottom panel', () => $('wb').classList.toggle('no-bottom'));
 core('core/plugins', 'Plugins: manage', () => documents.open({ title: 'Plugins', editor: 'core/plugins', uri: 'plugins' }));
 core('core/settings', 'Settings', () => documents.open({ title: 'Settings', editor: 'core/settings', uri: 'settings' }));
+core('core/services', 'Services', () => documents.open({ title: 'Services', editor: 'core/services', uri: 'services' }));
 core('core/close-document', 'Close the document', () => { const d = documents.active(); if (d) documents.close(d.id); }, 'Alt+W');
 core('core/open-project', 'Open project…', () => document.getElementById('nfOpen')?.click());
 
@@ -104,11 +106,11 @@ function render() { renderActivity(); renderSide(); renderDocs(); renderInspecto
 function renderActivity() {
   const btn = (t) => h('button', { className: `act${activeTool === t.key ? ' on' : ''}`, textContent: t.icon, title: t.title, onclick: () => setTool(activeTool === t.key ? null : t.key) });
   $('activityTools').replaceChildren(...model.tools.map(btn));
-  $('activityCore').replaceChildren(btn({ key: 'core/plugins', icon: '🧩', title: 'Plugins' }), btn({ key: 'core/settings', icon: '⚙', title: 'Settings' }));
+  $('activityCore').replaceChildren(btn({ key: 'core/services', icon: '🔌', title: 'Services' }), btn({ key: 'core/plugins', icon: '🧩', title: 'Plugins' }), btn({ key: 'core/settings', icon: '⚙', title: 'Settings' }));
 }
 async function setTool(key) {
   activeTool = key; renderActivity();
-  if (key === 'core/plugins' || key === 'core/settings') { activeTool = null; renderActivity(); return commands.execute(key); }
+  if (key === 'core/plugins' || key === 'core/settings' || key === 'core/services') { activeTool = null; renderActivity(); return commands.execute(key); }
   const t = model.tools.find((x) => x.key === key);
   if (t) { $('wb').classList.remove('no-side'); renderSide(); try { await ensure(t.plugin); } catch { return; } }
   renderSide();
@@ -139,6 +141,7 @@ async function mountDoc(d) {
   const el = h('div', { className: 'doc-pane' }); $('docBody').append(el); const m = { el, cleanup: null }; mounted.set(d.id, m);
   if (d.editor === 'core/plugins') { m.cleanup = renderPluginsScreen(el); return; }
   if (d.editor === 'core/settings') { m.cleanup = renderSettingsScreen(el); return; }
+  if (d.editor === 'core/services') { m.cleanup = renderServicesScreen(el); return; }
   const owner = d.editor.split('/')[0];
   if (!editors.has(d.editor)) { el.append(h('p', { className: 'nf-empty', textContent: 'Loading…' })); try { await ensure(owner); } catch { return; } }
   const factory = editors.get(d.editor);
@@ -240,6 +243,52 @@ function renderSettingsScreen(el) {
   el.replaceChildren(page); return null;
 }
 
+// ---- services: calls that may need the user's yes, the Services screen, agent requests that cost
+async function callService(key, action, input = {}, confirmed = false) {
+  const r = await post('/api/services/call', { key, action, input, confirmed });
+  if (!r.needsConfirm) return r.result;
+  if (!(await confirmDialog(`${r.service}: ${r.action}`, r.reason, 'Go ahead'))) throw new Error('cancelled');
+  return callService(key, action, input, true);
+}
+const money = (n) => `$${Number(n || 0).toFixed(2)}`;
+function renderServicesScreen(el) {
+  const draw = async () => {
+    const { services, vault, threshold } = await json('/api/services');
+    const page = h('div', { className: 'doc-page' }, h('h2', { textContent: 'Services' }),
+      h('p', { className: 'nf-muted', textContent: `What plugins can do for you and for your agent. Keys are kept in ${vault}, never in the project or the page. Calls estimated at ${money(threshold)} or more, or past a budget, ask you first.` }));
+    if (!services.length) page.append(h('p', { className: 'nf-muted', textContent: 'No plugin offers a service yet.' }));
+    for (const s of services) {
+      const needs = s.needs.map((n) => h('div', { className: 'need' }, h('i', { className: `light${n.ok ? ' on' : ''}` }),
+        h('span', { textContent: n.kind === 'cli' ? `${n.command} on this computer${n.ok ? '' : `: ${n.help}`}` : `${n.name}${n.ok ? ' (saved)' : n.help ? `: ${n.help}` : ''}` }),
+        ...(n.kind === 'key' ? [h('button', { className: 'nf-btn', textContent: n.ok ? 'Replace…' : 'Connect…', onclick: async () => {
+          const input = h('input', { className: 'nf-input', type: 'password', placeholder: n.name });
+          const ok = await confirmDialog(`Connect ${s.title}`, h('div', {}, h('p', { textContent: n.help || `Paste ${n.name}.` }), input, h('p', { className: 'nf-muted', textContent: `Kept in ${vault}.` })), 'Save');
+          if (ok && input.value) { try { await post('/api/services/connect', { key: s.key, name: n.name, value: input.value }); toast(`${s.title} connected`); draw(); } catch (e) { toast(e.message, 'error'); } }
+        } })] : [])));
+      const budget = h('input', { className: 'nf-input', type: 'number', min: 0, step: 1, value: s.budget ?? '', placeholder: 'none', style: 'width:110px',
+        onchange: () => post('/api/services/budget', { key: s.key, amount: budget.value === '' ? null : Number(budget.value) }).then(() => toast('Budget saved')).catch((e) => toast(e.message, 'error')) });
+      page.append(h('div', { className: 'service' },
+        h('header', {}, h('i', { className: `light${s.connected ? ' on' : ''}`, title: s.connected ? 'connected' : 'not connected' }), h('b', { textContent: s.title }), h('span', { className: 'nf-muted', textContent: s.provider })),
+        h('p', { textContent: s.summary }), ...needs,
+        h('p', { className: 'nf-muted', textContent: `Actions: ${s.actions.map((a) => `${a.title}${a.cost ? ` (${a.cost.note || `about ${money(a.cost.estimate)}`})` : ''}`).join(', ')}` }),
+        h('div', { className: 'need' }, h('span', { textContent: `This month: ${money(s.spent)}${s.budget !== null ? ` of ${money(s.budget)}` : ''} · monthly budget ($)` }), budget)));
+    }
+    el.replaceChildren(page);
+  };
+  draw().catch((e) => el.replaceChildren(h('p', { className: 'nf-empty', textContent: e.message })));
+  const sub = onEvent('services/changed', () => draw()); return () => sub.dispose();
+}
+async function confirmAgentRequest({ id, reason, service, action }) {
+  const yes = await confirmDialog(`Your agent asks: ${service}: ${action}`, reason, 'Go ahead');
+  try { await post('/api/services/requests/answer', { id, approve: yes }); } catch (e) { toast(e.message, 'error'); }
+}
+async function refreshAgent() {
+  const a = await json('/api/agent').catch(() => ({ connected: false }));
+  const el = $('agent'); el.classList.toggle('on', a.connected);
+  el.textContent = a.connected ? `● Agent: ${a.agent} · watching` : '○ No agent connected';
+  el.title = a.connected ? 'Jobs you send are picked up.' : 'Tell your agent (Claude Code, Codex…): read <editor>/skills/nfgames/SKILL.md and watch this project.';
+}
+
 // ---- the palette
 function openPalette(initial = '') {
   if (document.querySelector('.palette')) return;
@@ -275,7 +324,12 @@ onEvent('plugins/failed', ({ id, message }) => { log(`${id}: ${message}`); toast
 onEvent('jobs/started', ({ label }) => { $('jobInd').textContent = `● ${label}`; if (bottomTab === 'core/jobs') renderBottom(); });
 onEvent('jobs/done', ({ label, state }) => { $('jobInd').textContent = ''; toast(`${label}: ${state}`, state === 'done' ? '' : 'error'); if (bottomTab === 'core/jobs') renderBottom(); });
 onEvent('project/changed', () => location.reload());
+onEvent('services/confirm', confirmAgentRequest);
+onEvent('services/started', ({ title, by }) => log(`${by === 'agent' ? 'agent' : 'you'}: ${title}…`));
+onEvent('services/done', ({ title, ok, error }) => { log(`${title}: ${ok ? 'done' : `failed: ${error}`}`); if (!ok) toast(`${title} failed: ${error}`, 'error'); });
 
 // ---- start
 await refreshPlugins();
-window.__workbench = { commands, selection, documents, get plugins() { return plugins; }, ensure, unload, openPalette, problems };
+refreshAgent(); setInterval(refreshAgent, 15000);
+for (const r of (await json('/api/services/requests').catch(() => ({ requests: [] }))).requests) confirmAgentRequest(r);
+window.__workbench = { callService, commands, selection, documents, get plugins() { return plugins; }, ensure, unload, openPalette, problems };

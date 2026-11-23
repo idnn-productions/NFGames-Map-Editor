@@ -21,9 +21,13 @@ export function createSpend({ stateDir, threshold = 0.5, now = () => new Date() 
     },
     /** { ok } or { confirm: why the user must say yes }. */
     check(key, estimate = 0) {
-      const b = api.budget(key), total = api.spent(key) + estimate;
-      if (b !== null && estimate > 0 && total > b) return { confirm: `This would take ${key} to ${money(total)} of its ${money(b)} monthly budget.` };
-      if (estimate > 0 && estimate >= api.threshold()) return { confirm: `This costs about ${money(estimate)}.` };
+      // an estimate that is missing or not a number is an unknown cost, not a free one
+      const known = typeof estimate === 'number' && Number.isFinite(estimate) && estimate >= 0, est = known ? estimate : 0;
+      const b = api.budget(key), spent = api.spent(key);
+      if (b !== null && spent >= b) return { confirm: `${key} has used its ${money(b)} budget this month (${money(spent)} so far).` };
+      if (b !== null && !known) return { confirm: `The cost of this is not known, and ${key} has a ${money(b)} monthly budget (${money(spent)} used).` };
+      if (b !== null && spent + est > b) return { confirm: `This would take ${key} to ${money(spent + est)} of its ${money(b)} monthly budget.` };
+      if (est > 0 && est >= api.threshold()) return { confirm: `This costs about ${money(est)}.` };
       return { ok: true };
     },
     record(key, cost) {

@@ -52,5 +52,9 @@ describe('the spend guard', () => {
     assert.match(s.check('p/image', 0.04).confirm, /\$0\.12 of its \$0\.10 monthly budget/);
     today = new Date('2026-12-01T10:00:00Z'); assert.equal(s.spent('p/image'), 0); assert.deepEqual(s.check('p/image', 0.04), { ok: true });
     assert.throws(() => s.setBudget('p/image', -1), /dollars a month/);
+    // a used-up budget asks even for a call estimated at nothing; an unknown estimate is not free
+    s.setBudget('p/free', 0.05); s.record('p/free', 0.05);
+    assert.match(s.check('p/free', 0).confirm, /has used its \$0\.05 budget/);
+    s.setBudget('p/odd', 1); assert.match(s.check('p/odd', undefined).confirm, /not known/); assert.deepEqual(s.check('p/none', undefined), { ok: true });
   });
 });
