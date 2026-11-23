@@ -25,7 +25,8 @@ for (let i = 1; i < a.length; i++) {
 if (!prompt) { console.error('No prompt provided via stdin.'); process.exit(1); }
 const m = /into \\.\\/(\\S+)\\/ named/.exec(prompt);
 const dir = path.join(process.argv[process.argv.indexOf('-C') + 1], m[1]); fs.mkdirSync(dir, { recursive: true });
-fs.writeFileSync(path.join(dir, 'image-1.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47])); console.log('made', dir);`;
+fs.writeFileSync(path.join(dir, 'image-1.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47])); console.log('made', dir);
+if (/STOP HALFWAY/.test(prompt)) { console.error('the image tool gave up'); process.exit(2); }`;
 
 describe('services', () => {
   const port = 21393 + (process.pid % 500), origin = `http://127.0.0.1:${port}`;
@@ -113,5 +114,23 @@ describe('services', () => {
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.result.images.length, 1); assert.match(r.body.result.images[0], /^\.nfgames\/images\/.+\/image-1\.png$/);
     assert.ok(existsSync(join(copy.root, r.body.result.images[0])));
+  });
+  const generate = (input) => post('/api/services/call', { key: 'nfgames.codex-image/image', action: 'generate', input });
+  it('image generation: the caller can name the folder, a short safe name, used once', async () => {
+    const r = await generate({ prompt: 'a brass lantern', folder: 'lantern-concept-1' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.result.folder, '.nfgames/images/lantern-concept-1'); assert.deepEqual(r.body.result.images, ['.nfgames/images/lantern-concept-1/image-1.png']);
+    for (const bad of ['../x', 'A B', 'a/b', '.hidden', '-dash', 'x'.repeat(81), '', 7]) {
+      const no = await generate({ prompt: 'x', folder: bad });
+      assert.match(no.body.error, /^folder: a short name/, String(bad));
+    }
+    assert.ok(!existsSync(join(copy.root, '.nfgames', 'x')) && !existsSync(join(copy.root, '.nfgames', 'images', 'A B')));
+    assert.match((await generate({ prompt: 'again', folder: 'lantern-concept-1' })).body.error, /folder: lantern-concept-1 is already used/);
+  });
+  it('image generation: a failure says where it was saving, and what it saved stays', async () => {
+    const r = await generate({ prompt: 'STOP HALFWAY', folder: 'lantern-concept-2' });
+    assert.notEqual(r.status, 200); assert.match(r.body.error, /Codex did not finish/);
+    assert.equal(r.body.folder, '.nfgames/images/lantern-concept-2');
+    assert.ok(existsSync(join(copy.root, '.nfgames/images/lantern-concept-2/image-1.png')));
   });
 });

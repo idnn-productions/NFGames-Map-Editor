@@ -163,7 +163,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
           if (m[1] === 'budget') return send(200, services.setBudget(b.key, b.amount ?? null));
           if (m[1] === 'call') return send(200, await services.call(b.key, b.action, b.input, { confirmed: b.confirmed === true }));
           await requests.answer(String(b.id), b.approve === true); return send(200, { ok: true });
-        } catch (e) { return send(e.code || 500, { error: e.message }); } } }
+        } catch (e) { return send(e.code || 500, { error: e.message, ...(typeof e.folder === 'string' ? { folder: e.folder } : {}) }); } } }   // a failed generation says where it was saving
       { const m = req.method === 'POST' && /^\/api\/plugins\/([a-z0-9.-]+)\/(trust|enable|disable|reload|activate)$/.exec(path);
         if (m) { try { const [, id, verb] = m; if (verb === 'trust') plugins.trust(id); else if (verb === 'reload') await plugins.reload(id); else if (verb === 'activate') await plugins.activate(id); else await plugins.setEnabled(id, verb === 'enable'); return send(200, { plugins: plugins.list() }); } catch (e) { return send(e.code || 500, { error: e.message, plugins: plugins.list() }); } } }
       { const m = /^\/api\/plugins\/([a-z0-9.-]+)\/settings$/.exec(path);

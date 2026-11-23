@@ -1,7 +1,7 @@
 {
   "id": "nfgames.codex-image",
   "name": "Image generation (Codex)",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "engines": { "nfgames": "^1.0.0" },
   "server": "server.mjs",
   "touches": { "files": [".nfgames/images/**"], "commands": ["codex"], "network": true },
