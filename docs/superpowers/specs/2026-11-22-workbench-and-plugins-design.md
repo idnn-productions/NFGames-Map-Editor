@@ -28,6 +28,11 @@ The work is split into four sub-projects, each with its own spec, plan and build
 - Plugins come from **four places**: built in, the project, the user, npm / git.
 - Plugins declare themselves in a **manifest** and run behaviour from **`activate(api)`**, loaded on demand.
 - Merge `projects-and-model-kinds` into `main` before starting (done).
+- **Agents and services: the UI owns the workflow, the agent executes.** No MCP (it costs context up front and not
+  every harness has it): one plain **skill file** ships in the package and tells any agent (Claude Code, Codex,
+  Hermes, …) how to start the editor, watch for work, carry it out and report. Services (image generation, APIs) run
+  in the editor, with keys it keeps, so neither the agent nor the user handles keys or endpoints. "We'll see what
+  works when we use it": keep it small and adjust.
 
 ## Goals
 
@@ -43,6 +48,7 @@ The work is split into four sub-projects, each with its own spec, plan and build
 
 - Porting the map editor and model viewer (2), the workflow system (3), Perseus bundling (4).
 - Sandboxing plugins. Free docking. A public plugin registry or marketplace.
+- An MCP server (possible later, over the same actions). Building and running multi-step workflows (sub-project 3).
 
 ## The design
 
@@ -172,6 +178,44 @@ incompatible (with the version it needs) and stays off. Breaking changes only in
   Output); the rest keeps working. Routes, commands, settings and storage are namespaced by id, so plugins cannot
   collide.
 
+### Agents and services
+
+- **One skill file in the package**, `skills/nfgames/SKILL.md` (plain markdown, works as a Claude Code skill; Codex
+  reads it from a one-line pointer in `AGENTS.md`; any agent can be told to read it). It says: start the editor
+  (`node <editor>/bin/nfgames-map-editor.mjs --project <dir>`, or attach to one running); watch for work
+  (`node <editor>/bin/review-watch.mjs --project <dir> --agent <name>`, re-armed when it ends); how to read a job
+  (`job.json`, screenshots, references, the step to do); how to report (`status.json`: working, needs-input, done,
+  failed); how to ask the editor for a service mid-task (a `service` request file in the job folder, which the
+  editor runs and answers). Today's `model-review` skill becomes one section of it; the old file stays until
+  sub-project 2.
+- **Steps and who runs them** (the full workflow system is sub-project 3; these kinds are fixed now):
+  **service** (the editor, keys from the vault, under the spend guard: image generation, image to 3D, a voice line),
+  **command** (the editor, as a job: a Blender bake, an export), **agent** (the connected agent, through the inbox:
+  work that needs judgement), **review** (the user, in the UI). The agent gets only agent steps.
+- **`services` extension point** in `plugin.json`:
+
+  ```jsonc
+  "services": [{
+    "id": "image", "title": "Image generation", "summary": "Makes images from a description",
+    "provider": "Codex (your ChatGPT login)",
+    "needs": [{ "kind": "cli", "command": "codex", "help": "Install the Codex app and sign in" }],   // or { "kind": "key", "name": "HF_TOKEN", "help": "…" }
+    "actions": [{ "id": "generate", "title": "Generate an image", "cost": { "estimate": 0.04, "unit": "image" } }]
+  }]
+  ```
+
+  The plugin's server part implements each action (`api.services.provide(id, action, fn)`); the editor calls it with
+  a connection, never handing out a raw key.
+- **Vault:** keys are kept in the macOS Keychain (`security`, run directly, no shell), under the service's id;
+  elsewhere in `~/.nfgames-editor/secrets.json` with owner-only permissions, and the Services screen says so.
+- **Spend guard:** each paid action shows its estimate before it runs; a budget per service (settings); a ledger in
+  `~/.nfgames-editor/spend.json`; above the confirmation threshold (default $0.50 a call or the remaining budget) the
+  editor asks the user, also when an agent asked for it.
+- **Services screen:** a card per service in plain words ("Image generation · via your Codex login"), **Connect**
+  (paste a key, or check a local app is installed and signed in), a status light, this month's spend.
+- **Agent status:** the watcher writes a heartbeat (`<reviews>/.agent.json`: agent name, process id, time) every
+  20 s; the top bar shows "Agent: Claude Code · watching" when it is fresh, else "No agent connected" with what to
+  tell an agent ("read skills/nfgames/SKILL.md").
+
 ### Compatibility
 
 - The workbench is the home page `/`. Until sub-project 2 ports them, the map editor (moving to `/map`) and the
@@ -190,10 +234,15 @@ incompatible (with the version it needs) and stays off. Breaking changes only in
   parsing), kept free of the DOM so Node can test them.
 - Browser (Playwright): the workbench loads; the sample plugin's tool, panel and command appear; ⌘K runs the
   command; turning the plugin off removes its parts live; a broken plugin is isolated; the classic tools open.
+- Agents and services: the vault (a fake `security` on the PATH in tests; the file fallback with mode 0600); the
+  spend guard (estimate shown, budget refused, confirmation needed above the threshold, ledger written); a service
+  action called through the host with its key never leaving the host; the watcher's heartbeat and the agent status;
+  a service request file answered.
 - The existing 105 tests keep passing.
 
 ## Deliverables
 
 Host and shell as above; the `--nf-*` tokens and the first components; Settings and Plugins screens;
 `nfgames plugin add/update/remove`; **a plugin authoring guide** (`docs/plugins.md`); **a sample plugin**
-(`examples/plugins/hello`: a tool, a panel, a command, a server route); README and security notes.
+(`examples/plugins/hello`: a tool, a panel, a command, a server route, a service); **`skills/nfgames/SKILL.md`**;
+the Services screen and spend guard; README and security notes.
