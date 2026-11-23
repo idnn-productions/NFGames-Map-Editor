@@ -64,7 +64,8 @@ export function createJobs(project, { dryRun = false } = {}) {
     const end = (state, text) => { mine.state = state; mine.endedAt = Date.now(); add(text); try { onDone(mine); } catch { /* a listener's problem */ } return mine; };
     const command = (s) => new Promise((ok, no) => {
       const [file, ...args] = s.command;
-      const child = spawn(file, args, { cwd: s.cwd || project.root, shell: false, windowsHide: true });
+      // no input: a program that reads standard input when it is open (codex exec does) must not wait for it
+      const child = spawn(file, args, { cwd: s.cwd || project.root, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       child.stdout.on('data', (d) => add(String(d))); child.stderr.on('data', (d) => add(String(d)));
       child.on('error', no); child.on('close', (code) => (code === 0 ? ok() : no(new Error(`exit ${code}`))));
     });

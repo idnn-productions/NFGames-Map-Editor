@@ -27,6 +27,9 @@ describe('plugin jobs', () => {
     assert.throws(() => jobs.runSteps({ kind: 'x', label: 'busy', steps: [] }), /busy/);
     const done = await ok.done;
     assert.equal(done.state, 'done'); assert.match(done.log, /hello/); assert.match(done.log, /from node/);
+    // a command that reads its standard input until it ends must not wait (it is closed)
+    const stdin = await jobs.runSteps({ kind: 'a.b', label: 'Reads stdin', steps: [{ label: 'cat', command: [process.execPath, '-e', 'process.stdin.resume(); process.stdin.on("end", () => console.log("stdin closed"))'] }] }).done;
+    assert.equal(stdin.state, 'done'); assert.match(stdin.log, /stdin closed/);
     const bad = await jobs.runSteps({ kind: 'a.b', label: 'Bad', steps: [{ label: 'boom', run: () => { throw new Error('nope'); } }, { label: 'never', run: () => {} }] }).done;
     assert.equal(bad.state, 'failed'); assert.match(bad.log, /stopped at "boom": nope/); assert.doesNotMatch(bad.log, /== never/);
   });
