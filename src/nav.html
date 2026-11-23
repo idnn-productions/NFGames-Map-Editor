@@ -19,7 +19,7 @@
 #nfDialog button.primary { background: #ffb366; color: #1a1206; border-color: #ffb366; font-weight: 600; }
 #nfDialog h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8a93a6; margin: 4px 0 6px; }
 </style>
-<nav id="nfnav"><a href="/" data-page="editor">Map editor</a><a href="/viewer" data-page="viewer">Model viewer</a><span class="proj" id="nfProj"></span><button id="nfOpen" title="Open another project folder">📁 Open project…</button></nav>
+<nav id="nfnav"><a href="/" data-page="workbench">Workbench</a><a href="/map" data-page="editor">Map editor</a><a href="/viewer" data-page="viewer">Model viewer</a><span class="proj" id="nfProj"></span><button id="nfOpen" title="Open another project folder">📁 Open project…</button></nav>
 <dialog id="nfDialog">
   <header><b>Open a project folder</b><button id="nfClose" title="Close">✕</button></header>
   <div class="body"><div id="nfRecent"></div><h3>Browse</h3><div class="crumbs" id="nfCrumbs"></div><ul id="nfList"></ul></div>
@@ -30,7 +30,7 @@
 // project…", a browser of the folders under your home folder. Opening one switches the project for both pages.
 const q = (id) => document.getElementById(id);
 const node = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
-const here = location.pathname.startsWith('/viewer') ? 'viewer' : 'editor';
+const here = location.pathname.startsWith('/viewer') ? 'viewer' : location.pathname.startsWith('/map') ? 'editor' : 'workbench';
 for (const a of document.querySelectorAll('#nfnav a')) a.classList.toggle('here', a.dataset.page === here);
 let at = null, trustFor = null;
 const msg = (text, cls = 'dim') => { q('nfMsg').className = `msg ${cls}`; q('nfMsg').textContent = text; };
@@ -56,7 +56,7 @@ async function open(root, trust = false) {
   if (!r.ok) { msg(b.error || `${r.status}`, 'bad'); return; }
   if (b.needsTrust) { trustFor = root; msg(`${b.config.replace(info.home, '~')} is code the editor will run. Open only projects you trust.`, 'bad'); q('nfGo').textContent = 'Run its config and open'; return; }
   window.__nfSwitching = true;
-  location.href = here === 'viewer' ? '/viewer' : '/';
+  location.href = here === 'viewer' ? '/viewer' : here === 'editor' ? '/map' : '/';
 }
 q('nfOpen').onclick = async () => {
   q('nfRecent').replaceChildren(...(info.recent.length ? [node('h3', { textContent: 'Recent' }), node('ul', {}, ...info.recent.map((p) => node('li', { title: p, onclick: () => open(p) }, '★', node('span', { className: 'n', textContent: p.replace(info.home, '~') }))))] : []));

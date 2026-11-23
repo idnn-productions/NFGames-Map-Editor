@@ -10,8 +10,8 @@
 // API, no other file. Child processes are started with a fixed list of arguments from the project's config (and a
 // checked map name): nothing from a request reaches a shell.
 import { createServer } from 'node:http';
-import { createReadStream, readFileSync, statSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CONFIG_NAME, EDITOR_ROOT, loadProject } from './project.mjs';
 import { plantEditing } from './plan.mjs';
 import { view3d } from './view3d.mjs';
@@ -36,10 +36,22 @@ export const hostAllowed = (host, port) => host === `127.0.0.1:${port}` || host 
 export const writeAllowed = (headers, port) => hostAllowed(headers.host, port) && headers.origin === `http://${headers.host}` && String(headers['content-type'] || '').startsWith('application/json');
 
 /** editor.html with the plant edits it shares with the server (plan.mjs plantEditing) and the 3D view's maths (view3d.mjs) written into it. */
-export const page = () => readFileSync(join(EDITOR_ROOT, 'src', 'editor.html'), 'utf8').replace('/*@plantEditing*/ null', () => plantEditing.toString()).replace('/*@view3d*/ null', () => view3d.toString()).replace('<!--@nav-->', () => readFileSync(join(EDITOR_ROOT, 'src', 'nav.html'), 'utf8'));
+const navHtml = () => readFileSync(join(EDITOR_ROOT, 'src', 'nav.html'), 'utf8');
+const importMap = () => JSON.stringify({ imports: { three: `${vendorBase()}build/three.module.js`, 'three/addons/': `${vendorBase()}examples/jsm/` } });
+export const page = () => readFileSync(join(EDITOR_ROOT, 'src', 'editor.html'), 'utf8').replace('/*@plantEditing*/ null', () => plantEditing.toString()).replace('/*@view3d*/ null', () => view3d.toString()).replace('<!--@nav-->', navHtml);
 
 /** viewer.html with the import map for the pinned three.js written into it (served from /vendor once installed). */
-export const viewerPage = () => readFileSync(join(EDITOR_ROOT, 'src', 'viewer.html'), 'utf8').replace('/*@importmap*/', () => JSON.stringify({ imports: { three: `${vendorBase()}build/three.module.js`, 'three/addons/': `${vendorBase()}examples/jsm/` } })).replace('<!--@nav-->', () => readFileSync(join(EDITOR_ROOT, 'src', 'nav.html'), 'utf8'));
+export const viewerPage = () => readFileSync(join(EDITOR_ROOT, 'src', 'viewer.html'), 'utf8').replace('/*@importmap*/', importMap).replace('<!--@nav-->', navHtml);
+/** The workbench (src/shell/index.html) with the import map and the nav bar written in. */
+export const shellPage = () => readFileSync(join(EDITOR_ROOT, 'src', 'shell', 'index.html'), 'utf8').replace('/*@importmap*/', importMap).replace('<!--@nav-->', navHtml);
+const SHELL = join(EDITOR_ROOT, 'src', 'shell');
+/** A file of src/shell for /shell/<rest>: inside that folder, no hidden parts. */
+function shellFile(rest) {
+  let rel; try { rel = decodeURIComponent(rest); } catch { return null; }
+  const f = resolve(SHELL, rel), r = relative(SHELL, f);
+  if (!r || r.startsWith('..') || isAbsolute(r) || r.split(sep).some((x) => x.startsWith('.')) || rel.includes('\0') || !existsSync(f) || !statSync(f).isFile()) return null;
+  return f;
+}
 
 /** The plan compiled (when the project compiles) and checked, for the page: nothing is written. */
 export async function preview(project, name, plan, plants = undefined, plugins = null) {
@@ -92,7 +104,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
     return { ok: true, root: dir, maps: project.listMaps() };
   }
   const server = createServer(async (req, res) => {
-    const send = (code, body, type = 'application/json') => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' }); res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body)); };
+    const send = (code, body, type = 'application/json') => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' }); res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body)); };
     try {
       if (!hostAllowed(req.headers.host, port)) return send(403, { error: `local only: open http://127.0.0.1:${port}/` });
       const url = new URL(req.url, 'http://x'), path = url.pathname;
@@ -101,7 +113,10 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
         for await (const part of req) { size += part.length; if (size > limit) { req.resume(); throw Object.assign(new Error('too big'), { code: 413 }); } parts.push(part); }
         return JSON.parse(Buffer.concat(parts).toString('utf8'));
       };
-      if (req.method === 'GET' && (path === '/' || path === '/index.html')) return send(200, page(), 'text/html; charset=utf-8');
+      if (req.method === 'GET' && (path === '/' || path === '/index.html')) return send(200, shellPage(), 'text/html; charset=utf-8');
+      if (req.method === 'GET' && path === '/map') return send(200, page(), 'text/html; charset=utf-8');
+      { const m = req.method === 'GET' && /^\/shell\/(.+)$/.exec(path);
+        if (m) { const f = shellFile(m[1]); return f ? send(200, readFileSync(f), TYPES[extname(f)] || 'application/octet-stream') : send(404, { error: 'not here' }); } }
       if (req.method === 'GET' && path === '/favicon.ico') { res.writeHead(204); return res.end(); }
       if (req.method === 'GET' && path === '/viewer') return send(200, viewerPage(), 'text/html; charset=utf-8');
       if (req.method === 'GET' && path.startsWith('/vendor/')) { const f = vendorFile(editorRoot, path); return f ? send(200, readFileSync(f.file), f.type) : send(404, { error: 'not here' }); }
@@ -116,8 +131,10 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       // the model viewer and the open project: none of this is about a map
       if (req.method === 'GET' && path === '/api/events') return events.handle(req, res);
       if (req.method === 'GET' && path === '/api/plugins') return send(200, { api: API_VERSION, plugins: plugins.list() });
-      { const m = req.method === 'POST' && /^\/api\/plugins\/([a-z0-9.-]+)\/(trust|enable|disable|reload)$/.exec(path);
-        if (m) { try { const [, id, verb] = m; if (verb === 'trust') plugins.trust(id); else if (verb === 'reload') await plugins.reload(id); else await plugins.setEnabled(id, verb === 'enable'); return send(200, { plugins: plugins.list() }); } catch (e) { return send(e.code || 500, { error: e.message, plugins: plugins.list() }); } } }
+      { const m = req.method === 'POST' && /^\/api\/plugins\/([a-z0-9.-]+)\/(trust|enable|disable|reload|activate)$/.exec(path);
+        if (m) { try { const [, id, verb] = m; if (verb === 'trust') plugins.trust(id); else if (verb === 'reload') await plugins.reload(id); else if (verb === 'activate') await plugins.activate(id); else await plugins.setEnabled(id, verb === 'enable'); return send(200, { plugins: plugins.list() }); } catch (e) { return send(e.code || 500, { error: e.message, plugins: plugins.list() }); } } }
+      { const m = /^\/api\/plugins\/([a-z0-9.-]+)\/settings$/.exec(path);
+        if (m) { try { if (req.method === 'GET') return send(200, plugins.getSettings(m[1])); const { key, value } = await body(); return send(200, plugins.setSetting(m[1], key, value)); } catch (e) { return send(e.code || 500, { error: e.message }); } } }
       { const m = /^\/api\/p\/([a-z0-9.-]+)\/(.*)$/.exec(path);
         if (m) { const r = await plugins.route(m[1], req.method, m[2], req, res, () => body()); return send(r.status, r.body); } }
       if (req.method === 'GET' && path === '/api/projects') return send(200, { current: { root: project.root, name: basename(project.root), title: project.options.title || null, maps: project.listMaps().length }, recent: recentProjects(stateDir), home: insideHome(home, home) });
@@ -129,7 +146,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       if (req.method === 'GET' && path === '/api/model') {
         const file = resolveModel(project.modelsDir, url.searchParams.get('path'));
         if (!file) return send(404, { error: 'no such model' });
-        res.writeHead(200, { 'Content-Type': 'model/gltf-binary', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' });
+        res.writeHead(200, { 'Content-Type': 'model/gltf-binary', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
         return createReadStream(file).pipe(res);
       }
       if (req.method === 'POST' && path === '/api/review') { const job = await body(LIMITS.body); try { return send(200, createReview(project, job)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }

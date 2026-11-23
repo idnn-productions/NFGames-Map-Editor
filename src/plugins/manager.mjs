@@ -156,6 +156,24 @@ export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir
     if (!r || r.startsWith('..') || isAbsolute(r) || r.split(sep).some((s) => s.startsWith('.')) || !existsSync(f) || !statSync(f).isFile()) return null;
     return f;
   }
+  /** A plugin's settings: { schema, values } (the manifest's defaults where nothing was set). */
+  function getSettings(id) {
+    const p = find(id);
+    if (!p || !p.manifest) throw Object.assign(new Error('no such plugin'), { code: 404 });
+    const schema = p.manifest.contributes?.settings || {}, saved = readJson(settingsFile, {})[id] || {};
+    return { schema, values: Object.fromEntries(Object.entries(schema).map(([k, s]) => [k, k in saved ? saved[k] : s?.default])) };
+  }
+  /** Sets one setting, checked against its schema (type, and enum when there is one). */
+  function setSetting(id, key, value) {
+    const { schema } = getSettings(id), s = schema[key], bad = (t) => { throw Object.assign(new Error(t), { code: 400 }); };
+    if (!s) bad(`no such setting: ${key}`);
+    const type = s.type || typeof s.default;
+    if (['number', 'boolean', 'string'].includes(type) && typeof value !== type) bad(`${key} is a ${type}`);
+    if (Array.isArray(s.enum) && !s.enum.includes(value)) bad(`${key} is one of ${s.enum.join(', ')}`);
+    const all = readJson(settingsFile, {}); all[id] = { ...(all[id] || {}), [key]: value }; writeJson(settingsFile, all);
+    events.emit('settings/changed', { id, key });
+    return getSettings(id);
+  }
   refresh();
-  return { refresh, list, activate, deactivate, fire, route, runHook, setEnabled, trust, reload, close, asset, get plugins() { return plugins; } };
+  return { refresh, list, activate, deactivate, fire, route, runHook, setEnabled, trust, reload, close, asset, getSettings, setSetting, get plugins() { return plugins; } };
 }
