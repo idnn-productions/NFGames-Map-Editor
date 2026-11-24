@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHost } from '../src/host.mjs';
 import { programOf } from '../src/plugins/manager.mjs';
-import { readPipeline, findBlender, missingModels, missingNodes, setInputs, outcomeOf, checksOf, comfy } from '../plugins/comfy-model/comfy.mjs';
+import { readPipeline, findBlender, findAutoRemesher, SOURCE_FACES, missingModels, missingNodes, setInputs, outcomeOf, checksOf, comfy } from '../plugins/comfy-model/comfy.mjs';
 import { newDraft, startRound, settleRound, pickConcept, approveConcept, setViews, pickView, approveViews } from '../plugins/model-maker/draft.mjs';
 import { REPO, sampleCopy, fakeCommand, dataBytes, PNG_1PX } from './helpers.mjs';
 import { fakeComfy, fakeWorkflow, FAKE_GLB } from './fake-comfy.mjs';
@@ -17,14 +17,21 @@ const BLENDER = `#!/usr/bin/env node
 const fs = require('fs'), a = process.argv.slice(2), rest = a.slice(a.indexOf('--') + 1), name = rest[rest.indexOf('--name') + 1];
 if (!a.includes('--background') || !a.includes('--python')) { console.error('not headless'); process.exit(4); }
 if (/fails/.test(name)) { console.error('Error: Python: Traceback'); process.exit(3); }
+if (/blender_retopo\.py$/.test(a[a.indexOf('--python') + 1])) {
+  if (/crumples/.test(name)) { console.error('AutoRemesher failed (exit 1)'); process.exit(1); }
+  if (!fs.existsSync(rest[rest.indexOf('--autoremesher') + 1]) || rest[rest.indexOf('--image-format') + 1] !== 'AUTO') { console.error('no remesher'); process.exit(5); }
+  fs.copyFileSync(rest[0], rest[1]);
+  console.log('RETOPO ' + JSON.stringify({ name, before: { faces: 200000 }, after: { faces: Number(rest[rest.indexOf('--quads') + 1]) + 4, quads: Number(rest[rest.indexOf('--quads') + 1]) }, baked: ['base colour', 'normal'] }));
+  process.exit(0);
+}
 if (!/silent/.test(name)) fs.copyFileSync(rest[0], rest[1]);
 console.log('FINISH ' + JSON.stringify({ name, length: Number(rest[rest.indexOf('--length') + 1]), pivot: rest[rest.indexOf('--pivot') + 1], after: { triangles: 12 } }));`;
 
 /** A workflows folder as the repository lays it out. */
 function workflowsDir(top, name = 'workflows', pipeline = {}) {
   const dir = join(top, name); mkdirSync(join(dir, 'workflows', 'api'), { recursive: true }); mkdirSync(join(dir, 'tools'), { recursive: true });
-  writeFileSync(join(dir, 'workflows', 'api', 'mv.json'), JSON.stringify(fakeWorkflow())); writeFileSync(join(dir, 'tools', 'blender_finish.py'), '# finish\n');
-  writeFileSync(join(dir, 'pipeline.json'), JSON.stringify({ pipeline: 'asset3d', version: 1, multiview: 'workflows/api/mv.json', finish: 'tools/blender_finish.py', setup: 'https://example.org/setup', ...pipeline }));
+  writeFileSync(join(dir, 'workflows', 'api', 'mv.json'), JSON.stringify(fakeWorkflow())); writeFileSync(join(dir, 'tools', 'blender_finish.py'), '# finish\n'); writeFileSync(join(dir, 'tools', 'blender_retopo.py'), '# clean-up\n');
+  writeFileSync(join(dir, 'pipeline.json'), JSON.stringify({ pipeline: 'asset3d', version: 1, multiview: 'workflows/api/mv.json', finish: 'tools/blender_finish.py', cleanup: 'tools/blender_retopo.py', setup: 'https://example.org/setup', ...pipeline }));
   return dir;
 }
 
@@ -51,6 +58,8 @@ describe('the model service\'s parts', () => {
     const bad = workflowsDir(top, 'canvas'); writeFileSync(join(bad, 'workflows', 'api', 'mv.json'), JSON.stringify({ nodes: [], links: [] }));
     assert.throws(() => readPipeline(bad), /API format/);
     assert.equal(readPipeline(workflowsDir(top, 'http', { setup: 'javascript:alert(1)' })).setup, null);
+    assert.ok(existsSync(p.cleanup)); assert.equal(readPipeline(workflowsDir(top, 'older', { cleanup: undefined })).cleanup, null);   // a checkout from before the clean-up
+    assert.throws(() => readPipeline(workflowsDir(top, 'nocleanup', { cleanup: 'tools/none.py' })), /missing tools\/none\.py/);
   });
   it('Blender: the setting, else the PATH, else where it is usually installed, the newest first', () => {
     const at = (files) => ({ exists: (f) => files.includes(f), list: (d) => files.filter((f) => f.startsWith(`${d}\\`)).map((f) => f.slice(d.length + 1).split('\\')[0]) });
@@ -96,6 +105,18 @@ describe('the model service\'s parts', () => {
     assert.equal(models({ a3d: { ultrashape: { code: false, packages: [], checkpoints: [] } }, ultrashape: false }).ok, true);
     const old = models({ a3d: null }); assert.equal(old.ok, null); assert.match(old.text, /UltraShape: not checked/);
     assert.deepEqual(checksOf({ ...base, a3d: null }).checks.map((c) => c.id), ['workflows', 'comfy', 'nodes', 'models', 'blender']);
+    const tidy = (more) => checksOf({ ...base, a3d: null, cleanup: true, ...more }).checks.find((c) => c.id === 'cleanup');
+    assert.equal(tidy({ remesher: '/r/autoremesher' }).ok, true);
+    assert.equal(tidy({}).ok, false); assert.match(tidy({}).text, /AutoRemesher was not found/); assert.match(tidy({ remesherSetting: '/x/ar' }).text, /is not at \/x\/ar/);
+    const older = tidy({ remesher: '/r/autoremesher', pipeline: { ...base.pipeline, cleanup: null } }); assert.equal(older.ok, false); assert.match(older.text, /no clean-up script/);
+  });
+  it('AutoRemesher: the setting, else the PATH; a setting that names nothing is not replaced by a guess', () => {
+    const at = (files) => ({ exists: (f) => files.includes(f) });
+    assert.equal(findAutoRemesher('D:\\ar\\autoremesher.exe', { ...at(['D:\\ar\\autoremesher.exe']), platform: 'win32', env: {} }), 'D:\\ar\\autoremesher.exe');
+    assert.equal(findAutoRemesher('D:\\gone.exe', { ...at(['C:\\bin\\autoremesher.exe']), platform: 'win32', env: { Path: 'C:\\bin' } }), null);
+    assert.equal(findAutoRemesher('', { ...at(['C:\\bin\\autoremesher.exe']), platform: 'win32', env: { Path: 'C:\\x;C:\\bin' } }), 'C:\\bin\\autoremesher.exe');
+    assert.equal(findAutoRemesher('', { ...at(['/opt/ar/AutoRemesher']), platform: 'darwin', env: { PATH: '/usr/bin:/opt/ar' } }), '/opt/ar/AutoRemesher');
+    assert.equal(findAutoRemesher('', { ...at([]), platform: 'linux', env: { PATH: '/usr/bin' } }), null);
   });
   it('an address that is not one is refused before anything is asked', () => {
     for (const bad of ['', 'localhost:8188', 'file:///etc', 'http://a/b', null]) assert.throws(() => comfy(bad), /address should look like/, String(bad));
@@ -105,7 +126,7 @@ describe('the model service\'s parts', () => {
 
 describe('the model service', () => {
   const port = 23393 + (process.pid % 500), origin = `http://127.0.0.1:${port}`, KEY = 'nfgames.comfy-model/model';
-  let top, copy, host, restorePath, fake, flows, bin;
+  let top, copy, host, restorePath, fake, flows, bin, remesher;
   const call = (action, input = {}) => fetch(`${origin}/api/services/call`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ key: KEY, action, input, confirmed: true }) }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
   const status = async (input) => { const r = await call('status', input); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body.result; };
   const settings = (values) => writeFileSync(join(top, 'state', 'plugin-settings.json'), JSON.stringify({ 'nfgames.comfy-model': values }));
@@ -132,6 +153,7 @@ describe('the model service', () => {
     for (const p of ['comfy-model', 'model-maker']) cpSync(join(REPO, 'plugins', p), join(builtinDir, p), { recursive: true });
     restorePath = fakeCommand(bin, 'blender', BLENDER);
     flows = workflowsDir(top); mkdirSync(join(top, 'state'), { recursive: true });
+    remesher = join(top, 'autoremesher-stand-in'); writeFileSync(remesher, '');   // only where it is matters: Blender is what would run it
     host = await createHost({ root: copy.root, port, pluginDirs: { builtinDir, userDir: join(top, 'user'), packagesDir: join(top, 'packages') }, stateDir: join(top, 'state'), home: top, securityBin: null });
     await host.listen();
   });
@@ -195,6 +217,30 @@ describe('the model service', () => {
     assert.equal(sent.in_use_ultrashape.value, true); assert.equal(sent.in_target_faces.target_face_count, 60000); assert.equal(sent.out_model.filename_prefix, 'nfgames/kettle');
     assert.deepEqual(fake.calls.views, [{ filename: 'kettle_00001_.glb', subfolder: 'nfgames', type: 'output' }]);
     assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')), []);   // nothing left behind
+  });
+  it('clean-up: AutoRemesher is asked for only when the clean-up is; without it nothing is generated', async () => {
+    let s = await status({ cleanup: true }); assert.equal(s.ready, false); assert.equal(check(s, 'cleanup').ok, false); assert.match(check(s, 'cleanup').text, /AutoRemesher was not found/);
+    assert.equal(check(await status(), 'cleanup'), undefined);
+    ready('nobrush');
+    const r = await call('generate', { draft: 'nobrush', length: 1, cleanup: true });
+    assert.notEqual(r.status, 200); assert.match(r.body.error, /Not ready: AutoRemesher was not found/); assert.equal(fake.calls.prompts.length, 0);
+    settings({ comfyUrl: fake.url, workflowsDir: workflowsDir(top, 'older', { cleanup: undefined }), autoremesher: remesher });
+    s = await status({ cleanup: true }); assert.match(check(s, 'cleanup').text, /no clean-up script/);
+    assert.match((await call('generate', { draft: 'nobrush', length: 1, cleanup: true, quads: 20 })).body.error, /quads: from 500/);
+  });
+  it('clean-up: the generated mesh is made larger, goes through the clean-up and then the finish, and the report says so', async () => {
+    ready('teapot'); settings({ comfyUrl: fake.url, workflowsDir: flows, autoremesher: remesher });
+    assert.equal(check(await status({ cleanup: true }), 'cleanup').ok, true);
+    const r = await call('generate', { draft: 'teapot', length: 0.3, cleanup: true, quads: 8000 });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body.result.report.cleanup, { quads: 8000, faces: 8004, from: 200000, baked: ['base colour', 'normal'] });
+    assert.equal(titles(fake.calls.prompts[0]).in_target_faces.target_face_count, SOURCE_FACES);
+    assert.deepEqual(readFileSync(inProject('models', 'teapot', 'teapot.glb')), FAKE_GLB);
+    assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')), []);
+    ready('it-crumples');
+    const bad = await call('generate', { draft: 'it-crumples', length: 1, cleanup: true });
+    assert.notEqual(bad.status, 200); assert.match(bad.body.error, /Clean up into quads[^:]*: exit 1/); assert.ok(!existsSync(inProject('models', 'it-crumples')));
+    assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')), []);
   });
   it('generate: top and bottom go too when both are approved; one of them alone does not', async () => {
     ready('crate', ['front', 'back', 'left', 'right', 'top', 'bottom']);

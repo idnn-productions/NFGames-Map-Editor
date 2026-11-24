@@ -7,14 +7,14 @@ import { shrink } from './shrink.js';
 import { openLarge } from './large.js';
 import { notesPanel } from './notes.js';
 
-const SERVICE = 'nfgames.codex-image/image', MODEL = 'nfgames.comfy-model/model', BLENDER = 'https://www.blender.org/download/', ALL_VIEWS = ['front', 'back', 'left', 'right', 'three-quarter', 'top'];
+const SERVICE = 'nfgames.codex-image/image', MODEL = 'nfgames.comfy-model/model', BLENDER = 'https://www.blender.org/download/', AUTOREMESHER = 'https://github.com/huxingyi/autoremesher/releases', ALL_VIEWS = ['front', 'back', 'left', 'right', 'three-quarter', 'top'];
 const STEPS = [['concept', '① Concept'], ['views', '② Views'], ['model', '③ Model']];
 const post = (body) => ({ method: 'POST', body: JSON.stringify(body) });
 
 export function createScreen({ el, api, doc, slug, then, reopen }) {
   const src = (path) => `/api/p/${api.id}/image?path=${encodeURIComponent(path)}`;
   let draft = null, prompts = {}, step = 'concept', connected = true, gone = false;
-  const form = { name: '', description: '', style: '', count: 4, prompt: {}, viewCount: {}, length: '', faces: 60000, ultrashape: true };   // what is typed, kept across redraws
+  const form = { name: '', description: '', style: '', count: 4, prompt: {}, viewCount: {}, length: '', faces: 60000, ultrashape: true, cleanup: false, quads: 12000 };   // what is typed, kept across redraws
   let made = { views: [], missing: [] };   // what a model would be made from now, as the server sees the draft
   let needs = null, checking = false, modelRun = { state: 'idle' }, elsewhere = null;   // step 3: what it needs; this tab's run; a run this tab did not start
   const running = new Set(), notes = {};   // steps generating in this tab; what went wrong, per step
@@ -104,7 +104,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   async function checkModel() {
     if (checking) return;
     checking = true; draw();
-    try { needs = await api.services.call(MODEL, 'status', { ultrashape: form.ultrashape }); }
+    try { needs = await api.services.call(MODEL, 'status', { ultrashape: form.ultrashape, cleanup: form.cleanup }); }
     catch (e) { needs = { ready: false, queue: null, setup: null, checks: [{ id: 'service', ok: false, text: `The model service did not answer: ${e.message}`, help: 'See Plugins: "3D model generation (ComfyUI)" must be on.' }] }; }
     checking = false; draw();
   }
@@ -116,7 +116,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     if (job) { modelRun = { state: 'failed', error: `The editor is busy (${job.label || job.kind || 'a job'} is running). Try again when it is done.` }; return draw(); }
     await checkModel();
     if (!needs.ready) return;
-    const input = { draft: slug, length, faces: form.faces, ultrashape: form.ultrashape };
+    const input = { draft: slug, length, faces: form.faces, ultrashape: form.ultrashape, ...(form.cleanup ? { cleanup: true, quads: form.quads } : {}) };
     if (needs.queue > 0) {
       if (!(await confirmDialog('ComfyUI is busy', `ComfyUI is working on ${needs.queue} other prompt${needs.queue > 1 ? 's' : ''}: this one waits its turn, and the two share the graphics card.`, 'Queue it anyway'))) return;
       input.wait = true;
@@ -231,8 +231,8 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     const mark = { true: ['ok', '✓'], false: ['bad', '✕'], null: ['unknown', '?'] };
     const row = (c) => h('li', { className: `mm-need ${mark[c.ok][0]}` }, h('span', { className: 'mark', textContent: mark[c.ok][1] }), h('div', {}, h('div', { textContent: c.text }),
       c.ok === false ? h('div', { className: 'mm-note' }, c.help ? `${c.help} ` : '',
-        ['workflows', 'nodes', 'models'].includes(c.id) && guide ? link('Setup guide', guide) : null, c.id === 'blender' ? link('Get Blender', BLENDER) : null, ' ',
-        ['workflows', 'comfy', 'blender'].includes(c.id) ? btn('Open Settings', () => api.commands.execute('core/settings')) : null, c.id === 'service' ? btn('Open Plugins', () => api.commands.execute('core/plugins')) : null) : null));
+        ['workflows', 'nodes', 'models'].includes(c.id) && guide ? link('Setup guide', guide) : null, c.id === 'blender' ? link('Get Blender', BLENDER) : null, c.id === 'cleanup' ? link('Get AutoRemesher', AUTOREMESHER) : null, ' ',
+        ['workflows', 'comfy', 'blender', 'cleanup'].includes(c.id) ? btn('Open Settings', () => api.commands.execute('core/settings')) : null, c.id === 'service' ? btn('Open Plugins', () => api.commands.execute('core/plugins')) : null) : null));
     const rows = needs.checks.map(row);
     if (needs.checks.every((c) => c.ok === true)) return h('div', { className: 'mm-needs' }, head, h('details', {}, h('summary', { className: 'mm-need ok', textContent: '✓ Everything this step needs is there.' }), h('ul', {}, ...rows)));
     return h('div', { className: 'mm-needs' }, head,
@@ -250,8 +250,11 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
       needsBox(),
       h('div', { className: 'mm-row', style: 'margin-top:12px' },
         h('span', { className: 'mm-note', textContent: 'Longest side (metres)' }), field.key(h('input', { type: 'number', min: 0, step: 'any', placeholder: '1.2', value: form.length, style: 'width:90px', oninput: (e) => { form.length = e.target.value; const b = el.querySelector('.mm-go'); if (b) b.disabled = !can || !(Number(form.length) > 0); } }), 'length'),
-        h('span', { className: 'mm-note', textContent: 'Triangles' }), field.key(h('input', { type: 'number', min: 1000, max: 2000000, step: 1000, value: form.faces, style: 'width:100px', oninput: (e) => { form.faces = Math.max(1000, Math.min(2000000, Math.round(Number(e.target.value)) || 60000)); } }), 'faces'),
+        ...(form.cleanup
+          ? [h('span', { className: 'mm-note', textContent: 'Quads (about)' }), field.key(h('input', { type: 'number', min: 500, max: 500000, step: 500, value: form.quads, style: 'width:100px', oninput: (e) => { form.quads = Math.max(500, Math.min(500000, Math.round(Number(e.target.value)) || 12000)); } }), 'quads')]
+          : [h('span', { className: 'mm-note', textContent: 'Triangles' }), field.key(h('input', { type: 'number', min: 1000, max: 2000000, step: 1000, value: form.faces, style: 'width:100px', oninput: (e) => { form.faces = Math.max(1000, Math.min(2000000, Math.round(Number(e.target.value)) || 60000)); } }), 'faces')]),
         h('label', { className: 'mm-inline' }, field.key(h('input', { type: 'checkbox', checked: form.ultrashape, onchange: (e) => { form.ultrashape = e.target.checked; checkModel(); } }), 'ultrashape'), ' Refine with UltraShape'),
+        h('label', { className: 'mm-inline', title: 'Remeshes the model into quads with AutoRemesher, unwraps it again and bakes its textures onto the new mesh' }, field.key(h('input', { type: 'checkbox', checked: form.cleanup, onchange: (e) => { form.cleanup = e.target.checked; checkModel(); } }), 'cleanup'), ' Clean up into quads'),
         h('span', { className: 'grow' }),
         btn(running.has('model') ? 'Generating…' : draft.model ? 'Generate model again' : 'Generate model', () => generateModel(), { cls: 'primary mm-go', disabled: !can || !(Number(form.length) > 0), title: 'A few minutes on the graphics card' })),
       modelRun.state === 'running' ? h('p', { className: 'mm-wait', textContent: `${modelRun.step}. A model takes a few minutes; Jobs shows its output.` }) : null,
@@ -259,7 +262,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
       modelRun.state === 'failed' ? h('p', { className: 'mm-bad', textContent: modelRun.error }) : null,
       draft.model && modelRun.state !== 'running' ? h('div', { className: 'mm-made' },
         h('p', {}, `Saved as ${draft.model.path}, ${draft.model.length} m on its longest side`,
-          after ? `: ${Number(after.triangles).toLocaleString()} triangles${after.mb ? `, ${after.mb} MB` : ''}${r.seconds ? `, made in ${r.seconds} s` : ''}.` : '.'),
+          after ? `: ${r.report.cleanup && r.report.cleanup.quads ? `${Number(r.report.cleanup.quads).toLocaleString()} quads, ` : ''}${Number(after.triangles).toLocaleString()} triangles${after.mb ? `, ${after.mb} MB` : ''}${r.seconds ? `, made in ${r.seconds} s` : ''}.` : '.'),
         Object.assign(h('a', { className: 'mm-btn primary', textContent: 'Open in the model viewer', href: `/viewer?model=${encodeURIComponent(draft.model.path.replace(/^models\//, ''))}` }), { target: '_blank', rel: 'noopener' })) : null];
   }
   function draw() {

@@ -1,15 +1,17 @@
 // 3D model generation: a draft's approved views go to ComfyUI on this computer (the asset3d workflow from the user's
 // checkout of comfy-ui-model-workflows), the result is finished in Blender (scale, pivot, compressed textures) and
 // saved as models/<slug>/<slug>.glb with <slug>.refs/ beside it, which is what the model viewer shows.
-//   status   { ultrashape = true }  ->  { ready, checks: [{ id, ok, text, help }], queue, setup }
-//   generate { draft, length, faces = 60000, ultrashape = true, pivot = 'centre', wait = false, replace = false }
+//   status   { ultrashape = true, cleanup = false }  ->  { ready, checks: [{ id, ok, text, help }], queue, setup }
+//   generate { draft, length, faces = 60000, ultrashape = true, cleanup = false, quads = 12000, pivot = 'centre', wait = false, replace = false }
 //                                   ->  { model, refs, report, seconds }
+// cleanup: the generated mesh is remeshed into about `quads` quads with new UVs and re-baked maps (Blender runs
+// AutoRemesher) before it is finished; report.cleanup then holds what that step said.
 // The rules that keep a GPU run from starting by accident are here, for every caller: nothing is queued behind other
 // ComfyUI work without `wait`, and no model is replaced without `replace`.
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { modelViews } from '../model-maker/draft.mjs';
-import { readPipeline, findBlender, comfy, checksOf, setInputs, outcomeOf } from './comfy.mjs';
+import { readPipeline, findBlender, findAutoRemesher, comfy, checksOf, setInputs, outcomeOf, SOURCE_FACES } from './comfy.mjs';
 
 const POLL = 3000, LIMIT = 30 * 60 * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -17,8 +19,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function activate(api) {
   const f = api.files;
   /** Everything the step needs, looked at now. Never throws: what is wrong is in the checks. */
-  async function look({ ultrashape = true } = {}) {
-    const url = api.settings.get('comfyUrl'), blenderSetting = String(api.settings.get('blender') || '').trim();
+  async function look({ ultrashape = true, cleanup = false } = {}) {
+    const url = api.settings.get('comfyUrl'), blenderSetting = String(api.settings.get('blender') || '').trim(), remesherSetting = String(api.settings.get('autoremesher') || '').trim();
     let pipeline = null, pipelineError = null, client = null, info = null, comfyError = null, a3d = null, queue = null;
     try { pipeline = readPipeline(api.settings.get('workflowsDir')); } catch (e) { pipelineError = e.message; }
     // the queue first: it answers at once and shows ComfyUI is there. Its node list is megabytes and takes seconds, and
@@ -26,13 +28,13 @@ export function activate(api) {
     try { client = comfy(url); queue = await client.queueLength(); info = await client.objectInfo(); if (!info || typeof info !== 'object' || Array.isArray(info)) throw new Error(`What answers at ${client.base} is not ComfyUI.`); }
     catch (e) { info = null; queue = null; comfyError = e.message; }
     if (info) { try { a3d = await client.asset3dStatus(); } catch { a3d = null; } }
-    const blender = findBlender(blenderSetting);
-    const { checks, setup } = checksOf({ pipeline, pipelineError, url: client?.base || url, info, comfyError, a3d, blender, blenderSetting, ultrashape });
-    return { pipeline, client, blender, checks, setup, queue, ready: checks.every((c) => c.ok !== false) };
+    const blender = findBlender(blenderSetting), remesher = cleanup ? findAutoRemesher(remesherSetting) : null;
+    const { checks, setup } = checksOf({ pipeline, pipelineError, url: client?.base || url, info, comfyError, a3d, blender, blenderSetting, ultrashape, cleanup, remesher, remesherSetting });
+    return { pipeline, client, blender, remesher, checks, setup, queue, ready: checks.every((c) => c.ok !== false) };
   }
 
   api.services.provide('model', 'status', async (input = {}) => {
-    const { ready, checks, queue, setup } = await look({ ultrashape: input.ultrashape !== false });
+    const { ready, checks, queue, setup } = await look({ ultrashape: input.ultrashape !== false, cleanup: input.cleanup === true });
     return { ready, checks, queue, setup };
   });
 
@@ -47,6 +49,8 @@ export function activate(api) {
     const length = input.length, faces = Math.round(Number(input.faces ?? 60000)), ultrashape = input.ultrashape !== false, pivot = input.pivot === 'base' ? 'base' : 'centre';
     if (typeof length !== 'number' || !Number.isFinite(length) || !(length > 0) || length > 100000) throw new Error('length: the longest side in metres, more than 0');
     if (!Number.isFinite(faces) || faces < 1000 || faces > 2000000) throw new Error('faces: from 1000 to 2000000 triangles');
+    const cleanup = input.cleanup === true, quads = Math.round(Number(input.quads ?? 12000));
+    if (cleanup && (!Number.isFinite(quads) || quads < 500 || quads > 500000)) throw new Error('quads: from 500 to 500000');
     const kept = api.project.options?.models;
     if (kept === false || (typeof kept === 'string' && !['', '.', 'models'].includes(kept.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, ''))))
       throw new Error(`models: this project keeps its models in ${kept === false ? 'no folder' : kept}; the model step writes to models/`);
@@ -54,12 +58,14 @@ export function activate(api) {
     if (f.exists(model) && input.replace !== true) throw new Error(`${model} is already there: say replace to make it again`);
     for (const v of ['concept', ...views]) if (!f.exists(v === 'concept' ? `${dir}/concept.png` : `${dir}/views/${v}.png`)) throw new Error(`draft: its ${v} image is missing: approve the views again`);
 
-    const seen = await look({ ultrashape });
+    const seen = await look({ ultrashape, cleanup });
     if (!seen.ready) throw new Error(`Not ready: ${seen.checks.filter((c) => c.ok === false).map((c) => c.text).join('; ')}`);
     if (seen.queue > 0 && input.wait !== true) throw new Error(`ComfyUI is working on ${seen.queue} other prompt${seen.queue > 1 ? 's' : ''}: say wait to queue behind ${seen.queue > 1 ? 'them' : 'it'}`);
-    const { client, pipeline, blender } = seen, poles = views.includes('top') && views.includes('bottom');
-    const raw = join(api.storage, `${slug}-raw.glb`), out = join(api.storage, `${slug}.glb`), started = Date.now();
-    for (const old of [raw, out]) rmSync(old, { force: true });
+    const { client, pipeline, blender, remesher } = seen, poles = views.includes('top') && views.includes('bottom');
+    const raw = join(api.storage, `${slug}-raw.glb`), clean = join(api.storage, `${slug}-clean.glb`), out = join(api.storage, `${slug}.glb`), started = Date.now();
+    const made = cleanup ? Math.max(faces, SOURCE_FACES) : faces;   // triangles asked of ComfyUI
+    const headless = ['--background', '--factory-startup', '--python-exit-code', '1', '--python'];   // a script that fails stops its step
+    for (const old of [raw, clean, out]) rmSync(old, { force: true });
     const sent = {}; let id = null, glb = null, report = null, run = null;
 
     run = api.jobs.run(`Generate model: ${draft.name}`, [
@@ -67,8 +73,8 @@ export function activate(api) {
         for (const v of views) { sent[v] = await client.upload(`${v}.png`, `nfgames/${slug}`, f.read(`${dir}/views/${v}.png`, null)); log(`${v} -> ${sent[v]}\n`); }
       } },
       { label: 'Generate (ComfyUI)', run: async (log) => {
-        id = await client.prompt(setInputs(pipeline.multiview, { views: sent, poles, ultrashape, faces, prefix: `nfgames/${slug}` }));
-        log(`queued as ${id}: ${views.length} views, ${faces} triangles${ultrashape ? ', refined with UltraShape' : ''}\n`);
+        id = await client.prompt(setInputs(pipeline.multiview, { views: sent, poles, ultrashape, faces: made, prefix: `nfgames/${slug}` }));
+        log(`queued as ${id}: ${views.length} views, ${made} triangles${ultrashape ? ', refined with UltraShape' : ''}\n`);
         for (let said = Date.now(); ;) {
           const entry = await client.history(id);
           if (entry?.status?.status_str) { const o = outcomeOf(entry); if (!o.ok) throw new Error(o.error); if (!o.glb) throw new Error('ComfyUI finished without a model in its output'); glb = o.glb; break; }
@@ -79,11 +85,13 @@ export function activate(api) {
         log(`generated in ${Math.round((Date.now() - started) / 1000)} s: ${glb.filename}\n`);
       } },
       { label: 'Fetch the model', run: async (log) => { const bytes = await client.view(glb); writeFileSync(raw, bytes); log(`${(bytes.length / 1e6).toFixed(1)} MB\n`); } },
-      { label: 'Finish (Blender)', command: [blender, '--background', '--factory-startup', '--python', pipeline.finish, '--', raw, out, '--length', String(length), '--name', slug, '--pivot', pivot], cwd: api.storage },
+      ...(cleanup ? [{ label: 'Clean up into quads (Blender, AutoRemesher)', command: [blender, ...headless, pipeline.cleanup, '--', raw, clean, '--quads', String(quads), '--autoremesher', remesher, '--image-format', 'AUTO', '--name', slug], cwd: api.storage }] : []),
+      { label: 'Finish (Blender)', command: [blender, ...headless, pipeline.finish, '--', cleanup ? clean : raw, out, '--length', String(length), '--name', slug, '--pivot', pivot], cwd: api.storage },
       { label: 'Save', run: async (log) => {
-        const line = run.job.log.split(/\r?\n/).reverse().find((l) => l.startsWith('FINISH '));
+        const lines = run.job.log.split(/\r?\n/).reverse(), line = lines.find((l) => l.startsWith('FINISH ')), tidy = cleanup ? lines.find((l) => l.startsWith('RETOPO ')) : null;
         if (!line || !existsSync(out)) throw new Error('Blender finished without writing the model');
         try { report = JSON.parse(line.slice(7)); } catch { report = {}; }
+        if (tidy) { try { const t = JSON.parse(tidy.slice(7)); report.cleanup = { quads: t.after?.quads, faces: t.after?.faces, from: t.before?.faces, baked: t.baked }; } catch { /* the model is there; its numbers are not */ } }
         f.write(model, readFileSync(out));
         f.remove(refs);
         f.write(`${refs}/concept.png`, f.read(`${dir}/concept.png`, null));
@@ -92,10 +100,10 @@ export function activate(api) {
       } },
     ]);
     const job = await run.done;
-    for (const old of [raw, out]) rmSync(old, { force: true });
+    for (const old of [raw, clean, out]) rmSync(old, { force: true });
     if (job.state !== 'done') {
       const m = /== .* stopped at "([^"]+)": ([^\n]*)/.exec(job.log.slice(-4000));
-      throw new Error(m ? `${m[1]}: ${m[2]}${m[1].startsWith('Finish') ? ' (see Jobs for Blender\'s output)' : ''}` : 'The model was not made: see Jobs for what happened');
+      throw new Error(m ? `${m[1]}: ${m[2]}${/^(Finish|Clean up)/.test(m[1]) ? ' (see Jobs for Blender\'s output)' : ''}` : 'The model was not made: see Jobs for what happened');
     }
     return { model, refs, report, seconds: Math.round((Date.now() - started) / 1000) };
   });

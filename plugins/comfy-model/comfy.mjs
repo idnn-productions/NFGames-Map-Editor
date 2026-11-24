@@ -5,10 +5,14 @@ import { isAbsolute, posix, resolve, win32 } from 'node:path';
 
 export const PIPELINE_VERSION = 1;
 export const BLENDER_DOWNLOAD = 'https://www.blender.org/download/';
+export const AUTOREMESHER_DOWNLOAD = 'https://github.com/huxingyi/autoremesher/releases';
+/** Triangles of the generated mesh when it is cleaned up into quads afterwards: it is then only what the quads and their maps are made from. */
+export const SOURCE_FACES = 200000;
 const MODEL_FILE = /\.(safetensors|sft|pt|pth|ckpt|bin|gguf|onnx)$/i;
 const VIEW_LOADER = /^in_.*_image$/;
 
-/** The workflows folder `dir` as its pipeline.json describes it: { dir, version, multiview (the graph), finish, setup }.
+/** The workflows folder `dir` as its pipeline.json describes it: { dir, version, multiview (the graph), finish, cleanup, setup }.
+ *  cleanup (the script that remeshes into quads) is null from a checkout older than it.
  *  Throws an Error whose message is for the user. */
 export function readPipeline(dir) {
   if (typeof dir !== 'string' || !dir.trim()) throw new Error('Set the workflows folder: your checkout of comfy-ui-model-workflows.');
@@ -23,11 +27,11 @@ export function readPipeline(dir) {
     const at = resolve(root, rel); if (!existsSync(at)) throw new Error(`The workflows folder is missing ${rel}.`);
     return at;
   };
-  const finish = inside(p.finish, 'finish');
+  const finish = inside(p.finish, 'finish'), cleanup = p.cleanup == null ? null : inside(p.cleanup, 'cleanup');
   let multiview; try { multiview = JSON.parse(readFileSync(inside(p.multiview, 'multiview'), 'utf8')); } catch (e) { throw new Error(/missing|inside/.test(e.message) ? e.message : `${p.multiview} cannot be read as JSON.`); }
   if (!multiview || typeof multiview !== 'object' || Array.isArray(multiview) || !Object.values(multiview).every((n) => n && typeof n.class_type === 'string' && n.inputs && typeof n.inputs === 'object'))
     throw new Error(`${p.multiview} is not a workflow in ComfyUI's API format.`);
-  return { dir: root, version: p.version, multiview, finish, setup: typeof p.setup === 'string' && /^https:\/\//.test(p.setup) ? p.setup : null };
+  return { dir: root, version: p.version, multiview, finish, cleanup, setup: typeof p.setup === 'string' && /^https:\/\//.test(p.setup) ? p.setup : null };
 }
 
 /** Where Blender is: the setting when it names a file; else on the PATH; else where it is usually installed. Or null. */
@@ -43,6 +47,14 @@ export function findBlender(setting, { env = process.env, platform = process.pla
       for (const v of versions) if (exists(win32.join(home, v, 'blender.exe'))) return win32.join(home, v, 'blender.exe');
     }
   } else if (platform === 'darwin' && exists('/Applications/Blender.app/Contents/MacOS/Blender')) return '/Applications/Blender.app/Contents/MacOS/Blender';
+  return null;
+}
+
+/** Where AutoRemesher is: the setting when it names a file; else on the PATH. Or null. */
+export function findAutoRemesher(setting, { env = process.env, platform = process.platform, exists = existsSync } = {}) {
+  if (typeof setting === 'string' && setting.trim()) return exists(setting.trim()) ? setting.trim() : null;
+  const path = platform === 'win32' ? win32 : posix, names = platform === 'win32' ? ['autoremesher.exe'] : ['autoremesher', 'AutoRemesher'];
+  for (const dir of String(env.PATH ?? env.Path ?? '').split(platform === 'win32' ? ';' : ':')) for (const n of names) if (dir && exists(path.join(dir, n))) return path.join(dir, n);
   return null;
 }
 
@@ -108,7 +120,7 @@ export function missingModels(graph, info) {
 }
 
 /** What the model step needs, one by one: [{ id, ok, text, help }], ok true, false, or null (could not be checked). */
-export function checksOf({ pipeline, pipelineError, url, info, comfyError, a3d, blender, blenderSetting, ultrashape = true }) {
+export function checksOf({ pipeline, pipelineError, url, info, comfyError, a3d, blender, blenderSetting, ultrashape = true, cleanup = false, remesher = null, remesherSetting = '' }) {
   const setup = pipeline?.setup || 'https://github.com/idnn-productions/comfy-ui-model-workflows/blob/main/SETUP.md';
   const checks = [];
   checks.push(pipeline ? { id: 'workflows', ok: true, text: `Workflows folder: ${pipeline.dir}`, help: '' }
@@ -135,6 +147,9 @@ export function checksOf({ pipeline, pipelineError, url, info, comfyError, a3d, 
   }
   checks.push(blender ? { id: 'blender', ok: true, text: `Blender: ${blender}`, help: '' }
     : { id: 'blender', ok: false, text: blenderSetting ? `Blender is not at ${blenderSetting}` : 'Blender was not found', help: `Install Blender (${BLENDER_DOWNLOAD}), or set where it is in Settings.` });
+  if (cleanup) checks.push(pipeline && !pipeline.cleanup ? { id: 'cleanup', ok: false, text: 'The workflows folder has no clean-up script: it is older than this editor', help: 'Update your checkout of comfy-ui-model-workflows.' }
+    : remesher ? { id: 'cleanup', ok: true, text: `AutoRemesher: ${remesher}`, help: '' }
+      : { id: 'cleanup', ok: false, text: remesherSetting ? `AutoRemesher is not at ${remesherSetting}` : 'AutoRemesher was not found', help: `The clean-up into quads uses AutoRemesher (${AUTOREMESHER_DOWNLOAD}): download it and set where its program is in Settings, or untick the clean-up.` });
   return { checks, setup };
 }
 

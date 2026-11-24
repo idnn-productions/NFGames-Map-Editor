@@ -52,7 +52,9 @@ Do not call image, voice or 3D APIs yourself: ask the editor, which holds the ke
    `nfgames.comfy-model/model`, action `status` (input `{}`; answers what is missing) and action `generate`, input
    `{"draft": "<draft folder name>", "length": <longest side in metres>}`. It runs on the user's graphics card for
    minutes. It refuses when ComfyUI is busy or the model exists; add `"wait": true` or `"replace": true` only when
-   the user said so.
+   the user said so. `"cleanup": true` (with `"quads": <about how many>`, 12000 when left out) remeshes the result
+   into quads with new UVs and re-baked textures; it needs AutoRemesher, which `status` with `{"cleanup": true}`
+   checks.
 4. Wait for `requests/<name>.answer.json` to have `"ok"`: `{"ok": true, "result": …}` (for images,
    `result.images` are project-relative paths) or `{"ok": false, "error": "…"}`. While it says `"waiting"`, the user is
    deciding in the editor (the first time you use a service in a session, and whenever it costs); keep waiting.

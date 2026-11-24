@@ -656,12 +656,22 @@ needs** checks each and says what to do about one that is missing:
   with about 16 GB of memory is what it was built on.
 - **[Blender](https://www.blender.org/download/)**: found on the PATH, in `Program Files\Blender Foundation` on
   Windows or in `/Applications` on a Mac, or where Settings says.
+- **[AutoRemesher](https://github.com/huxingyi/autoremesher/releases)**, only when **Clean up into quads** is
+  ticked: found on the PATH, or where Settings says.
 
 The model is made from **front, left, back and right**, which must all be approved; **top and bottom** are used too
 when both are there (they give the top and underside their real colours), and three-quarter is never sent. Give the
 **longest side in metres** (models come out of generation without a scale), the number of triangles, and whether to
 refine the shape with UltraShape, then **Generate model**. It takes a few minutes and shows in Jobs: the views go to
-ComfyUI, the result comes back, and Blender scales it, sets its pivot and compresses its textures. The model is
+ComfyUI, the result comes back, and Blender scales it, sets its pivot and compresses its textures.
+
+**Clean up into quads** adds a step before that: the generated mesh (made at 200,000 triangles for it) is remeshed
+into about the number of quads you give, unwrapped again, and its colours, roughness, metallic, occlusion and
+surface detail are baked onto the new mesh. Blender does it, running AutoRemesher for the quads. The count is a
+target the remesher comes near (often well under it), edges come out a little softer than on the generated mesh,
+and it adds well under a minute. A GLB stores triangles only, so each quad is saved as two.
+
+The model is
 saved as `models/<name>/<name>.glb` with its references in `models/<name>/<name>.refs/`, so
 [the model viewer](#the-model-viewer) shows it beside the pictures it was made from.
 

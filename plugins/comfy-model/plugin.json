@@ -4,12 +4,13 @@
   "version": "1.0.0",
   "engines": { "nfgames": "^1.1.0" },
   "server": "server.mjs",
-  "touches": { "files": [".nfgames/drafts/**", "models/**"], "commands": ["blender"], "network": true },
+  "touches": { "files": [".nfgames/drafts/**", "models/**"], "commands": ["blender", "autoremesher"], "network": true },
   "contributes": {
     "settings": {
       "comfyUrl": { "type": "string", "default": "http://127.0.0.1:8188", "title": "ComfyUI's address" },
       "workflowsDir": { "type": "string", "default": "", "title": "Workflows folder (your checkout of comfy-ui-model-workflows)" },
-      "blender": { "type": "string", "default": "", "title": "Blender program (empty: found on the PATH or where it is usually installed)" }
+      "blender": { "type": "string", "default": "", "title": "Blender program (empty: found on the PATH or where it is usually installed)" },
+      "autoremesher": { "type": "string", "default": "", "title": "AutoRemesher program, for the clean-up into quads (empty: found on the PATH)" }
     },
     "services": [{
       "id": "model",
