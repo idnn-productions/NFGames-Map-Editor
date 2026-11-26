@@ -648,7 +648,7 @@ tries all four per view and reports the one it used).
 
 **Scores, per view.** *Silhouette*: intersection over union of the model's outline and the reference's, each cropped to its box and
 scaled to the same width (aspect kept), so framing and scale do not count. *Colour*: inside the overlap of the two outlines, 1 minus
-the mean colour distance (blurred, flat-lit texture against the reference) over `colourFalloff`; silhouette alone flatters simple
+the mean colour distance over `colourFalloff`. References are shaded and the render is flat, so the distance is mostly chromaticity (the colour with its brightness taken out) plus lightness after each image's overall exposure is matched: lighting does not count as a wrong colour; silhouette alone flatters simple
 shapes (a grey blob scores high against a red apple), colour does not. *Combined*: `weights.silhouette` and `weights.colour`,
 normalised. The panel's mean is the mean over the scored views.
 

@@ -14,7 +14,7 @@ Views (the model seen from ...; the image's up is the model's up, except top and
 
 Per view: silhouette IoU (each silhouette cropped to its bounding box and scaled to the same width, aspect kept, so framing
 and scale do not count), and a colour score inside the overlap of the two silhouettes (1 minus the mean colour distance
-over a falloff). Models from generators come out turned arbitrarily: the four quarter-turns about up (all 24 axis-aligned
+over a falloff; lighting is not counted as colour). Models from generators come out turned arbitrarily: the four quarter-turns about up (all 24 axis-aligned
 orientations with upFix) are tried, the best kept, and which one is reported.
 """
 import bpy, json, math, os, sys, time
@@ -228,11 +228,18 @@ def erode(m, n=1):
     return m
 
 def colour_score(am, ar, bm, br):
+    """1 minus the colour distance inside the overlap, over FALLOFF. References are shaded (lit, painted) and the model is drawn flat, so
+    lighting must not count as a wrong colour: the distance is mostly the chromaticity (the colour with its brightness taken out),
+    plus the lightness after each image's overall exposure is matched."""
     ov = erode(am & bm, 2)
     if ov.sum() < 30: return 0.0
     fa = box(ar * am[..., None], 2) / np.maximum(box(am.astype(np.float32), 2), 1e-3)[..., None]
     fb = box(br * bm[..., None], 2) / np.maximum(box(bm.astype(np.float32), 2), 1e-3)[..., None]
-    d = np.sqrt(((fa - fb) ** 2).sum(2)) / math.sqrt(3)
+    ca = fa / (fa.sum(2, keepdims=True) + 1e-3); cb = fb / (fb.sum(2, keepdims=True) + 1e-3)
+    chroma = 0.5 * np.abs(ca - cb).sum(2)
+    la, lb = fa.mean(2), fb.mean(2); la = la / max(la[ov].mean(), 1e-3); lb = lb / max(lb[ov].mean(), 1e-3)
+    light = np.clip(np.abs(la - lb) / 2, 0, 1)
+    d = 0.75 * chroma + 0.25 * light
     return float(np.clip(1 - d[ov].mean() / FALLOFF, 0, 1))
 
 def combined(iou, col):
