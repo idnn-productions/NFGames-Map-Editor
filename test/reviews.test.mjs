@@ -67,7 +67,7 @@ describe('review jobs', () => {
   it('refuses bad jobs, writing nothing', () => {
     const count = readdirSync(inbox).length, base = { model: MODEL, workflow: 'auto', pins: [pin()] };
     for (const [job, why] of [
-      [{ ...base, model: '../layout.json' }, /no such model/], [{ ...base, workflow: 'blender' }, /not set up yet/], [{ ...base, workflow: 'nope' }, /no such workflow/],
+      [{ ...base, model: '../layout.json' }, /no such model/], [{ ...base, workflow: 'comfyui' }, /not set up yet/], [{ ...base, workflow: 'nope' }, /no such workflow/],
       [{ ...base, pins: [pin({ position: [1, 2] })] }, /three numbers/], [{ ...base, pins: [pin({ screenshot: 'x' })] }, /screenshot: not a PNG/],
       [{ ...base, pins: [pin({ refs: [PNG_1PX, PNG_1PX, PNG_1PX, PNG_1PX, PNG_1PX] })] }, /at most 4/], [{ ...base, pins: [] }, /a pin or a note/],
       [{ ...base, pins: Array.from({ length: 41 }, () => pin({ refs: [] })) }, /at most 40 pins/],
@@ -97,7 +97,7 @@ describe('review jobs', () => {
     assert.deepEqual(newJobs(inbox, seen), [id]);
   });
   it('workflows: the defaults, a default by its id, a project\'s own', () => {
-    assert.deepEqual(normaliseWorkflows(undefined, copy.root).map((w) => [w.id, w.enabled]), [['auto', true], ['blender', false], ['comfyui', false]]);
+    assert.deepEqual(normaliseWorkflows(undefined, copy.root).map((w) => [w.id, w.enabled]), [['auto', true], ['blender', true], ['angelo', true], ['comfyui', false]]);
     const own = normaliseWorkflows(['auto', { id: 'cruiser-build', label: 'Cruiser build', instructionsFile: 'notes.md' }], copy.root);
     assert.deepEqual(own.map((w) => w.id), ['auto', 'cruiser-build']); assert.equal(own[1].instructionsFile, join(copy.root, 'notes.md'));
     assert.throws(() => normaliseWorkflows([{ id: 'x', instructionsFile: '../out.md' }], copy.root), /inside the project/);

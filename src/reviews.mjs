@@ -6,17 +6,37 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { IMAGE_SIGNATURES as SIGNATURES, modelRefs, resolveModel } from './models.mjs';
+import { VIEWS, createMatcher, normaliseLoop } from './match.mjs';
+import { STOP_REASONS, roundOf } from './matchloop.mjs';
 
 export const LIMITS = { body: 24 * 1024 * 1024, image: 6 * 1024 * 1024, pins: 40, refs: 4, note: 20000, name: 200 };
 export const STATES = ['working', 'needs-input', 'done', 'failed'];
 
-/** The workflows a job can name when the project lists none. Blender and ComfyUI are placeholders (todo.md). */
+/** The workflows a job can name when the project lists none. ComfyUI is a placeholder (todo.md). Blender and Angelo are set up: their words live here and in skills/model-review. */
 export const DEFAULT_WORKFLOWS = [
   { id: 'auto', label: 'Auto', description: 'Claude decides how to fix it', enabled: true,
     instructions: 'Decide how to fix it. If this project builds the model (a build script, a .blend, a generator), fix that source and rebuild rather than editing the exported GLB. Otherwise fix it in Blender, or edit the GLB as a last resort. Say which you chose in the summary.' },
-  { id: 'blender', label: 'Blender', description: 'Fix through Blender scripts, re-bake, re-export', enabled: false, instructions: '' },
+  { id: 'blender', label: 'Blender', description: 'Fix the model\'s source with Blender scripts, re-export the GLB', enabled: true,
+    instructions: 'Work through Blender, in the background (blender -b <file.blend> --python <script.py>), not by editing the GLB\'s bytes. Find the model\'s source first: a build script in the project (search for the model\'s file name), or a .blend (beside the model, or named by the project). If there is none, create <name>.blend beside the model by importing the GLB, and say so. Make each fix a script kept beside the .blend (<name>.fix-<round>.py), so a round can be re-run. Then re-export the GLB over the model file (glTF binary, +Y up, keeping its materials and textures) and, if textures were baked, re-bake them. Never leave the model file half written: export to a temporary name and rename. Check what you changed in a render before you re-export.' },
+  { id: 'angelo', label: 'Angelo', description: 'Drive Angelo\'s agent (Blender 5.3 with its own AI) through its MCP server', enabled: true,
+    instructions: 'Hand the work to Angelo\'s agent through the angelo_* MCP tools (angelo_send, angelo_status, angelo_read, angelo_look, angelo_new_chat, angelo_settings, angelo_usage), and supervise it as you would a subagent; you do not edit the scene yourself. Follow the "Angelo" section of the model-review skill: it lists what Angelo 0.1.0 cannot do on its own (it writes only where the person chose a folder, its background bakes cannot write files, it can end its turn while a job still runs, approvals and a busy viewport need the person) and what to do about each. If the angelo_* tools are not available in this session, write failed and say so.' },
   { id: 'comfyui', label: 'ComfyUI', description: 'Regenerate textures or references with a ComfyUI graph', enabled: false, instructions: '' },
 ];
+
+/** What a match-loop job adds to its instructions: how a round is scored and when to stop. `cli` is the command that runs the editor's scorer. */
+export function loopText(match, id, root) {
+  const run = `${match.cli} <command> --project ${root}`;
+  return [
+    `MATCH LOOP. Bring this model's agreement with its reference images up to ${match.target.toFixed(2)} (the ${match.score === 'combined' ? 'combined silhouette and colour score' : 'silhouette score'}, averaged over the views ${match.views.join(', ')}). At most ${match.maxRounds} rounds${match.plateau === null ? '' : `; stop early when a round improves the mean by less than ${match.plateau}`}.`,
+    `The editor's scorer measures every round, never you: after each change and re-export, run
+  ${run.replace('<command>', 'round')} ${id} --changed <file you changed> --note "<what you changed>"
+It scores the model as it is, records the round in status.json and prints the scores and a decision (continue, or stop with the reason). Run once first: ${run.replace('<command>', 'start')} ${id}
+The job's current scores are in job.json (match.baseline); the overlay of each view is the job folder's match-0-overlay-<view>.png (the reference, the model's outline in yellow, red where only the reference has something, blue where only the model does). After a round, round-N-overlay-<view>.png.`,
+    `Fix what is most wrong first (the lowest views, the largest red or blue areas). When the decision says stop, finish with
+  ${run.replace('<command>', 'finish')} ${id} --summary "<what you did>"
+If a view's reference disagrees with the others (match.baseline.consistency), that caps what any model can score there: do not bend the model to it; the loop will say it was held back by those references.`,
+  ].join('\n\n');
+}
 
 const fail = (text) => { throw new Error(`map editor config: ${text}`); };
 const bad = (text) => { throw Object.assign(new Error(text), { code: 400 }); };
@@ -68,7 +88,7 @@ export function jobId(reviewsDir, model, now = new Date()) {
 }
 
 /** Checks a job from the page and writes it under project.reviewsDir. Returns { id }. Throws (code 400) on a bad job. */
-export function createReview(project, job, { now = new Date() } = {}) {
+export function createReview(project, job, { now = new Date(), matcher = null } = {}) {
   if (!job || typeof job !== 'object') bad('not a job');
   if (!project.modelsDir) bad('this project has no models folder (the config\'s "models")');
   const modelFile = resolveModel(project.modelsDir, job.model);
@@ -78,7 +98,16 @@ export function createReview(project, job, { now = new Date() } = {}) {
   const pins = Array.isArray(job.pins) ? job.pins : job.pins === undefined ? [] : bad('pins: a list');
   if (pins.length > LIMITS.pins) bad(`at most ${LIMITS.pins} pins`);
   const note = text(job.note, LIMITS.note, 'note');
-  if (!pins.length && !note.trim()) bad('a job needs a pin or a note');
+  const wantsMatch = job.match !== undefined && job.match !== null;
+  if (!pins.length && !note.trim() && !wantsMatch) bad('a job needs a pin or a note, or a match target');
+  // a match loop: its limits, checked; the model's scores as they are now (the editor's scorer's cached result: measure first)
+  let loop = null, scored = null;
+  if (wantsMatch) {
+    loop = normaliseLoop(job.match);
+    matcher = matcher || createMatcher(project);
+    scored = matcher.cached(job.model);
+    if (!scored) bad('measure the model against its references first (Match, Measure): a loop starts from its current scores');
+  }
 
   const files = [];
   const cleanPins = pins.map((p, i) => {
@@ -95,6 +124,14 @@ export function createReview(project, job, { now = new Date() } = {}) {
     const refNames = refs.map((r, j) => { const img = imageFromDataUrl(r, `${w} reference ${j + 1}`), name = `pin-${n}-ref-${j + 1}.${img.ext}`; files.push([name, img.bytes]); return name; });
     return { n, note: text(p.note, LIMITS.note, `${w} note`), position: p.position, normal: p.normal, mesh: label(p.mesh, `${w} mesh`), material: label(p.material, `${w} material`), uv: p.uv ?? null, camera: { position: cam.position, target: cam.target, fov: cam.fov }, screenshot: `pin-${n}.${shot.ext}`, refs: refNames };
   });
+  let match = null;
+  if (loop) {
+    const overlays = {};
+    for (const v of VIEWS) { const src = join(scored.dir, `overlay-${v}.png`); if (scored.result.views[v] && existsSync(src)) { overlays[v] = `match-0-overlay-${v}.png`; files.push([overlays[v], readFileSync(src)]); } }
+    const views = VIEWS.filter((v) => scored.result.views[v]);
+    match = { ...loop, views, cli: `node ${join(project.ctx.editorRoot, 'bin', 'match.mjs')}`, baseline: roundOf(0, scored.result, loop, { note: 'the model as it was sent', overlays, at: now.toISOString() }), consistency: scored.result.consistency, warnings: scored.result.warnings || [], blender: scored.result.blender };
+    matcher.saveSettings(loop);
+  }
   let overview = null;
   if (job.overview) { const img = imageFromDataUrl(job.overview, 'overview'); overview = `overview.${img.ext}`; files.push([overview, img.bytes]); }
 
@@ -108,8 +145,9 @@ export function createReview(project, job, { now = new Date() } = {}) {
   const record = {
     id, createdAt: now.toISOString(),
     model: { path: job.model, file: project.rel(modelFile), sha256: createHash('sha256').update(readFileSync(modelFile)).digest('hex'), size: st.size, mtime: Math.round(st.mtimeMs) },
-    note, workflow: { id: workflow.id, label: workflow.label, instructions }, references, overview, pins: cleanPins,
+    note, workflow: { id: workflow.id, label: workflow.label, instructions }, references, overview, pins: cleanPins, match,
   };
+  if (match) record.workflow.instructions = [instructions, loopText(match, id, project.root)].join('\n\n');
   try {
     mkdirSync(tmp);
     for (const [name, data] of files) writeFileSync(join(tmp, name), data);
@@ -137,9 +175,17 @@ export function listReviews(project, { limit = 50 } = {}) {
     let modelChanged = false;
     if (file) { const s = statSync(file); modelChanged = Math.round(s.mtimeMs) !== job.model.mtime || s.size !== job.model.size; }
     const str = (v) => (status && typeof status[v] === 'string' ? status[v] : '');
+    const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    // the match loop: its limits, and the rounds the editor's scorer recorded (a round's mean, scores per view, what was changed and why)
+    const loop = job.match && typeof job.match === 'object' ? { target: job.match.target, maxRounds: job.match.maxRounds, plateau: job.match.plateau, score: job.match.score, views: job.match.views || [] } : null;
+    const rounds = status && Array.isArray(status.rounds) ? status.rounds.filter((r) => r && typeof r === 'object' && num(r.mean) !== null).slice(0, 60).map((r) => ({
+      round: num(r.round), mean: r.mean, means: r.means && typeof r.means === 'object' ? r.means : null, scores: r.scores && typeof r.scores === 'object' ? r.scores : {},
+      changed: Array.isArray(r.changed) ? r.changed.filter((f) => typeof f === 'string').slice(0, 20) : [], note: typeof r.note === 'string' ? r.note : '', flagged: Array.isArray(r.flagged) ? r.flagged : [],
+      unchanged: r.unchanged === true, seconds: num(r.seconds), cost: num(r.cost) })) : [];
     return {
       id, createdAt: job.createdAt, model: job.model && job.model.path, note: job.note, workflow: job.workflow && job.workflow.label, pins: (job.pins || []).length,
       state, summary: str('summary'), question: str('question'), updatedAt: str('updatedAt') || null,
+      match: loop, rounds, stopReason: STOP_REASONS.includes(str('stopReason')) ? str('stopReason') : '', stopDetail: str('stopDetail'),
       changedFiles: status && Array.isArray(status.changedFiles) ? status.changedFiles.filter((f) => typeof f === 'string') : [], modelChanged,
     };
   });

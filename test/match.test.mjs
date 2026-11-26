@@ -1,0 +1,301 @@
+// The match module without Blender: its settings, the slider's limits, the references' own consistency, when a loop stops,
+// the scorer's wrapper (a fixed command, a cache by hash, progress, Blender missing), and the loop's job and status fields.
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { loadProject } from '../src/project.mjs';
+import { SCORER, consistency, createMatcher, decide, normaliseLoop, normaliseMatch, scoredViews, blenderMissing, DEFAULTS } from '../src/match.mjs';
+import { createReview, listReviews } from '../src/reviews.mjs';
+import { finishLoop, openJob, recordRound, setStatus, startLoop } from '../src/matchloop.mjs';
+import { sampleCopy, makeGlb, PNG_1PX, dataBytes } from './helpers.mjs';
+
+describe('match settings', () => {
+  it('the config\'s match: defaults, and mistakes named', () => {
+    assert.deepEqual(normaliseMatch(undefined), DEFAULTS);
+    assert.deepEqual(normaliseMatch({ weights: { colour: 0.2 }, upFix: true, planUp: 'right' }).weights, { silhouette: 0.6, colour: 0.2 });
+    for (const [bad, why] of [[{ weights: { silhouette: -1 } }, /match\.weights/], [{ weights: { silhouette: 0, colour: 0 } }, /cannot both be 0/], [{ planUp: 'sideways' }, /match\.planUp/], [{ upFix: 'yes' }, /match\.upFix/], [{ grid: 8 }, /match\.grid/], [{ tolerance: 0 }, /match\.tolerance/], [[], /must be an object/]])
+      assert.throws(() => normaliseMatch(bad), why);
+  });
+  it('the slider: 0.50 to 0.99 in steps of 0.01, kept to two decimals; rounds, plateau and the score are checked', () => {
+    assert.deepEqual(normaliseLoop({}), { target: 0.9, maxRounds: 5, plateau: 0.01, score: 'combined' });
+    assert.equal(normaliseLoop({ target: 0.857 }).target, 0.86); assert.equal(normaliseLoop({ target: 0.5 }).target, 0.5); assert.equal(normaliseLoop({ target: 0.99 }).target, 0.99);
+    assert.equal(normaliseLoop({ target: 0.1 + 0.2 + 0.6 }).target, 0.9);                               // floating point noise does not leak
+    for (const t of [0.49, 1, 'high', NaN, null]) assert.throws(() => normaliseLoop({ target: t }), /match\.target/, String(t));
+    assert.deepEqual(normaliseLoop({ maxRounds: 12, plateau: '', score: 'silhouette' }), { target: 0.9, maxRounds: 12, plateau: null, score: 'silhouette' });
+    for (const [b, why] of [[{ maxRounds: 0 }, /maxRounds/], [{ maxRounds: 2.5 }, /maxRounds/], [{ maxRounds: 21 }, /maxRounds/], [{ plateau: -0.1 }, /plateau/], [{ plateau: 'x' }, /plateau/], [{ score: 'vibes' }, /match\.score/], [[], /not an object/]])
+      assert.throws(() => normaliseLoop(b), why);
+  });
+  it('the references that are scored are the six orthographic views; the others are shown', () => {
+    const refs = ['concept.png', 'Front.PNG', 'left.jpg', 'front.jpg', 'three-quarter.png', 'top.webp', 'notes.png'].map((name) => ({ name }));
+    assert.deepEqual(scoredViews(refs), { front: 'Front.PNG', left: 'left.jpg', top: 'top.webp' });
+    assert.deepEqual(scoredViews([]), {});
+  });
+});
+
+describe('reference consistency', () => {
+  // a 4 x 2 x 3 object (width, height, depth) seen the way the scorer sees it; `ext` per view as the scorer reports it
+  const sound = { front: { refExtent: [400, 200] }, back: { refExtent: [200, 100] }, left: { refExtent: [300, 200] }, right: { refExtent: [150, 100] }, top: { refExtent: [400, 300], planUp: 'up' }, bottom: { refExtent: [100, 75], planUp: null } };
+  it('references of one object agree, whatever the scale of each image', () => {
+    const c = consistency(sound, 0.05);
+    assert.equal(c.checked, true); assert.deepEqual(c.flagged, []); assert.ok(Object.values(c.views).every((v) => v.deviation < 1e-6));
+  });
+  it('a view that is off is named, with how far; a top turned to its side is read as such', () => {
+    const c = consistency({ ...sound, front: { refExtent: [600, 200] } }, 0.05);
+    assert.deepEqual(c.flagged, ['front']); assert.ok(Math.abs(c.views.front.deviation - 0.5) < 0.01); assert.match(c.warnings[0], /^front reference: its shape is 50% wider/);
+    const turned = { ...sound, top: { refExtent: [300, 400], planUp: 'right' } };
+    assert.deepEqual(consistency(turned, 0.05).flagged, []);
+    assert.deepEqual(consistency({ ...sound, top: { refExtent: [300, 400], planUp: 'up' } }, 0.05).flagged, ['top']);
+  });
+  it('the tolerance decides, and three views are enough where two cannot tell', () => {
+    const near = { ...sound, front: { refExtent: [420, 200] } };                                        // 5% off
+    assert.deepEqual(consistency(near, 0.08).flagged, []); assert.deepEqual(consistency(near, 0.03).flagged, ['front']);
+    assert.equal(consistency({ front: sound.front, left: sound.left }, 0.05).checked, false);
+    const three = consistency({ front: { refExtent: [600, 200] }, left: sound.left, top: sound.top }, 0.05);
+    assert.equal(three.checked, true); assert.equal(three.ambiguous, true); assert.deepEqual(three.flagged, ['front']);      // any of the three could be the odd one: the sides and the top are trusted
+    assert.equal(consistency({ front: { refExtent: [0, 5] }, left: sound.left, top: sound.top }).checked, false);
+  });
+});
+
+describe('when a loop stops', () => {
+  const loop = { target: 0.9, maxRounds: 3, plateau: 0.01, score: 'combined' };
+  const rounds = (...means) => means.map((mean, round) => ({ round, mean }));
+  it('on the target, on the rounds, on a plateau', () => {
+    assert.deepEqual(decide(loop, rounds(0.6)), { stop: false });
+    assert.deepEqual(decide(loop, rounds(0.6, 0.75, 0.84)), { stop: false });
+    const hit = decide(loop, rounds(0.6, 0.75, 0.91)); assert.equal(hit.reason, 'target-reached'); assert.match(hit.detail, /0\.91 reached the target 0\.90 after 2 rounds/);
+    assert.equal(decide(loop, rounds(0.6, 0.9)).reason, 'target-reached');                                   // exactly the target counts
+    assert.equal(decide(loop, rounds(0.6, 0.7, 0.8, 0.85)).reason, 'out-of-rounds');
+    const flat = decide(loop, rounds(0.6, 0.7, 0.705)); assert.equal(flat.reason, 'plateau'); assert.match(flat.detail, /round 2 improved the mean by 0\.01/);
+    assert.equal(decide({ ...loop, plateau: null }, rounds(0.6, 0.7, 0.7)).stop, false);                     // no plateau field: never
+    assert.equal(decide(loop, rounds(0.6, 0.7, 0.65)).reason, 'plateau');                                    // worse is under the threshold too
+    assert.equal(decide({ ...loop, maxRounds: 1 }, rounds(0.6, 0.7)).reason, 'out-of-rounds');
+  });
+  it('held back: the references that disagree are what stands between the model and the target', () => {
+    const scores = { front: { combined: 0.5 }, left: { combined: 0.95 }, top: { combined: 0.93 } };
+    const held = decide(loop, rounds(0.6, 0.7, 0.8, 0.79), { flagged: ['front'] }, scores);
+    assert.equal(held.reason, 'held-back'); assert.match(held.detail, /held back by references that disagree with each other \(front\): the other views average 0\.94/);
+    const notHeld = decide(loop, rounds(0.6, 0.7, 0.8, 0.79), { flagged: ['front'] }, { front: { combined: 0.5 }, left: { combined: 0.7 }, top: { combined: 0.93 } });
+    assert.equal(notHeld.reason, 'out-of-rounds'); assert.match(notHeld.detail, /front reference disagrees with the others/);
+    assert.equal(decide(loop, rounds(0.6, 0.95), { flagged: ['front'] }, scores).reason, 'target-reached');   // the target wins
+    assert.equal(decide({ ...loop, score: 'silhouette' }, rounds(0.6, 0.7, 0.8, 0.79), { flagged: ['front'] }, { front: { silhouette: 0.5 }, left: { silhouette: 0.95 } }).reason, 'held-back');
+  });
+});
+
+// a Blender that is not one: the child process the wrapper starts, and the result it would write
+function fakeSpawn({ views = ['front', 'left', 'top'], means = [0.7], fail = false, hold = false } = {}) {
+  const calls = [], held = [];
+  let n = 0;
+  const impl = (file, args, options) => {
+    const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill() {} });
+    calls.push({ file, args, options, settings: JSON.parse(readFileSync(args[args.length - 1], 'utf8')) });
+    const mean = means[Math.min(n++, means.length - 1)], settings = calls[calls.length - 1].settings;
+    const end = () => {
+      if (!fail) {
+        const per = typeof mean === 'object' ? mean : Object.fromEntries(views.map((v) => [v, mean]));
+        const out = {}; for (const v of Object.keys(settings.refs)) { out[v] = { silhouette: per[v], colour: per[v] - 0.1, combined: per[v] - 0.04, background: 'flat', refExtent: SOUND[v], modelExtent: [10, 10], planUp: null, overlay: `overlay-${v}.png`, render: `render-${v}.png` }; writeFileSync(join(settings.outDir, `overlay-${v}.png`), dataBytes(PNG_1PX)); }
+        const vals = Object.values(out), avg = (k) => vals.reduce((s, x) => s + x[k], 0) / vals.length;
+        writeFileSync(settings.result, JSON.stringify({ ok: true, blender: '5.3.0', views: out, size: [1, 1, 1], mean: { silhouette: avg('silhouette'), colour: avg('colour'), combined: avg('combined') }, orientation: { up: '+Y', turn: 0, tried: [] }, warnings: [] }));
+      }
+      child.emit('close', fail ? 1 : 0);
+    };
+    child.stdout.write('PROGRESS 2/9 orientation +Y turn 90: front\n');
+    if (hold) held.push(end); else setImmediate(end);
+    return child;
+  };
+  return { impl, calls, release: () => held.splice(0).forEach((f) => f()) };
+}
+const SOUND = { front: [400, 200], back: [200, 100], left: [300, 200], right: [150, 100], top: [400, 300], bottom: [100, 75] };
+
+describe('the scorer\'s wrapper', () => {
+  let copy, project;
+  const setup = async (config = {}) => {
+    copy = sampleCopy(); mkdirSync(join(copy.root, 'models', 'ships', 'cruiser.refs'), { recursive: true });
+    writeFileSync(join(copy.root, 'models', 'ships', 'cruiser.glb'), makeGlb());
+    for (const n of ['concept', 'front', 'left', 'top', 'three-quarter']) writeFileSync(join(copy.root, 'models', 'ships', 'cruiser.refs', `${n}.png`), dataBytes(PNG_1PX));
+    project = await loadProject({ root: copy.root, config: { models: 'models', blender: process.execPath, ...config } });
+  };
+  after(() => copy && copy.done());
+
+  it('starts Blender as a fixed command: the scorer and one settings file, no shell', async () => {
+    await setup();
+    const fake = fakeSpawn(), matcher = createMatcher(project, { spawnImpl: fake.impl });
+    const { started, done } = matcher.start('ships/cruiser.glb'); assert.equal(started, true);
+    const { result, dir } = await done, call = fake.calls[0];
+    assert.equal(call.file, process.execPath);
+    assert.deepEqual(call.args.slice(0, 4), ['-b', '--factory-startup', '--python', SCORER]); assert.equal(call.args[4], '--'); assert.equal(call.args.length, 6);
+    assert.equal(call.options.shell, false);
+    const s = call.settings;
+    assert.deepEqual(Object.keys(s.refs), ['front', 'left', 'top']);                                         // not the concept, not the three-quarter view
+    assert.ok(s.model.endsWith('cruiser.glb') && s.refs.front.endsWith('front.png'));
+    assert.deepEqual(s.weights, { silhouette: 0.6, colour: 0.4 }); assert.equal(s.upFix, false); assert.equal(s.planUp, 'auto');
+    assert.equal(result.consistency.checked, true); assert.ok(existsSync(join(dir, 'result.json'))); assert.ok(existsSync(join(dir, 'overlay-front.png')));
+    assert.ok(dir.startsWith(join(copy.root, '.review', '.match')), 'kept under the reviews folder, out of the jobs\' way');
+    assert.equal(listReviews(project).length, 0);
+  });
+  it('is cached by the hash of the model, its references and the settings', async () => {
+    await setup();
+    const fake = fakeSpawn(), matcher = createMatcher(project, { spawnImpl: fake.impl });
+    await matcher.start('ships/cruiser.glb').done;
+    const again = matcher.start('ships/cruiser.glb'); assert.equal(again.started, false); await again.done; assert.equal(fake.calls.length, 1);
+    assert.equal(matcher.status('ships/cruiser.glb').state, 'done');
+    writeFileSync(join(copy.root, 'models', 'ships', 'cruiser.glb'), Buffer.concat([makeGlb(), Buffer.alloc(4)]));        // the model changed
+    assert.equal(matcher.status('ships/cruiser.glb').state, 'idle');
+    await matcher.start('ships/cruiser.glb').done; assert.equal(fake.calls.length, 2);
+    writeFileSync(join(copy.root, 'models', 'ships', 'cruiser.refs', 'left.png'), Buffer.concat([dataBytes(PNG_1PX), Buffer.alloc(1)]));  // a reference changed
+    await matcher.start('ships/cruiser.glb').done; assert.equal(fake.calls.length, 3);
+    const other = createMatcher(await loadProject({ root: copy.root, config: { models: 'models', blender: process.execPath, match: { weights: { colour: 0 } } } }), { spawnImpl: fake.impl });
+    await other.start('ships/cruiser.glb').done; assert.equal(fake.calls.length, 4, 'other weights, other scores');
+  });
+  it('says how far it is while it runs, and runs one at a time', async () => {
+    await setup();
+    const fake = fakeSpawn({ hold: true }), matcher = createMatcher(project, { spawnImpl: fake.impl });
+    const { done } = matcher.start('ships/cruiser.glb');
+    await new Promise((ok) => setImmediate(ok));                                                              // the child's first line of output
+    const s = matcher.status('ships/cruiser.glb');
+    assert.equal(s.state, 'running'); assert.deepEqual(s.progress, { done: 2, total: 9, text: 'orientation +Y turn 90: front' }); assert.deepEqual(s.views, ['front', 'left', 'top']);
+    assert.throws(() => matcher.start('ships/cruiser.glb'), /busy/);
+    fake.release(); await done; assert.equal(matcher.status('ships/cruiser.glb').state, 'done');
+  });
+  it('says plainly when Blender is not there, or the scorer fails, or there is nothing to match', async () => {
+    await setup({ blender: join(copy ? copy.root : '.', 'no-such-blender') });
+    const matcher = createMatcher(project);
+    const s = matcher.status('ships/cruiser.glb'); assert.equal(s.blender.found, false); assert.match(s.blender.text, /Blender was not found at ".*no-such-blender" \(the config's "blender"\)/);
+    assert.throws(() => matcher.start('ships/cruiser.glb'), (e) => e.code === 409 && /Blender was not found/.test(e.message));
+    assert.match(blenderMissing(''), /Matching a model against its references needs Blender \(https:\/\/www\.blender\.org\/download\/\): install it, or set "blender" in map-editor\.config\.mjs/);
+    await setup();
+    const bad = createMatcher(project, { spawnImpl: fakeSpawn({ fail: true }).impl });
+    await assert.rejects(bad.start('ships/cruiser.glb').done, /Blender stopped \(exit 1\) without a result/);
+    assert.equal(bad.status('ships/cruiser.glb').state, 'failed'); assert.match(bad.status('ships/cruiser.glb').error, /exit 1/);
+    writeFileSync(join(copy.root, 'models', 'bare.glb'), makeGlb());
+    assert.equal(bad.status('bare.glb').state, 'no-views'); assert.throws(() => bad.start('bare.glb'), /no front, back, left, right, top or bottom reference/);
+    assert.throws(() => bad.status('../x.glb'), /no such model/);
+    assert.throws(() => createMatcher(project).status('nope.glb'), (e) => e.code === 400);
+  });
+  it('serves only the scorer\'s own pictures, by a key it made', async () => {
+    await setup();
+    const matcher = createMatcher(project, { spawnImpl: fakeSpawn().impl }), { key } = (await matcher.start('ships/cruiser.glb').done);
+    assert.ok(matcher.image(key, 'overlay-front.png').endsWith('overlay-front.png'));
+    for (const [k, n] of [[key, 'result.json'], [key, 'args.json'], [key, '../result.json'], [key, 'overlay-front.png/../../x'], [key, 'overlay-sideways.png'], [key, 'overlay-front.PNG'], ['../..', 'overlay-front.png'], [key.slice(1), 'overlay-front.png'], [undefined, 'overlay-front.png'], [key, undefined], [key, 'render-back.png']])
+      assert.equal(matcher.image(k, n), null, `${k} ${n}`);
+  });
+  it('remembers the last slider values for the project', async () => {
+    await setup();
+    const matcher = createMatcher(project);
+    assert.deepEqual(matcher.settings(), { target: 0.9, maxRounds: 5, plateau: 0.01, score: 'combined' });
+    assert.deepEqual(matcher.saveSettings({ target: 0.757, maxRounds: 8, plateau: '', score: 'silhouette' }), { target: 0.76, maxRounds: 8, plateau: null, score: 'silhouette' });
+    assert.deepEqual(createMatcher(project).settings(), { target: 0.76, maxRounds: 8, plateau: null, score: 'silhouette' });          // a new matcher (a restart) finds them
+    assert.throws(() => matcher.saveSettings({ target: 2 }), /match\.target/);
+    assert.equal(createMatcher(project).settings().target, 0.76, 'a refused value changes nothing');
+    writeFileSync(join(copy.root, '.review', '.match', 'settings.json'), '{ no');
+    assert.equal(createMatcher(project).settings().target, 0.9, 'a damaged file means the defaults');
+  });
+});
+
+describe('match jobs and their rounds', () => {
+  let copy, project, fake, matcher;
+  const MODEL = 'ships/cruiser.glb', modelFile = () => join(copy.root, 'models', MODEL);
+  const model = (n) => writeFileSync(modelFile(), Buffer.concat([makeGlb(), Buffer.alloc(4 * n)]));        // each export of the model is different bytes
+  const send = (extra = {}) => createReview(project, { model: MODEL, workflow: 'blender', match: { target: 0.9, maxRounds: 4, plateau: 0.01, score: 'combined' }, ...extra }, { matcher, now: new Date('2026-11-26T10:00:00Z') });
+  /** A round as the session would run it: the model re-exported, then the editor's scorer. */
+  let exported = 0;
+  const round = (id, extra = {}) => { model(++exported); return recordRound(project, id, matcher, extra); };
+  const setup = async (means, views) => {
+    copy = sampleCopy(); mkdirSync(join(copy.root, 'models', 'ships', 'cruiser.refs'), { recursive: true });
+    for (const n of ['front', 'left', 'top']) writeFileSync(join(copy.root, 'models', 'ships', 'cruiser.refs', `${n}.png`), dataBytes(PNG_1PX));
+    exported = 0; model(0);
+    project = await loadProject({ root: copy.root, config: { models: 'models', blender: process.execPath } });
+    fake = fakeSpawn({ means, views }); matcher = createMatcher(project, { spawnImpl: fake.impl });
+    await matcher.start(MODEL).done;                                                                          // "Measure" on the page
+  };
+  after(() => copy && copy.done());
+
+  it('is refused without a measurement of the model as it is, or with a target off the slider', async () => {
+    await setup([0.62]); model(99);                                                                           // the model changed since it was measured
+    assert.throws(() => send(), /measure the model against its references first/);
+    assert.throws(() => send({ match: { target: 0.4 } }), /match\.target/);
+    assert.throws(() => send({ match: { target: 0.9, maxRounds: 99 } }), /match\.maxRounds/);
+    assert.throws(() => send({ match: 'high' }), /match: not an object/);
+    assert.equal(listReviews(project).length, 0, 'nothing was written');
+  });
+  it('writes the loop into job.json, the overlays beside it, and the status\'s rounds are listed', async () => {
+    await setup([0.62, 0.71, 0.84, 0.93]);
+    const { id } = send({ match: { target: 0.9, maxRounds: 4, plateau: 0.01, score: 'combined' } });
+    const dir = join(copy.root, '.review', id), job = JSON.parse(readFileSync(join(dir, 'job.json'), 'utf8'));
+    assert.deepEqual([job.match.target, job.match.maxRounds, job.match.plateau, job.match.score], [0.9, 4, 0.01, 'combined']);
+    assert.deepEqual(job.match.views, ['front', 'left', 'top']);
+    assert.equal(job.match.baseline.round, 0); assert.ok(Math.abs(job.match.baseline.mean - 0.58) < 1e-9); assert.equal(job.match.baseline.scores.front.silhouette, 0.62);
+    assert.ok(existsSync(join(dir, 'match-0-overlay-front.png'))); assert.deepEqual(job.match.baseline.overlays, { front: 'match-0-overlay-front.png', left: 'match-0-overlay-left.png', top: 'match-0-overlay-top.png' });
+    assert.equal(job.match.consistency.checked, true); assert.match(job.match.cli, /bin[\\/]match\.mjs$/);
+    assert.match(job.workflow.instructions, /Work through Blender/); assert.match(job.workflow.instructions, /MATCH LOOP\. Bring this model's agreement with its reference images up to 0\.90/);
+    assert.match(job.workflow.instructions, new RegExp(`match\\.mjs round --project .+ ${id} --changed`));
+    assert.deepEqual(matcher.settings(), { target: 0.9, maxRounds: 4, plateau: 0.01, score: 'combined' }, 'the last values are kept');
+    assert.deepEqual(listReviews(project)[0].match, { target: 0.9, maxRounds: 4, plateau: 0.01, score: 'combined', views: ['front', 'left', 'top'] });
+    assert.equal(send({ match: { target: 0.857 } }).id !== id, true); assert.equal(listReviews(project)[0].match.target, 0.86);
+  });
+  it('a job with a target needs no pin and no note; one without a target still does', async () => {
+    await setup([0.62]);
+    assert.ok(send({ note: '', pins: [] }).id);
+    assert.throws(() => createReview(project, { model: MODEL, workflow: 'blender', pins: [] }), /a pin or a note, or a match target/);
+  });
+  it('each round is scored by the editor, written to status.json, and the mean rises until the target is reached', async () => {
+    await setup([0.62, 0.71, 0.84, 0.97]);
+    const { id } = send(), dir = join(copy.root, '.review', id);
+    const started = startLoop(project, id); assert.equal(started.rounds.length, 1); assert.equal(openJob(project, id).status.state, 'working');
+    const r1 = await round(id, { changed: ['art/ship.blend', 'models/ships/cruiser.glb'], note: 'lengthened the hull', seconds: 41, cost: 0.12 });
+    assert.equal(r1.decision.stop, false); assert.equal(r1.round.round, 1); assert.ok(r1.round.mean > 0.6);
+    const r2 = await round(id, { changed: ['art/ship.blend'], note: 'added the pods' }); assert.equal(r2.decision.stop, false);
+    const r3 = await round(id, { note: 'rounded the nose' });
+    assert.equal(r3.decision.stop, true); assert.equal(r3.decision.reason, 'target-reached');
+    const status = openJob(project, id).status;
+    assert.deepEqual(status.rounds.map((r) => r.round), [0, 1, 2, 3]);
+    const means = status.rounds.map((r) => r.mean); assert.deepEqual([...means].sort((a, b) => a - b), means, 'the mean rises round by round');
+    assert.equal(status.rounds[1].seconds, 41); assert.equal(status.rounds[1].cost, 0.12); assert.deepEqual(status.rounds[1].changed, ['art/ship.blend', 'models/ships/cruiser.glb']); assert.equal(status.rounds[1].note, 'lengthened the hull');
+    assert.ok(existsSync(join(dir, 'round-3-overlay-front.png')));
+    assert.equal(status.stopReason, 'target-reached'); assert.deepEqual(status.changedFiles, ['art/ship.blend', 'models/ships/cruiser.glb']);
+    assert.rejects(round(id), /the loop already stopped \(target-reached\)/);
+    const fin = finishLoop(project, id, { summary: 'three rounds' }); assert.equal(fin.state, 'done'); assert.equal(fin.rounds.length, 4); assert.equal(fin.stopReason, 'target-reached');
+    const listed = listReviews(project).find((j) => j.id === id);
+    assert.equal(listed.state, 'done'); assert.equal(listed.stopReason, 'target-reached'); assert.match(listed.stopDetail, /reached the target 0\.90 after 3 rounds/);
+    assert.deepEqual(listed.rounds.map((r) => Math.round(r.mean * 100)), means.map((m) => Math.round(m * 100))); assert.equal(listed.rounds[2].note, 'added the pods');
+  });
+  it('stops on the rounds, or on a plateau, and says which', async () => {
+    await setup([0.62, 0.7, 0.75]);
+    const a = send({ match: { target: 0.9, maxRounds: 2, plateau: null } }); startLoop(project, a.id);
+    await round(a.id); const last = await round(a.id);
+    assert.equal(last.decision.reason, 'out-of-rounds'); assert.equal(openJob(project, a.id).status.stopReason, 'out-of-rounds');
+    await setup([0.62, 0.7, 0.705]);
+    const b = send({ match: { target: 0.9, maxRounds: 5, plateau: 0.01 } }); startLoop(project, b.id);
+    assert.equal((await round(b.id)).decision.stop, false); const flat = await round(b.id);
+    assert.equal(flat.decision.reason, 'plateau'); assert.equal(listReviews(project)[0].stopReason, 'plateau');
+  });
+  it('held back by references that disagree: they are named', async () => {
+    const odd = { front: 0.45, left: 0.95, top: 0.95 };                                                       // the front is the one view that cannot score: its reference is off
+    await setup([odd, odd, odd], ['front', 'left', 'top']);
+    // the fake's reference extents make the front reference disagree with the rest
+    const real = SOUND.front; SOUND.front = [700, 200];
+    try {
+      const { id } = send({ match: { target: 0.9, maxRounds: 1, plateau: 0.01, score: 'silhouette' } }); startLoop(project, id);
+      const r = await round(id);
+      assert.deepEqual(r.round.flagged, ['front']); assert.equal(r.decision.reason, 'held-back'); assert.match(r.decision.detail, /held back by references that disagree with each other \(front\)/);
+      assert.equal(listReviews(project)[0].stopReason, 'held-back');
+    } finally { SOUND.front = real; }
+  });
+  it('knows when nothing was re-exported, keeps rounds through other statuses, and refuses what is not a job', async () => {
+    await setup([0.62, 0.62]);
+    const { id } = send(); startLoop(project, id);
+    const same = await recordRound(project, id, matcher);                                                     // the model file is the one that was sent
+    assert.equal(same.round.unchanged, true); assert.equal(listReviews(project)[0].rounds[1].unchanged, true);
+    const asked = setStatus(project, id, { state: 'needs-input', question: 'Save the file into the model\'s folder?' });
+    assert.equal(asked.state, 'needs-input'); assert.equal(asked.rounds.length, 2); assert.equal(listReviews(project)[0].question, 'Save the file into the model\'s folder?');
+    assert.equal(setStatus(project, id, { state: 'working' }).question, undefined);
+    assert.throws(() => setStatus(project, id, { state: 'done' }), /working or needs-input/);
+    assert.equal(startLoop(project, id).rounds.length, 2, 'starting again keeps the rounds');
+    for (const bad of ['../x', '', 'a/b', '..', 'nope']) assert.throws(() => openJob(project, bad), /not a job id|no such job/, bad);
+    const plain = createReview(project, { model: MODEL, workflow: 'auto', note: 'a plain one' });
+    assert.throws(() => startLoop(project, plain.id), /no match loop/);
+    assert.equal(listReviews(project).find((j) => j.id === plain.id).match, null);
+  });
+});

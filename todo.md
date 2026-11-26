@@ -5,9 +5,17 @@ reference images: `docs/superpowers/specs/2026-11-23-model-references-design.md`
 
 ## Workflows (placeholders in the viewer today)
 
-- [ ] **Blender workflow.** Instructions for fixing a model through Blender scripts: find or create the
-      build script, re-bake textures, re-export the GLB (Draco, WebP or KTX2). Decide where projects keep
-      their Blender scripts and how a job names the .blend or script to use. Then set `enabled: true`.
+- [x] **Blender workflow** (`enabled: true`; its words are in `src/reviews.mjs` and the skill). Still open: Draco, WebP or
+      KTX2 on export, and a way for a project to name its .blend or build script (it is searched for today).
+- [x] **Angelo workflow**, through Angelo's MCP server, with the Angelo 0.1.0 problems in the skill.
+- [x] **Reference match** and the **match loop** (`src/match.mjs`, `src/match/score.py`, `bin/match.mjs`). Open:
+      - the loop's first round is still a session's work: nothing starts a Claude Code session for a job;
+      - a lighting match for the colour score (reference art is shaded, the render is flat);
+      - the model is scored on one material pass: models with several UV sets, vertex colours or alpha blending are only
+        as good as Workbench's texture display;
+      - show a round's overlays (`round-N-overlay-<view>.png`) in the job list, and a before/after of a round;
+      - a `.glb` with an unclean reference background cannot be scored well: let the user paint a mask or pick the background colour;
+      - the scorer renders at 768 px with Workbench: a finer final pass for thin parts (rigging, antennas).
 - [ ] **ComfyUI workflow.** Regenerate textures or reference images through a ComfyUI graph: how the
       server is reached (local URL), which graphs exist, how a pin's UV area maps to a texture region to
       repaint, and where results land. Then set `enabled: true`.

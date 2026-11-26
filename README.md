@@ -34,6 +34,7 @@ It runs on your machine only: the server listens on `127.0.0.1` and refuses ever
 - [The map file format](#the-map-file-format)
 - [Using the editor](#using-the-editor)
 - [Model review](#model-review)
+- [Matching a model to its references](#matching-a-model-to-its-references)
 - [New model](#new-model)
 - [Plugins](#plugins)
 - [Save and backups](#save-and-backups)
@@ -219,7 +220,9 @@ onto these options.
 | `models` | `models/`, else the project's folder | the folder whose `.glb` files the [model viewer](#model-review) lists and the palette offers (subfolders included, `node_modules` and hidden folders skipped). Must be inside the project. `false` for none |
 | `modelKinds` | `true` | `false`: the models folder's files are not offered as kinds of piece |
 | `reviews` | `.review` | the folder review jobs are written to. Must be inside the project |
-| `reviewWorkflows` | Auto, Blender, ComfyUI | the viewer's Workflow list: `[{ id, label, description, enabled, instructions, instructionsFile }]`, or a default's id (`'auto'`). `instructions` is text; `instructionsFile` is a file in the project whose text is added. Both are copied into each job. `enabled: false` shows "(not set up yet)". Blender and ComfyUI are placeholders by default (see `todo.md`) |
+| `blender` | found on the PATH, or where Blender is usually installed | the Blender program, for [matching a model to its references](#matching-a-model-to-its-references). Optional: without it the Match panel says so |
+| `match` | see below | `{ weights: { silhouette: 0.6, colour: 0.4 }, colourFalloff: 0.4, grid: 256, upFix: false, planUp: 'auto', tolerance: 0.05 }`: how a model is scored against its references (below) |
+| `reviewWorkflows` | Auto, Blender, Angelo, ComfyUI | the viewer's Workflow list: `[{ id, label, description, enabled, instructions, instructionsFile }]`, or a default's id (`'auto'`). `instructions` is text; `instructionsFile` is a file in the project whose text is added. Both are copied into each job. `enabled: false` shows "(not set up yet)". Blender and ComfyUI are placeholders by default (see `todo.md`) |
 
 ### Hooks
 
@@ -566,12 +569,16 @@ Nothing is fetched at any other time, and no CDN is used.
 | **Send to Claude** | writes the job; pins and notes are kept as a draft in the browser until then |
 
 **Workflows.** **Auto**: Claude decides how to fix it (the project's build script when there is one, else Blender,
-else the GLB). **Blender** and **ComfyUI** are listed but not set up yet.
+else the GLB). **Blender**: fix the model's source (its build script, or a `.blend` beside it) with Blender scripts, re-export the GLB.
+**Angelo**: the session drives Angelo's agent through its MCP server. **ComfyUI** is listed but not set up yet. Both Blender
+and Angelo work for any project: their instructions are in the editor (`src/reviews.mjs`, `skills/model-review`); a project's
+`reviewWorkflows` can name them (`'blender'`, `'angelo'`), replace them, or add its own.
 
 **A job** is a folder `<reviews>/<UTC time>-<model>/`: `job.json` (the model's path, hash and time, the note,
 the workflow with its instructions, the model's `references`, and the pins), `overview.jpg`, `pin-N.jpg`, `pin-N-ref-M.png|jpg|webp`, and
 `status.json` once a session takes it: `{ "state": "working" | "needs-input" | "done" | "failed", "summary",
-"question"?, "updatedAt", "changedFiles" }`. No `status.json` means queued. A job is written to `<id>.tmp` and
+"question"?, "updatedAt", "changedFiles", "rounds"?, "stopReason"?, "stopDetail"? }` (the last three belong to a
+[match loop](#the-match-loop)). No `status.json` means queued. A job is written to `<id>.tmp` and
 renamed, so a watcher never sees half of one. When a job is done and the model file changed, the page offers
 **Reload model**. When jobs wait more than two minutes, it says no session seems to be watching.
 
@@ -619,6 +626,80 @@ Then, in a Claude Code session in the game project, say **"watch the review inbo
 `node <editor>/bin/review-watch.mjs --project <game>` with its Monitor tool. That prints `NEW JOB <reviews>/<id>`
 once per waiting job, and each line wakes the session. A Monitor watch lasts at most 30 minutes; the skill
 restarts it. Jobs wait on disk while nobody watches, so nothing is lost.
+
+## Matching a model to its references
+
+Any model (a ship, an apple, a character, a prop) can be measured against the images it was made from. For a model with
+references (`<name>.refs/`, see [Reference images](#reference-images)) the viewer has a **Match** panel: **Measure** renders the
+model in Blender from the reference angles, compares each view with its reference, and shows a score per view, the mean, each
+overlay beside its reference, and warnings. It runs in the background with a progress bar and never blocks the page.
+
+**Blender is optional**, like ComfyUI: the editor itself needs nothing installed. The program is the config's `blender`, else the
+PATH, else where Blender is usually installed; with none, the panel says so and where to get it. The scorer is
+`src/match/score.py`, started as a fixed command (`blender -b --factory-startup --python score.py -- <one settings file>`, no shell);
+the settings file is made by the editor from real paths and the config, never from a request.
+
+**Views.** The references named `front`, `back`, `left`, `right`, `top` and `bottom` are scored (any case, any image type);
+`concept` and `three-quarter` are shown, not scored; views that are not there are not scored. The model is read in glTF's frame
+(Y up, its front toward +Z). *left* is the model seen from its left side (its front toward the image's left), *right* from its
+right (front toward the image's right); front and back have up up; in top and bottom the front is toward the image's top, unless
+the config's `match.planUp` says where a project's references have it (`'right'`, `'down'`, `'left'`; `'auto'`, the default,
+tries all four per view and reports the one it used).
+
+**Scores, per view.** *Silhouette*: intersection over union of the model's outline and the reference's, each cropped to its box and
+scaled to the same width (aspect kept), so framing and scale do not count. *Colour*: inside the overlap of the two outlines, 1 minus
+the mean colour distance (blurred, flat-lit texture against the reference) over `colourFalloff`; silhouette alone flatters simple
+shapes (a grey blob scores high against a red apple), colour does not. *Combined*: `weights.silhouette` and `weights.colour`,
+normalised. The panel's mean is the mean over the scored views.
+
+**Orientation.** Generators turn models arbitrarily, so the four quarter-turns about up are tried (with `match.upFix: true`, all 24
+axis-aligned orientations), the best kept and reported ("turned 270°"). **Reference masks**: a transparent PNG uses its alpha; any
+other image has its background flood-filled from the edges using the edge colour, so any flat background works; a reference whose
+edge is not one flat colour (a gradient, a photo) is scored as well as it can be and reported as *unclean*.
+
+**Reference consistency.** Each view shows two of the object's three sizes. The references' own aspect ratios must agree (the
+width in top against front, the height in side against front ...), or no model can match all of them: the sizes that explain the
+most views are taken as the truth, and a view off by more than `match.tolerance` (5%) is flagged with how far. Where several
+sets of sizes explain the views equally, the sides and the top are trusted before front, back and bottom.
+
+**Output and cache.** Per view, `overlay-<view>.png` (the reference, the model's outline in yellow, red where only the reference has
+something, blue where only the model does) and `render-<view>.png` (a textured render), and `result.json`, in
+`<reviews>/.match/<key>/`. The key is a hash of the model's bytes, its reference images and the settings, so a changed model or
+reference is scored again and an unchanged one at once; the newest 24 results are kept. Routes (Host, Origin and JSON checks as everywhere):
+`GET /api/model/match?path=` (state, progress, result), `POST /api/model/match` `{ path }` (start), `GET /api/model/match/image?key=&name=`
+(only `overlay-<view>.png` and `render-<view>.png` of a result), `POST /api/match/settings` (the loop's last values).
+
+### The match loop
+
+**Improve to target** sends a job that rebuilds the model, re-measures and repeats until a target. Its fields:
+
+| Field (job and page) | Default | |
+|---|---|---|
+| `target` | 0.90 | 0.50 to 0.99, in steps of 0.01 (kept to two decimals) |
+| `maxRounds` | 5 | 1 to 20 |
+| `plateau` | 0.01 | stop when a round improves the mean by less than this; empty: never |
+| `score` | `combined` | which score the target is about: `combined`, or `silhouette` (only) |
+
+The last values are kept per project (`<reviews>/.match/settings.json`). The model must be measured first: the job carries the
+scores of the model as it is. `job.json` gains `match`: the four fields, `views`, `cli` (the command a session runs),
+`baseline` (round 0: `scores` per view with `silhouette`, `colour` and `combined`, `mean` of the chosen score, `means` of all three,
+`orientation`, `flagged` references, `overlays`), the reference `consistency` and `warnings`, and `blender` (its version);
+`match-0-overlay-<view>.png` are beside it. A loop job needs no pin or note.
+
+**Every round is scored by the editor, never by the session that handles the job.** The session runs `node <editor>/bin/match.mjs`
+(`start`, then `round` after each change, then `finish`; `score` measures a model, `status` sets `needs-input`): `round` renders and
+scores the model file as it is, copies the overlays to `round-N-overlay-<view>.png`, appends to `status.json` and prints whether to
+go on. `status.json` gains:
+
+| Field | |
+|---|---|
+| `rounds` | `[{ round, scores: { <view>: { silhouette, colour, combined } }, mean, means, orientation, flagged, changed: [files], note, at, key, seconds?, cost?, unchanged?, overlays }]`. Round 0 is the model as sent; `unchanged: true` when the model file was the one scored last round |
+| `stopReason` | `target-reached`, `out-of-rounds`, `plateau`, or `held-back`: the references disagree with each other and the views without them average at or above the target; they are named in `stopDetail` |
+| `stopDetail` | one sentence: the numbers behind the reason |
+
+The job list shows `Combined target 0.90 · round 2/5: 0.58 → 0.71 → 0.84` and why it stopped. The two workflows differ only in how
+the model is changed: **Blender** by scripts on the model's `.blend` (found, or made beside the model), **Angelo** through its MCP
+tools, with its known 0.1.0 problems handled (`skills/model-review/SKILL.md`).
 
 ## New model
 
@@ -855,6 +936,10 @@ The editor reads and writes files on your machine, so it accepts requests only f
   folder beside that model: a plain file name (no path), PNG, JPEG or WebP by name and by bytes, never SVG, no links,
   at most 40 MB. Jobs are written only to server-named folders and files under
   `reviews`; images are checked by their bytes. `POST /api/review` takes up to 24 MB; everything else keeps 2 MB.
+- **Matching.** The scorer is Blender started with fixed arguments (`-b --factory-startup --python <the editor's own script> -- <settings.json>`,
+  `shell: false`, no input); the settings file holds paths the editor resolved (the model under the real models folder, references from
+  the real `.refs` folder) and checked config values. Its results are read and its pictures served only from `<reviews>/.match/<32 hex>/`,
+  as `overlay-<view>.png` or `render-<view>.png`. `bin/match.mjs` writes only inside a job's own folder (a plain job id).
 - **Keys and agents.** Service keys never leave the host: not to the page, not to agents, not onto a command line
   (the Keychain gets them on its standard input). Agent requests are files the editor answers only with this
   session's token (written owner-only at start), while an agent's watcher is running, for files newer than the
@@ -895,7 +980,7 @@ A config file is code, so it runs with your rights. Only use configs you trust, 
 ## Tests
 
 ```sh
-npm test                 # node:test, no dependencies: a few seconds
+npm test                 # node:test, no dependencies: about a minute (most of it Blender, when it is installed)
 ```
 
 The tests run on macOS, Linux and Windows. On Windows one is skipped (the macOS Keychain) and two leave out a check
@@ -923,6 +1008,13 @@ and plugin jobs (`test/events-jobs.test.mjs`), the manager (`test/plugins-manage
 (`test/plugins-install.test.mjs`), plugins over HTTP (`test/plugins-server.test.mjs`), the workbench's logic
 (`test/shell-core.test.mjs`) and the workbench over HTTP (`test/shell-server.test.mjs`), the vault and the spend guard (`test/vault-spend.test.mjs`),
 and services, agent requests and agent status (`test/services.test.mjs`).
+
+The scorer's tests (`test/match-scorer.test.mjs`: a sphere, a box, a shape with no symmetry, a model turned 90 degrees that
+the orientation search must recover, a model lying on its side, transparent and unclean backgrounds, a top view turned to the side, a
+reference that disagrees with the others) run Blender on tiny generated models, about a minute, and are skipped when Blender is
+not installed. The rest of the match code runs with a stand-in for Blender: settings and the slider's limits, reference consistency, when a
+loop stops, the wrapper (the fixed command, the cache, progress, Blender missing) in `test/match.test.mjs`, and the routes in
+`test/match-server.test.mjs`.
 
 ```sh
 npm run check:browser    # the page in headless Chrome, against a copy of the sample project

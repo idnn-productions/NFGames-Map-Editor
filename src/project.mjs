@@ -2,12 +2,13 @@
 // project's root) says about them. Everything game-specific lives in that config; with none, the defaults below
 // make a plain editor of <project>/maps/<name>/layout.json. README.md "Running it against your own project" lists
 // every option and hook.
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, resolve, isAbsolute, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { NAME, formatPlan, formatPlants, writeKeeping, fileStamp } from './plan.mjs';
 import { checkFile } from './schema.mjs';
 import { normaliseWorkflows } from './reviews.mjs';
+import { normaliseMatch } from './match.mjs';
 import { createModelKinds } from './modelkinds.mjs';
 
 export const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -71,6 +72,8 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
   const modelKindsOn = options.modelKinds !== false, modelKinds = createModelKinds(modelKindsOn ? modelsDir : null);
   const reviewsDir = inside(options.reviews || '.review', '"reviews"');
   const reviewWorkflows = normaliseWorkflows(options.reviewWorkflows, root);
+  normaliseMatch(options.match);                                   // a mistake in the match settings is found at start
+  if (options.blender !== undefined && typeof options.blender !== 'string') fail('"blender" must be the path of the Blender program');
 
   // where the maps are: the config's, or the first of maps/ and data/maps/ that exists
   const mapsDir = options.maps ? at(options.maps) : [join(root, 'maps'), join(root, 'data', 'maps')].find((d) => existsSync(d)) || join(root, 'maps');
@@ -104,7 +107,9 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
   const listMaps = () => (existsSync(mapsDir) ? readdirSync(mapsDir).filter((n) => NAME.test(n) && statSync(join(mapsDir, n)).isDirectory() && existsSync(join(mapsDir, n, 'layout.json'))).sort() : []);
   /** A map name from a request: a plain folder name with a plan in it, or null. */
   const knownMap = (name) => { if (typeof name !== 'string' || !NAME.test(name)) return null; try { return existsSync(planFile(name)) ? name : null; } catch { return null; } };
-  const rel = (file) => { const r = relative(root, file); return (r.startsWith('..') || isAbsolute(r) ? file : r).replace(/\\/g, '/'); };
+  // a path of the project from its root: a file's real path (a model's, say) is measured from the root's real path too, as a temporary folder on macOS is behind a link
+  let realRoot = root; try { realRoot = realpathSync(root); } catch { /* not there: the root as given */ }
+  const rel = (file) => { for (const base of [root, realRoot]) { const r = relative(base, file); if (!r.startsWith('..') && !isAbsolute(r)) return r.replace(/\\/g, '/'); } return file.replace(/\\/g, '/'); };
 
   // what every hook gets as its second argument: where things are, and the editor's own helpers (no import of the editor needed)
   const ctx = { root, editorRoot: EDITOR_ROOT, mapsDir, mapDir, planFile, plantsFile, readPlan, readPlants, readJson, rel, formatPlan, formatPlants, fileStamp, dryRun: false };

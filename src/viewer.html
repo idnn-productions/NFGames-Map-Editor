@@ -63,6 +63,16 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
 #refPanel .bar b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #refPanel .bar .grow { flex: 1; }
 #refPanel .pic { flex: 1; min-height: 0; display: grid; place-items: center; padding: 8px; }
 #refPanel .pic img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
+#refPanel .pic { display: flex; gap: 10px; align-items: center; justify-content: center; }
+#refPanel .pic figure { flex: 1 1 0; min-width: 0; max-height: 100%; margin: 0; display: grid; justify-items: center; gap: 4px; } #refPanel .pic figcaption { font-size: 11px; color: var(--dim); text-align: center; }
+#refPanel .pic figure img { max-width: 100%; max-height: calc(100% - 20px); }
+/* the match panel: scores per view, the target slider */
+#match table { width: 100%; border-collapse: collapse; margin: 6px 0; font-variant-numeric: tabular-nums; } #match td, #match th { padding: 2px 4px; text-align: right; font-weight: normal; } #match th { color: var(--dim); font-size: 11px; }
+#match td:first-child, #match th:first-child { text-align: left; } #match tr.view { cursor: pointer; } #match tr.view:hover { background: #252a35; } #match tr.mean td { border-top: 1px solid var(--line); font-weight: 600; } #match td.target { color: var(--text); font-weight: 600; } #match td.ok { color: var(--ok); }
+#match tr.flag td:first-child::after { content: ' ⚠'; color: var(--bad); }
+#match .small { font-size: 12px; } #match progress { width: 100%; height: 6px; } #match label { display: grid; grid-template-columns: 78px 1fr 40px; gap: 6px; align-items: center; margin: 4px 0; } #match label input[type=number], #match label select { grid-column: 2 / 4; width: 100%; } #match input[type=range] { padding: 0; accent-color: var(--accent); }
+#match .loop { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 4px; } #match p { margin: 4px 0; }
+.rounds { font-variant-numeric: tabular-nums; } .stop { color: var(--ok); } .stop.held-back, .stop.out-of-rounds, .stop.plateau { color: var(--accent); }
 #refGrip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; } #refGrip:hover, #refGrip.drag { background: var(--accent); opacity: .5; }
 </style>
 </head>
@@ -87,10 +97,26 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
   <div id="refGrip" title="Drag to resize"></div>
   <div class="bar"><b id="refName"></b><span id="refCount" class="dim"></span><span class="grow"></span>
    <button id="refPrev" title="Previous reference (←)">‹</button><button id="refNext" title="Next reference (→)">›</button><button id="refClose" title="Close (Esc)">×</button></div>
-  <div class="pic"><img id="refImg" alt="" title="Click to see it at full size"></div>
+  <div class="pic"><figure><img id="refImg" alt="" title="Click to see it at full size"><figcaption id="refCap" hidden></figcaption></figure>
+   <figure id="refOverlayBox" hidden><img id="refOverlay" alt="" title="Click to see it at full size"><figcaption>the model's outline (yellow) · red: only the reference has it · blue: only the model has it</figcaption></figure></div>
  </div>
 </main>
 <aside id="right">
+  <h2 id="matchHead">Match with its references</h2>
+  <div id="match">
+    <p id="matchNote" class="dim">Open a model.</p>
+    <p><button id="matchBtn" hidden title="Render the model from the reference angles and compare it with the references: silhouette, colour, and whether the references agree with each other">Measure</button> <span id="matchProg" class="dim"></span></p>
+    <progress id="matchBar" hidden max="1" value="0"></progress>
+    <table id="matchTable" hidden></table>
+    <div id="matchWarn" class="bad small"></div>
+    <div id="matchLoop" class="loop" hidden>
+      <label title="The loop stops when the mean score reaches this">Target <input id="mTarget" type="range" min="0.5" max="0.99" step="0.01" value="0.9"><output id="mTargetOut">0.90</output></label>
+      <label title="At most this many rounds of fixing and scoring">Max rounds <input id="mRounds" type="number" min="1" max="20" step="1" value="5"></label>
+      <label title="Stop early when a round improves the mean by less than this. Empty: never">Stop below <input id="mPlateau" type="number" min="0" max="0.2" step="0.005" value="0.01" placeholder="off"></label>
+      <label title="Which score the target is about">Score <select id="mScore"><option value="combined">Combined (silhouette and colour)</option><option value="silhouette">Silhouette only</option></select></label>
+      <p><button id="improve" class="primary" disabled title="Sends a job that rebuilds the model, re-measures and repeats until the target, with the workflow chosen below">Improve to target</button> <span id="improveState" class="dim"></span></p>
+    </div>
+  </div>
   <h2>Pins</h2><div id="pins" class="dim">Open a model, then use 📍 Pin (P).</div>
   <h2>Note</h2><textarea id="note" placeholder="What is wrong overall (optional)"></textarea>
   <h2>Workflow</h2><select id="workflow"></select>
@@ -270,7 +296,7 @@ async function openModel(m, { keepCamera = false } = {}) {
   draft = (await loadDraft(modelPath)) || { note: '', workflow: $('workflow').value, pins: [] };
   $('note').value = draft.note || '';
   if (draft.workflow && [...$('workflow').options].some((o) => o.value === draft.workflow && !o.disabled)) $('workflow').value = draft.workflow;
-  rebuildMarkers(); drawPins(); updateSend(); loadRefs(m.path);
+  rebuildMarkers(); drawPins(); updateSend(); loadRefs(m.path); loadMatch(m.path);
   let tris = 0; model.traverse((o) => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
   say(`${m.path} · ${Math.round(tris).toLocaleString()} triangles`);
 }
@@ -287,6 +313,7 @@ async function loadRefs(path) {
   $('modelRefs').hidden = !refs.length;
   $('refsHead').textContent = `References (${refs.length})`;
   $('refStrip').replaceChildren(...refs.map((r, i) => el('button', { className: 'mref', title: `${r.name} · ${(r.size / MB).toFixed(1)} MB`, onclick: () => showRef(refAt === i ? -1 : i) }, el('img', { src: refUrl(r), alt: '', loading: 'lazy' }), el('span', { textContent: refLabel(r) }))));
+  drawRefScores();
   // a reference left open stays open on the next model (the same view when it has one), so models can be compared in turn
   showRef(was === null || !refs.length ? -1 : Math.max(0, refs.findIndex((r) => r.name === was)));
 }
@@ -295,11 +322,12 @@ function showRef(i) {
   refAt = i >= 0 && i < refs.length ? i : -1;
   $('refPanel').hidden = refAt < 0;
   [...$('refStrip').children].forEach((b, j) => b.classList.toggle('on', j === refAt));
-  if (refAt < 0) { $('refImg').removeAttribute('src'); return; }
+  if (refAt < 0) { $('refImg').removeAttribute('src'); $('refOverlay').removeAttribute('src'); $('refOverlayBox').hidden = true; return; }
   const r = refs[refAt];
   $('refName').textContent = refLabel(r); $('refCount').textContent = `${refAt + 1} / ${refs.length}`;
   $('refImg').src = refUrl(r); $('refImg').alt = `reference: ${refLabel(r)}`;
   $('refPrev').disabled = $('refNext').disabled = refs.length < 2;
+  showOverlay();
   refWidth();
   $('refStrip').children[refAt]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
@@ -316,7 +344,7 @@ function wireRefs() {
   box.classList.toggle('closed', keep.get('viewer-refs-closed') === '1');
   $('refsHead').onclick = () => keep.set('viewer-refs-closed', box.classList.toggle('closed') ? '1' : '0');
   $('refPrev').onclick = () => stepRef(-1); $('refNext').onclick = () => stepRef(1); $('refClose').onclick = () => showRef(-1);
-  $('refImg').onclick = () => zoom($('refImg').src);
+  $('refImg').onclick = () => zoom($('refImg').src); $('refOverlay').onclick = () => zoom($('refOverlay').src);
   // Escape closes what is on top first: the full-size picture, then pin mode (the 3D view's own handler), then the reference
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $('zoom').style.display === 'grid') { $('zoom').style.display = 'none'; return; }
@@ -439,22 +467,97 @@ function drawPins() {
   }));
 }
 
+// ---- match: how well the model agrees with its references (see the README, "Matching a model to its references")
+// The scorer runs in Blender on the server, in the background; this page asks for it and polls how far it is.
+let matchState = null, matchTimer = null, matchSaveTimer = null;
+const f2 = (v) => (typeof v === 'number' ? v.toFixed(2) : '–');
+const SCORE_NAMES = { silhouette: 'Silhouette', colour: 'Colour', combined: 'Combined' };
+const VIEW_ORDER = ['front', 'back', 'left', 'right', 'top', 'bottom'];
+const matchResult = () => (matchState && matchState.state === 'done' ? matchState.result : null);
+const viewOfRef = (r) => { const v = refLabel(r).toLowerCase(); return VIEW_ORDER.includes(v) ? v : null; };
+const loopSettings = () => ({ target: Math.round(Number($('mTarget').value) * 100) / 100, maxRounds: Math.round(Number($('mRounds').value)), plateau: $('mPlateau').value === '' ? null : Number($('mPlateau').value), score: $('mScore').value });
+function setLoopControls(v) { $('mTarget').value = v.target; $('mTargetOut').textContent = f2(v.target); $('mRounds').value = v.maxRounds; $('mPlateau').value = v.plateau === null ? '' : v.plateau; $('mScore').value = v.score; }
+function saveLoop() { clearTimeout(matchSaveTimer); matchSaveTimer = setTimeout(() => { post('/api/match/settings', loopSettings()).catch(() => { /* an out-of-range field: the next valid value is kept */ }); }, 400); drawMatch(); }
+async function loadMatch(path) {
+  clearTimeout(matchTimer);
+  try { const s = await api(`/api/model/match?path=${encodeURIComponent(path)}`); if (path !== modelPath) return; matchState = s; } catch (e) { if (path !== modelPath) return; matchState = { state: 'error', error: e.message }; }
+  drawMatch(); drawRefScores(); showOverlay();
+  if (matchState.state === 'running') matchTimer = setTimeout(() => loadMatch(path), 1000);
+}
+async function startMatch() {
+  $('matchBtn').disabled = true;
+  try { matchState = await post('/api/model/match', { path: modelPath }); drawMatch(); matchTimer = setTimeout(() => loadMatch(modelPath), 700); }
+  catch (e) { matchState = { ...(matchState || {}), state: 'failed', error: e.message }; drawMatch(); }
+}
+function drawMatch() {
+  const s = matchState, ok = matchResult(), loop = $('matchLoop'), note = $('matchNote'), btn = $('matchBtn');
+  const clear = () => { $('matchTable').hidden = true; $('matchBar').hidden = true; $('matchProg').textContent = ''; $('matchWarn').textContent = ''; loop.hidden = true; btn.hidden = true; };
+  if (!model || !s) { clear(); note.className = 'dim'; note.textContent = model ? 'Looking at its references…' : 'Open a model.'; return; }
+  note.className = 'dim';
+  if (s.state === 'error') { clear(); note.className = 'bad'; note.textContent = s.error; return; }
+  if (s.state === 'no-views') { clear(); note.textContent = 'To measure this model against its references, put images named front, back, left, right, top or bottom in its .refs folder (see References). Concept and three-quarter images are shown, not scored.'; return; }
+  btn.hidden = false;
+  note.textContent = `Renders the model from ${s.views.join(', ')} and compares each with its reference.`;
+  if (!s.blender.found) { note.className = 'bad'; note.textContent = s.blender.text; }
+  btn.disabled = s.state === 'running' || !s.blender.found; btn.textContent = ok ? 'Measure again' : 'Measure';
+  btn.title = ok ? 'The model has not changed since this was measured: the same scores come back at once' : btn.title;
+  $('matchBar').hidden = s.state !== 'running';
+  if (s.state === 'running') { $('matchBar').max = Math.max(1, s.progress.total); $('matchBar').value = s.progress.done; $('matchProg').textContent = s.progress.text; }
+  else $('matchProg').textContent = s.state === 'failed' ? '' : '';
+  const warn = [];
+  if (s.state === 'failed') warn.push(s.error);
+  const table = $('matchTable');
+  if (ok) {
+    const key = loopSettings().score, want = Number($('mTarget').value);
+    const rows = VIEW_ORDER.filter((v) => ok.views[v]).map((v) => {
+      const x = ok.views[v], flag = ok.consistency && ok.consistency.flagged.includes(v);
+      const cell = (k) => el('td', { className: `${k === key ? 'target' : ''} ${x[k] >= want ? 'ok' : ''}`, textContent: f2(x[k]) });
+      return el('tr', { className: `view${flag ? ' flag' : ''}`, title: flag ? 'This reference disagrees with the others' : `Open the ${v} reference beside its overlay`, onclick: () => { const i = refs.findIndex((r) => viewOfRef(r) === v); if (i >= 0) showRef(i); } }, el('td', { textContent: v }), cell('silhouette'), cell('colour'), cell('combined'));
+    });
+    const mean = (k) => el('td', { className: `${k === key ? 'target' : ''} ${ok.mean[k] >= want ? 'ok' : ''}`, textContent: f2(ok.mean[k]) });
+    table.replaceChildren(el('tr', {}, el('th'), ...Object.values(SCORE_NAMES).map((t) => el('th', { textContent: t }))), ...rows, el('tr', { className: 'mean' }, el('td', { textContent: 'mean' }), mean('silhouette'), mean('colour'), mean('combined')));
+    table.hidden = false;
+    const o = ok.orientation; if (o.turn || o.up !== '+Y') warn.push(`The model is ${o.up !== '+Y' ? `lying with ${o.up} up and ` : ''}turned ${o.turn}° about its up axis from the references: scored as turned back.`);
+    for (const w of ok.warnings || []) warn.push(w.text);
+    for (const w of (ok.consistency && ok.consistency.warnings) || []) warn.push(w);
+    if (ok.consistency && !ok.consistency.checked) { /* fewer than three views: nothing to compare */ }
+  } else table.hidden = true;
+  $('matchWarn').replaceChildren(...warn.map((t) => el('div', { textContent: `⚠ ${t}` })));
+  loop.hidden = !ok; $('improve').disabled = !ok || !model;
+  if (ok) $('matchHead').textContent = `Match with its references · ${f2(ok.mean[loopSettings().score])}`; else $('matchHead').textContent = 'Match with its references';
+}
+// each reference's score under its thumbnail, and the model's outline over it in the large panel
+function drawRefScores() {
+  const ok = matchResult(); if (!$('refStrip')) return;
+  [...$('refStrip').children].forEach((b, i) => { const v = refs[i] && viewOfRef(refs[i]), x = ok && v && ok.views[v], span = b.querySelector('span'); if (span) span.textContent = x ? `${refLabel(refs[i])} ${f2(x.combined)}` : refLabel(refs[i]); });
+}
+function showOverlay() {
+  const ok = matchResult(), r = refAt >= 0 ? refs[refAt] : null, v = r && viewOfRef(r), x = ok && v && ok.views[v];
+  $('refOverlayBox').hidden = !x; $('refCap').hidden = !x;
+  if (!x) { $('refOverlay').removeAttribute('src'); return; }
+  $('refCap').textContent = `reference · ${v} · silhouette ${f2(x.silhouette)} · colour ${f2(x.colour)}`;
+  $('refOverlay').src = `/api/model/match/image?key=${ok.key}&name=${encodeURIComponent(x.overlay)}`; $('refOverlay').alt = `${v}: the model's outline over the reference`;
+}
+$('matchBtn').onclick = startMatch;
+for (const id of ['mTarget', 'mRounds', 'mPlateau', 'mScore']) $(id).oninput = () => { $('mTargetOut').textContent = f2(Number($('mTarget').value)); saveLoop(); };
+$('improve').onclick = () => send({ match: true });
+
 // ---- send, and the jobs
 function updateSend() { $('send').disabled = !model || (!draft.pins.length && !draft.note.trim()); }
-async function send() {
-  const btn = $('send'); btn.disabled = true; $('sendState').textContent = 'sending…';
-  const job = { model: modelPath, note: draft.note, workflow: $('workflow').value, overview: screenshot(),
+async function send({ match = false } = {}) {
+  const btn = $(match ? 'improve' : 'send'), said = $(match ? 'improveState' : 'sendState'); btn.disabled = true; said.textContent = 'sending…';
+  const job = { model: modelPath, note: draft.note, workflow: $('workflow').value, overview: screenshot(), ...(match ? { match: loopSettings() } : {}),
     pins: draft.pins.map((p) => ({ note: p.note, position: p.position, normal: p.normal, mesh: p.mesh, material: p.material, uv: p.uv, camera: p.camera, screenshot: p.screenshot, refs: p.refs })) };
   const size = JSON.stringify(job).length;
-  if (size > 23.5 * MB) { $('sendState').textContent = `too big (${(size / MB).toFixed(1)} MB of 24): remove some reference images`; btn.disabled = false; return; }
+  if (size > 23.5 * MB) { said.textContent = `too big (${(size / MB).toFixed(1)} MB of 24): remove some reference images`; btn.disabled = false; return; }
   try {
     const { id } = await post('/api/review', job);
     sent.set(id, { model: modelPath, positions: draft.pins.map((p) => p.position) });
     await clearDraft(modelPath);
     draft = { note: '', workflow: job.workflow, pins: [] }; $('note').value = '';
     rebuildMarkers(); drawPins(); updateSend();
-    $('sendState').textContent = `sent: ${id}`; pollJobs();
-  } catch (e) { $('sendState').textContent = ''; say(`not sent (your pins are kept): ${e.message}`, 'bad'); btn.disabled = false; }
+    said.textContent = `sent: ${id}`; pollJobs(); drawMatch();
+  } catch (e) { said.textContent = ''; say(`not sent (your pins are kept): ${e.message}`, 'bad'); btn.disabled = false; updateSend(); drawMatch(); }
 }
 async function pollJobs() {
   clearTimeout(pollTimer);
@@ -465,6 +568,7 @@ async function pollJobs() {
   } catch { /* the editor may be restarting: the next poll tries again */ }
   pollTimer = setTimeout(pollJobs, 3000);
 }
+const STOPS = { 'target-reached': 'Target reached', 'out-of-rounds': 'Out of rounds', plateau: 'Stopped: no longer improving', 'held-back': 'Held back by inconsistent references' };
 function drawJobs(reviews) {
   const queued = reviews.filter((j) => j.state === 'queued'), oldest = queued.length ? Math.min(...queued.map((j) => Date.parse(j.createdAt))) : null;
   $('warn').textContent = oldest && Date.now() - oldest > 120000 ? 'No Claude session seems to be watching. In your terminal, say "watch the review inbox". Jobs stay queued until then.' : '';
@@ -473,9 +577,14 @@ function drawJobs(reviews) {
   box.className = '';
   box.replaceChildren(...reviews.slice(0, 20).map((j) => {
     const kids = [el('div', {}, el('span', { className: `state ${j.state}`, textContent: j.state }), ' ', el('span', { textContent: j.model || j.id }), el('span', { className: 'dim', textContent: ` · ${j.pins} pin${j.pins === 1 ? '' : 's'}${j.workflow ? ` · ${j.workflow}` : ''}` }))];
+    if (j.match) {
+      const last = j.rounds[j.rounds.length - 1], means = j.rounds.map((r) => f2(r.mean)).join(' → ');
+      kids.push(el('div', { className: 'rounds', textContent: `${SCORE_NAMES[j.match.score]} target ${f2(j.match.target)} · ${last ? `round ${last.round}/${j.match.maxRounds}: ${means}` : 'not started'}`, title: j.rounds.map((r) => `round ${r.round}: ${f2(r.mean)}${r.note ? ` · ${r.note}` : ''}${r.unchanged ? ' · the model file had not changed' : ''}${r.flagged.length ? ` · references off: ${r.flagged.join(', ')}` : ''}`).join('\n') }));
+      if (j.stopReason) kids.push(el('div', { className: `stop ${j.stopReason}`, textContent: `${STOPS[j.stopReason]}${j.stopDetail ? ` — ${j.stopDetail}` : ''}` }));
+    }
     if (j.summary) kids.push(el('div', { textContent: j.summary }));
     if (j.question) kids.push(el('div', { className: 'bad', textContent: `Question: ${j.question}` }));
-    if (j.state === 'done' && j.modelChanged && j.model === modelPath) kids.push(el('button', { textContent: 'Reload model', onclick: async () => { await listModels(); const m = models.find((x) => x.path === j.model); if (m) openModel(m, { keepCamera: true }); } }));
+    if (j.state === 'done' && j.modelChanged && j.model === modelPath) kids.push(el('button', { textContent: 'Reload model', onclick: async () => { await listModels(); const m = models.find((x) => x.path === j.model); if (m) { await openModel(m, { keepCamera: true }); } } }));
     return el('div', { className: 'job', title: j.id }, ...kids);
   }));
 }
@@ -488,6 +597,7 @@ $('send').onclick = send;
 $('zoom').onclick = () => { $('zoom').style.display = 'none'; };
 wireRefs();
 info = await api('/api/viewer');
+setLoopControls(info.match.last); Object.assign($('mTarget'), { min: info.match.limits.target.min, max: info.match.limits.target.max, step: info.match.limits.target.step }); $('mTarget').value = info.match.last.target;
 document.title = `${info.title ? `${info.title}: ` : ''}model review`;
 for (const w of info.workflows) $('workflow').append(el('option', { value: w.id, textContent: w.enabled ? w.label : `${w.label} (not set up yet)`, disabled: !w.enabled, title: w.description }));
 if (info.three.installed) await startThree(); else showInstall();

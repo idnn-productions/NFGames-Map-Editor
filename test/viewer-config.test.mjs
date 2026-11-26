@@ -9,7 +9,7 @@ describe('the model viewer\'s config', () => {
   it('models and reviews are folders inside the project', async () => {
     const p = await loadProject({ root: SAMPLE, config: { models: 'models' } });
     assert.equal(p.modelsDir, join(SAMPLE, 'models')); assert.equal(p.reviewsDir, join(SAMPLE, '.review'));
-    assert.deepEqual(p.reviewWorkflows.map((w) => w.id), ['auto', 'blender', 'comfyui']);
+    assert.deepEqual(p.reviewWorkflows.map((w) => w.id), ['auto', 'blender', 'angelo', 'comfyui']);
     assert.equal((await loadProject({ root: SAMPLE, config: {} })).modelsDir, SAMPLE); // no models/ folder: the project's own
     assert.equal((await loadProject({ root: SAMPLE, config: { models: false } })).modelsDir, null);
     await assert.rejects(loadProject({ root: SAMPLE, config: { models: '../elsewhere' } }), /"models" must be a folder inside the project/);
