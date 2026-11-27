@@ -3,7 +3,9 @@
 // (see skills/model-review/SKILL.md). Every round is scored here, by the editor's scorer in Blender: the session never
 // judges its own result.
 //
-//   match.mjs score  --project <dir> <model path in the models folder> [--json]     measure a model now
+//   match.mjs score  --project <dir> <model path in the models folder> [--json]     measure a model now: each view's scores, the
+//                                                                                    mean, orientation, consistency, shape (triangles,
+//                                                                                    pieces, floating, longest, origin) and warnings
 //   match.mjs start  --project <dir> <job id>                                       take a loop job: working, round 0 recorded
 //   match.mjs round  --project <dir> <job id> [--changed <file>]... [--note <text>] [--seconds <n>] [--cost <usd>]
 //                                                                                    score the model as it is, record the round, say go on or stop
@@ -18,11 +20,13 @@
 //     either the points are fractions of each view's box and the sizes are null, and `note` says why. `parts` are the same polygons
 //     in parts.json's terms (along from the back end, across from the middle toward the model's left, up from the lowest point),
 //     `frame` naming each point's two numbers ("across", "up" for front and back; "along", "up" for left and right; "across",
-//     "along" for top and bottom); both are null when the sizes are.
+//     "along" for top and bottom); both are null when the sizes are. `warnings` are the references' unclean backgrounds, then
+//     where they disagree with each other. With match.planUp "auto", top and bottom are read in the direction the model's last
+//     score chose (with none, the front toward the top of the picture, and `note` says so).
 import { renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
-import { createMatcher, outlinesOf, refsVerdict } from '../src/match.mjs';
+import { createMatcher, outlineReport } from '../src/match.mjs';
 import { finishLoop, recordRound, setStatus, startLoop } from '../src/matchloop.mjs';
 
 const args = process.argv.slice(2), command = args.shift();
@@ -42,18 +46,13 @@ let project; try { project = await loadProject({ root: one('project') || process
 const matcher = createMatcher(project), target = rest[0];
 if (!target) die(`${command} needs ${command === 'score' || command === 'outline' ? 'a model path' : 'a job id'}`, 2);
 const progress = ({ done, total, text }) => process.stderr.write(`  ${done}/${total} ${text}\n`);
-const summary = (r) => ({ views: Object.fromEntries(Object.entries(r.views).map(([v, s]) => [v, { silhouette: s.silhouette, colour: s.colour, combined: s.combined, background: s.background }])), mean: r.mean, orientation: r.orientation, consistency: r.consistency, warnings: r.warnings });
+const summary = (r) => ({ views: Object.fromEntries(Object.entries(r.views).map(([v, s]) => [v, { silhouette: s.silhouette, colour: s.colour, combined: s.combined, background: s.background }])), mean: r.mean, orientation: r.orientation, consistency: r.consistency, shape: r.shape, warnings: r.warnings });
 try {
   if (command === 'score') {
     const { done } = matcher.start(target, { onProgress: progress }), { result, dir } = await done;
     out(one('json') ? result : { ...summary(result), files: dir });
   } else if (command === 'outline') {
-    const result = await matcher.outlines(target, { points });
-    if (!result.ok) die(`the references could not be traced: ${result.error}`);
-    const verdict = refsVerdict(result, matcher.config.tolerance), o = outlinesOf(result, verdict, length ?? matcher.cached(target)?.result.shape?.longest);
-    const note = !o.length ? 'no --length, and the model has no score yet to take its longest side from: the points are fractions of each view\'s outline box; give --length <metres>'
-      : !o.size ? `the references do not give the object's proportions (${verdict.consistency.why}): the points are fractions of each view's outline box` : undefined;
-    const report = { model: target, ...o, warnings: (result.warnings || []).map((w) => w.text), ...(note ? { note } : {}) };
+    const report = await outlineReport(matcher, target, { points, length });
     const file = matcher.plan(target).file, dest = join(dirname(file), `${basename(file, extname(file))}.outlines.json`);
     writeFileSync(`${dest}.tmp`, `${JSON.stringify(report, null, 1)}\n`); renameSync(`${dest}.tmp`, dest);
     out(report);

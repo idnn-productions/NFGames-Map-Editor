@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+// resolves only for the built-in copy of the plugin, shipped beside src/
 import { SCORER, REFS_LIMITS, refsVerdict } from '../../src/match.mjs';
 import { modelViews } from '../model-maker/draft.mjs';
 import { readPipeline, findBlender, findAutoRemesher, comfy, checksOf, setInputs, outcomeOf, SOURCE_FACES } from './comfy.mjs';
@@ -62,9 +63,9 @@ export function activate(api) {
   function keptResult(slug, hashes) {
     try { const k = JSON.parse(readFileSync(keptFile(slug), 'utf8')), scorer = scorerHash(); return k && k.result && scorer && k.scorer === scorer && JSON.stringify(k.hashes) === JSON.stringify(hashes) ? k.result : null; } catch { return null; }
   }
-  /** The verdict on a kept result, with the outline limit from the setting (0.5 to 0.99; 0.9 when it is not a number). */
+  /** The verdict on a kept result, with the outline limit from the setting (0.5 to 0.99; 0.9 when it is 0 or less, or not a number). */
   function verdict(result) {
-    const s = api.settings.get('viewsOutline'), outline = typeof s === 'number' && Number.isFinite(s) ? Math.min(0.99, Math.max(0.5, s)) : REFS_LIMITS.outline;
+    const s = api.settings.get('viewsOutline'), outline = typeof s === 'number' && Number.isFinite(s) && s > 0 ? Math.min(0.99, Math.max(0.5, s)) : REFS_LIMITS.outline;
     return refsVerdict(result, undefined, { ...REFS_LIMITS, outline });
   }
 

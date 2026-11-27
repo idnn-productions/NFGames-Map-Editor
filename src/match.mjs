@@ -213,6 +213,22 @@ export function outlinesOf(result, verdict, length) {
   })) };
 }
 
+/**
+ * What `match.mjs outline` prints and writes: outlinesOf() the references, traced by the matcher, with the background warnings and
+ * then the references' own disagreements (refsVerdict) in `warnings`, and a `note` when the lengths or the plan direction are not known.
+ * `length` left out: the model's longest side from its last score. Throws when the references could not be traced.
+ */
+export async function outlineReport(matcher, rel, { points = 40, length } = {}) {
+  const result = await matcher.outlines(rel, { points });
+  if (!result.ok) throw new Error(`the references could not be traced: ${result.error}`);
+  const verdict = refsVerdict(result, matcher.config.tolerance), o = outlinesOf(result, verdict, length ?? matcher.cached(rel)?.result.shape?.longest);
+  const notes = [!o.length ? 'no --length, and the model has no score yet to take its longest side from: the points are fractions of each view\'s outline box; give --length <metres>'
+    : !o.size ? `the references do not give the object's proportions (${verdict.consistency.why}): the points are fractions of each view's outline box` : null,
+  result.planUpAssumed ? 'Top and bottom were read with the front toward the top of the picture (no score of the model to take the direction from).' : null].filter(Boolean);
+  const warnings = [...new Set([...(result.warnings || []).map((w) => w.text), ...verdict.warnings])];
+  return { model: rel, ...o, warnings, ...(notes.length ? { note: notes.join('. ') } : {}) };
+}
+
 // ---- what must stay as it was sent
 // The score ignores scale and framing, so a model could reach the target by being made bigger, heavier, moved off its origin
 // or broken into floating pieces. Each of those is held to round 0's shape (the scorer's `shape`), by its own limit.
@@ -353,15 +369,20 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
   }
   /**
    * The references of `rel` alone, each traced as outlines of at most `points` points (the scorer's refsOnly with outlines). Resolves
-   * with the scorer's result. It is run every time, in a folder of its own that then goes: the scores' cache is neither read nor written.
+   * with the scorer's result. It is run every time, in a folder of its own that then goes: the scores' cache never answers for it and is not written.
+   * With the config's planUp "auto", top and bottom are read in the direction the model's cached score chose; with no such score
+   * the front is toward the top of the picture, and the result says so (`planUpAssumed: true`).
    */
   function outlines(rel, { points = 40 } = {}) {
     const p = plan(rel);
     if (!p.views.length) bad('this model has no front, back, left, right, top or bottom reference to trace');
     const blender = findBlender(project.options.blender);
     if (!blender) bad(blenderMissing(project.options.blender), 409);
+    // the plan views' direction: the config's own, else the one the model's last score chose, else the front toward the top
+    const DIRS = ['up', 'right', 'down', 'left'], views = cached(rel)?.result.views || {}, scored = [views.top?.planUp, views.bottom?.planUp].find((u) => DIRS.includes(u));
+    const planUp = DIRS.includes(config.planUp) ? config.planUp : scored || 'up', assumed = !DIRS.includes(config.planUp) && !scored && p.views.some((v) => v === 'top' || v === 'bottom');
     mkdirSync(root, { recursive: true }); const tmp = mkdtempSync(join(root, 'outlines-')), argsFile = join(tmp, 'args.json');
-    writeFileSync(argsFile, JSON.stringify({ refs: p.files, outDir: tmp, result: join(tmp, 'result.json'), refsOnly: true, outlines: points, planUp: ['up', 'right', 'down', 'left'].includes(config.planUp) ? config.planUp : 'up' }));
+    writeFileSync(argsFile, JSON.stringify({ refs: p.files, outDir: tmp, result: join(tmp, 'result.json'), refsOnly: true, outlines: points, planUp }));
     return new Promise((ok, no) => {
       let log = '';
       // the same fixed command as a score: Blender, in the background, with the scorer and one settings file; no shell, no input
@@ -370,7 +391,7 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
       const end = (error, result) => { clearTimeout(timer); rmSync(tmp, { recursive: true, force: true }); return error ? no(Object.assign(new Error(error), { code: 502 })) : ok(result); };
       child.stdout.on('data', (d) => { log = (log + d).slice(-4000); }); child.stderr.on('data', (d) => { log = (log + d).slice(-4000); });
       child.on('error', (e) => end(`Blender could not be started: ${e.message}`));
-      child.on('close', (code) => { const result = readResult(tmp); return result ? end(null, result) : end(`Blender stopped (exit ${code}) without a result. ${log.trim().split('\n').slice(-3).join(' | ')}`); });
+      child.on('close', (code) => { const result = readResult(tmp); return result ? end(null, assumed ? { ...result, planUpAssumed: true } : result) : end(`Blender stopped (exit ${code}) without a result. ${log.trim().split('\n').slice(-3).join(' | ')}`); });
     });
   }
   /** Keeps the newest KEEP result folders (and never `keep`); stray .tmp folders go. */

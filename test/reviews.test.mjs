@@ -106,6 +106,6 @@ describe('review jobs', () => {
     assert.equal(DEFAULT_WORKFLOWS[0].id, 'auto');
     const measured = DEFAULT_WORKFLOWS.find((w) => w.id === 'measured');
     assert.equal(measured.enabled, true); assert.equal(measured.label, 'Build from measurements');
-    for (const word of ['match.mjs outline', 'parts.json', 'build.py']) assert.ok(measured.instructions.includes(word), word);
+    for (const word of ['match.mjs outline', 'parts.json', 'build.py', 'job.match.baseline.shape.origin']) assert.ok(measured.instructions.includes(word), word);
   });
 });

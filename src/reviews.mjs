@@ -21,12 +21,12 @@ export const DEFAULT_WORKFLOWS = [
   { id: 'angelo', label: 'Angelo', description: 'Drive Angelo\'s agent (Blender 5.3 with its own AI) through its MCP server', enabled: true,
     instructions: 'Hand the work to Angelo\'s agent through the angelo_* MCP tools (angelo_send, angelo_status, angelo_read, angelo_look, angelo_new_chat, angelo_settings, angelo_usage), and supervise it as you would a subagent; you do not edit the scene yourself. Follow the "Angelo" section of the model-review skill: it lists what Angelo 0.1.0 cannot do on its own (it writes only where the person chose a folder, its background bakes cannot write files, it can end its turn while a job still runs, approvals and a busy viewport need the person) and what to do about each. If the angelo_* tools are not available in this session, write failed and say so.' },
   { id: 'measured', label: 'Build from measurements', description: 'Rebuild a hard-surface model in Blender from parts measured on its references', enabled: true,
-    instructions: 'Rebuild the model from parts whose sizes are measured on its references, instead of nudging the mesh. This fits hard shapes (hulls, crates, buildings, vehicles), not organic ones. Run match.mjs outline on the model, read <name>.outlines.json and open the references. In it the parts of each view are its outlines already in the terms of parts.json, frame naming the two numbers of each point: read the sizes from those and never convert outlines by hand. along is metres from the back end toward the front, across metres from the middle (positive toward the left of the model), up metres from the lowest point. Before any geometry, write <name>.parts.json beside the model: one entry per part with its along, up and across ranges in metres, its shape (box, cylinder or outline:<view>), its colour and what it attachesTo; every number comes from the outlines, never from looking. If the job has no match loop, set needs-input and show the list before you build; with a loop, go on. Then write <name>.build.py, one function per part, placing nothing by a number that is not in parts.json, run it with blender -b --python and export over the model file (to a temporary name first). Every part must touch what it attachesTo: shape.floating, printed by match.mjs round (or match.mjs score without a loop), must be 0. A wrong number is fixed in parts.json and the build run again; never edit the GLB. Follow the "Build from measurements" section of the model-review skill. The textures of the old model are gone after a rebuild, so colours come from parts.json as flat materials unless this job says otherwise.' },
+    instructions: 'Rebuild the model from parts whose sizes are measured on its references, instead of nudging the mesh. This fits hard shapes (hulls, crates, buildings, vehicles), not organic ones. Run match.mjs outline on the model, read <name>.outlines.json and open the references. In it the parts of each view are its outlines already in the terms of parts.json, frame naming the two numbers of each point: read the sizes from those and never convert outlines by hand. along is metres from the back end toward the front, across metres from the middle (positive toward the left of the model), up metres from the lowest point. Before any geometry, write <name>.parts.json beside the model: one entry per part with its along, up and across ranges in metres, its shape (box, cylinder or outline:<view>), its colour and what it attachesTo; every number comes from the outlines, never from looking. If the job has no match loop, set needs-input and show the list before you build; with a loop, go on. Then write <name>.build.py, one function per part, placing nothing by a number that is not in parts.json, run it with blender -b --python and export over the model file (to a temporary name first). The origin of the rebuilt model goes where the sent model had it: with a loop, at job.match.baseline.shape.origin (fractions of the bounding box: x, up, depth; [0.5, 0.5, 0.5] is the centre, [0.5, 0, 0.5] the centre of the base); without a loop, where match.mjs score reports shape.origin for the model before it is rebuilt. Every part must touch what it attachesTo: shape.floating, printed by match.mjs round (or match.mjs score without a loop), must be 0. A wrong number is fixed in parts.json and the build run again; never edit the GLB. Follow the "Build from measurements" section of the model-review skill. The textures of the old model are gone after a rebuild, so colours come from parts.json as flat materials unless this job says otherwise.' },
   { id: 'comfyui', label: 'ComfyUI', description: 'Regenerate textures or references with a ComfyUI graph', enabled: false, instructions: '' },
 ];
 
-/** What a match-loop job adds to its instructions: how a round is scored and when to stop. `cli` is the command that runs the editor's scorer. */
-export function loopText(match, id, root) {
+/** What a match-loop job adds to its instructions: how a round is scored, when to stop and what is held (less for `workflow` 'measured'). `cli` is the command that runs the editor's scorer. */
+export function loopText(match, id, root, workflow) {
   const run = `${match.cli} <command> --project ${root}`;
   return [
     `MATCH LOOP. Bring this model's agreement with its reference images up to ${match.target.toFixed(2)} (the ${match.score === 'combined' ? 'combined silhouette and colour score' : 'silhouette score'}, averaged over the views ${match.views.join(', ')}). At most ${match.maxRounds} rounds${match.plateau === null ? '' : `; stop early when a round improves the mean by less than ${match.plateau}`}.`,
@@ -37,7 +37,7 @@ The job's current scores are in job.json (match.baseline); the overlay of each v
     `Fix what is most wrong first (the lowest views, the largest red or blue areas). When the decision says stop, finish with
   ${run.replace('<command>', 'finish')} ${id} --summary "<what you did>"
 If a view's reference disagrees with the others (match.baseline.consistency), that caps what any model can score there: do not bend the model to it; the loop will say it was held back by those references.`,
-    `The loop holds the model's size, triangle count, origin and floating pieces to what was sent. \`round\` prints \`drift\`: while it is not empty the round cannot reach the target, so undo that first.`,
+    `${workflow === 'measured' ? 'The loop holds the model\'s origin and floating pieces to what was sent; its size and triangle count are free, because the model is being rebuilt.' : 'The loop holds the model\'s size, triangle count, origin and floating pieces to what was sent.'} \`round\` prints \`drift\`: while it is not empty the round cannot reach the target, so undo that first.`,
   ].join('\n\n');
 }
 
@@ -150,7 +150,7 @@ export function createReview(project, job, { now = new Date(), matcher = null } 
     model: { path: job.model, file: project.rel(modelFile), sha256: createHash('sha256').update(readFileSync(modelFile)).digest('hex'), size: st.size, mtime: Math.round(st.mtimeMs) },
     note, workflow: { id: workflow.id, label: workflow.label, instructions }, references, overview, pins: cleanPins, match,
   };
-  if (match) record.workflow.instructions = [instructions, loopText(match, id, project.root)].join('\n\n');
+  if (match) record.workflow.instructions = [instructions, loopText(match, id, project.root, workflow.id)].join('\n\n');
   try {
     mkdirSync(tmp);
     for (const [name, data] of files) writeFileSync(join(tmp, name), data);
@@ -179,12 +179,12 @@ export function listReviews(project, { limit = 50 } = {}) {
     if (file) { const s = statSync(file); modelChanged = Math.round(s.mtimeMs) !== job.model.mtime || s.size !== job.model.size; }
     const str = (v) => (status && typeof status[v] === 'string' ? status[v] : '');
     const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-    // the match loop: its limits, and the rounds the editor's scorer recorded (a round's mean, scores per view, what was changed and why)
+    // the match loop: its limits, and the rounds the editor's scorer recorded (a round's mean, scores per view, what was changed and why, what drifted)
     const loop = job.match && typeof job.match === 'object' ? { target: job.match.target, maxRounds: job.match.maxRounds, plateau: job.match.plateau, score: job.match.score, views: job.match.views || [] } : null;
     const rounds = status && Array.isArray(status.rounds) ? status.rounds.filter((r) => r && typeof r === 'object' && num(r.mean) !== null).slice(0, 60).map((r) => ({
       round: num(r.round), mean: r.mean, means: r.means && typeof r.means === 'object' ? r.means : null, scores: r.scores && typeof r.scores === 'object' ? r.scores : {},
       changed: Array.isArray(r.changed) ? r.changed.filter((f) => typeof f === 'string').slice(0, 20) : [], note: typeof r.note === 'string' ? r.note : '', flagged: Array.isArray(r.flagged) ? r.flagged : [],
-      unchanged: r.unchanged === true, seconds: num(r.seconds), cost: num(r.cost) })) : [];
+      unchanged: r.unchanged === true, seconds: num(r.seconds), cost: num(r.cost), drift: Array.isArray(r.drift) ? r.drift.filter((t) => typeof t === 'string').slice(0, 10) : [] })) : [];
     return {
       id, createdAt: job.createdAt, model: job.model && job.model.path, note: job.note, workflow: job.workflow && job.workflow.label, pins: (job.pins || []).length,
       state, summary: str('summary'), question: str('question'), updatedAt: str('updatedAt') || null,

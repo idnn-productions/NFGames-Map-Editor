@@ -13,7 +13,8 @@ reference images: `docs/superpowers/specs/2026-11-23-model-references-design.md`
       workflow, target 0.85, three rounds) needs another computer; put what it reached, and what the outlines could not give it, here.
 - [x] **Reference match** and the **match loop** (`src/match.mjs`, `src/match/score.py`, `bin/match.mjs`). Open:
       - the loop's first round is still a session's work: nothing starts a Claude Code session for a job;
-      - the limits of `match.limits` are one number for the whole model: a model that is meant to grow (a rebuild at a new size) has to turn the limit off in the config;
+      - the limits of `match.limits` are one number for the whole model: the `measured` workflow has no size or triangle limit, but a model
+        that is meant to grow in any other workflow still has to turn the limit off in `match.limits`;
       - a lighting match for the colour score (reference art is shaded, the render is flat);
       - the model is scored on one material pass: models with several UV sets, vertex colours or alpha blending are only
         as good as Workbench's texture display;
@@ -39,6 +40,9 @@ reference images: `docs/superpowers/specs/2026-11-23-model-references-design.md`
       Choose the image-to-3D service (a `services` plugin like `codex-image`), where the `.glb` lands in the models
       folder, and how a draft is marked done. It should also copy the draft's `concept.png` and `views/*.png` into
       `<name>.refs/` beside the new `.glb`, so the viewer shows them as the model's references.
+- [ ] Measure the views check on real drafts: run **Check the views against each other** on every draft with approved
+      views and on one deliberately wrong set, write the outline numbers into the README, and say what sound pairs scored
+      against the 0.90 default.
 - [ ] A side panel and an Inspector for the New model tab (they say "nothing to show here" today): the drafts list
       on the left, the picked image large on the right.
 

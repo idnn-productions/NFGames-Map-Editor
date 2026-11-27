@@ -570,7 +570,7 @@ Nothing is fetched at any other time, and no CDN is used.
 
 **Workflows.** **Auto**: Claude decides how to fix it (the project's build script when there is one, else Blender,
 else the GLB). **Blender**: fix the model's source (its build script, or a `.blend` beside it) with Blender scripts, re-export the GLB.
-**Angelo**: the session drives Angelo's agent through its MCP server. **Build from measurements**: for hard shapes (hulls, crates, buildings), the session measures the references with `match.mjs outline`, writes the parts and their sizes to `<name>.parts.json`, and rebuilds the model from them in Blender. **ComfyUI** is listed but not set up yet. Both Blender
+**Angelo**: the session drives Angelo's agent through its MCP server. **Build from measurements**: for hard shapes (hulls, crates, buildings), the session measures the references with `match.mjs outline`, writes the parts and their sizes to `<name>.parts.json`, and rebuilds the model from them in Blender. A loop job with it has no size or triangle limit, because the model is replaced; a project's own workflow with the id `measured` gets the same exception. **ComfyUI** is listed but not set up yet. Both Blender
 and Angelo work for any project: their instructions are in the editor (`src/reviews.mjs`, `skills/model-review`); a project's
 `reviewWorkflows` can name them (`'blender'`, `'angelo'`), replace them, or add its own.
 
@@ -651,7 +651,7 @@ scaled to the same width (aspect kept), so framing and scale do not count. *Best
 one part at an edge (a nose, a pod) has a different box, so that placement shifts the whole outline. The final pass also tries the
 model at 0.90 to 1.10 of that width and moved up to 8 pixels each way (of a 256 grid), and keeps the placement with the highest IoU.
 The box placement is one of those tried, and the best fit is kept only when its combined score is at least the box placement's:
-so with it on, no view's silhouette or combined score is lower than with it off. Each view's `fit` says what was kept: `{ scale, dx, dy }`,
+so with it on, for a fixed plan direction, no view's silhouette or combined score is lower than with it off. With `planUp: "auto"` the direction is chosen by silhouette, so another direction can win. Each view's `fit` says what was kept: `{ scale, dx, dy }`,
 `dx` and `dy` in pixels of the grid, right and down (`{ scale: 1, dx: 0, dy: 0 }` when it is off or the box placement was kept). The colour
 score and the overlay use the same placement, so only the missing part shows red. *Colour*: inside the overlap of the two outlines, 1 minus
 the mean colour distance over `colourFalloff`. References are shaded and the render is flat, so the distance is mostly chromaticity (the colour with its brightness taken out) plus lightness after each image's overall exposure is matched: lighting does not count as a wrong colour; silhouette alone flatters simple
@@ -706,7 +706,7 @@ scores of the model as it is. `job.json` gains `match`: the four fields, `views`
 `match-0-overlay-<view>.png` are beside it. A loop job needs no pin or note.
 
 **Every round is scored by the editor, never by the session that handles the job.** The session runs `node <editor>/bin/match.mjs`
-(`start`, then `round` after each change, then `finish`; `score` measures a model, `status` sets `needs-input`): `round` renders and
+(`start`, then `round` after each change, then `finish`; `score` measures a model, `status` sets `needs-input`, `outline` writes the references as outlines in metres, to build a model from parts): `round` renders and
 scores the model file as it is, copies the overlays to `round-N-overlay-<view>.png`, appends to `status.json` and prints whether to
 go on. `status.json` gains:
 
@@ -771,6 +771,15 @@ into about the number of quads you give, unwrapped again, and its colours, rough
 surface detail are baked onto the new mesh. Blender does it, running AutoRemesher for the quads. The count is a
 target the remesher comes near (often well under it), edges come out a little softer than on the generated mesh,
 and it adds well under a minute. A GLB stores triangles only, so each quad is saved as two.
+
+**Check the views against each other** compares each pair of opposite views (front and back, left and right, top and
+bottom) in Blender, in seconds and without the graphics card: their outlines must show one shape. It only warns, and
+never stops **Generate model**. How closely they must agree is the setting *Views check* under **3D model generation**
+(0.5 to 0.99, default 0.9).
+
+When the workflows folder has an inspect script, Blender inspects the model after it is saved. The line under the model
+then gives its pieces and open edges, and names any floating pieces, flipped faces or non-manifold edges. A failed
+inspection never loses the model: the line says why the mesh was not inspected.
 
 The model is
 saved as `models/<name>/<name>.glb` with its references in `models/<name>/<name>.refs/`, so

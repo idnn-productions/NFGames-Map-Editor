@@ -579,7 +579,7 @@ function drawJobs(reviews) {
     const kids = [el('div', {}, el('span', { className: `state ${j.state}`, textContent: j.state }), ' ', el('span', { textContent: j.model || j.id }), el('span', { className: 'dim', textContent: ` · ${j.pins} pin${j.pins === 1 ? '' : 's'}${j.workflow ? ` · ${j.workflow}` : ''}` }))];
     if (j.match) {
       const last = j.rounds[j.rounds.length - 1], means = j.rounds.map((r) => f2(r.mean)).join(' → ');
-      kids.push(el('div', { className: 'rounds', textContent: `${SCORE_NAMES[j.match.score]} target ${f2(j.match.target)} · ${last ? `round ${last.round}/${j.match.maxRounds}: ${means}` : 'not started'}`, title: j.rounds.map((r) => `round ${r.round}: ${f2(r.mean)}${r.note ? ` · ${r.note}` : ''}${r.unchanged ? ' · the model file had not changed' : ''}${r.flagged.length ? ` · references off: ${r.flagged.join(', ')}` : ''}`).join('\n') }));
+      kids.push(el('div', { className: 'rounds', textContent: `${SCORE_NAMES[j.match.score]} target ${f2(j.match.target)} · ${last ? `round ${last.round}/${j.match.maxRounds}: ${means}` : 'not started'}`, title: j.rounds.map((r) => `round ${r.round}: ${f2(r.mean)}${r.note ? ` · ${r.note}` : ''}${r.unchanged ? ' · the model file had not changed' : ''}${r.flagged.length ? ` · references off: ${r.flagged.join(', ')}` : ''}${r.drift && r.drift.length ? ` · drifted: ${r.drift.join('; ')}` : ''}`).join('\n') }));
       if (j.stopReason) kids.push(el('div', { className: `stop ${j.stopReason}`, textContent: `${STOPS[j.stopReason]}${j.stopDetail ? ` — ${j.stopDetail}` : ''}` }));
     }
     if (j.summary) kids.push(el('div', { textContent: j.summary }));

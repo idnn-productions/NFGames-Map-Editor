@@ -107,7 +107,10 @@ model are gone. Colours come from `parts.json` as flat materials, unless the job
    `needs-input` and show the list of parts before you build. With a loop target, go on.
 3. Write `<name>.build.py`: one function per part in `parts.json`. A part with `outline:<view>` extrudes that outline. Nothing is
    placed by a number that is not in `parts.json`. Run it with `blender -b --python <name>.build.py` and export the GLB over the
-   model file (to a temporary name first, then rename).
+   model file (to a temporary name first, then rename). The rebuilt model's origin goes where the sent model had it. In a loop
+   job that is `job.match.baseline.shape.origin`: fractions of the bounding box (x, up, depth), where `[0.5, 0.5, 0.5]` is the
+   centre and `[0.5, 0, 0.5]` the centre of the base. Without a loop, it is the `shape.origin` that `match.mjs score` reports
+   for the model before you rebuild it.
 4. A part must touch the part it `attachesTo`. Run `match.mjs round` (or, with no loop target, `match.mjs score --project <game>
    <model path>`): it prints `shape.floating`, which must be 0.
 5. A wrong number is fixed in `parts.json`, then the build is run again. Never edit the GLB.

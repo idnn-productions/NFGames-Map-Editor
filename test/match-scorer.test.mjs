@@ -221,11 +221,14 @@ describe('the scorer in Blender', { skip: findBlender('') ? false : 'Blender is 
     const front = metres.views.front;
     assert.deepEqual(front.axes, ['width, the model\'s left on the right', 'height']); assert.ok(within(front.size[0], 4) && within(front.size[1], 2));
     for (const [x, y] of [[0, 0], [front.size[0], 0], front.size, [0, front.size[1]]]) assert.ok(front.outlines[0].some((p) => near(p[0], x, 0.01) && near(p[1], y, 0.01)), `front: no point at ${x}, ${y}`);
-    assert.deepEqual(metres.views.left.axes, ['depth, front toward the left', 'height']); assert.deepEqual(metres.warnings, []); assert.equal(metres.note, undefined);
+    assert.deepEqual(metres.views.left.axes, ['depth, front toward the left', 'height']); assert.deepEqual(metres.warnings, []);
+    assert.equal(metres.note, 'Top and bottom were read with the front toward the top of the picture (no score of the model to take the direction from).');
     const fractions = cli();
     assert.equal(fractions.length, null); assert.equal(fractions.size, null); assert.equal(fractions.views.front.size, null); assert.match(fractions.note, /fractions/);
     assert.ok(fractions.views.front.outlines[0].every((p) => p.every((c) => c >= 0 && c <= 1)));
-    await createMatcher(await loadProject({ root })).start('thing.glb').done;                             // a score of the model gives its longest side
+    const score = spawnSync(process.execPath, [join(REPO, 'bin', 'match.mjs'), 'score', '--project', root, 'thing.glb'], { encoding: 'utf8', shell: false });
+    assert.equal(score.status, 0, score.stderr);                                                          // a score of the model gives its longest side
+    const printed = JSON.parse(score.stdout); assert.equal(typeof printed.shape.floating, 'number'); assert.ok(near(printed.shape.longest, 2, 0.06), JSON.stringify(printed.shape));
     const scored = cli('--points', '4');
     assert.equal(scored.length, 2); assert.ok(within(scored.size.x, 2), JSON.stringify(scored.size)); assert.equal(scored.note, undefined);
     assert.ok(Object.values(scored.views).every((v) => v.outlines.every((o) => o.length <= 4)));

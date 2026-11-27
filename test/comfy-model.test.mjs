@@ -368,6 +368,10 @@ describe('the model service', () => {
       assert.deepEqual((await checkViews('crooked-jug')).warnings, []); assert.equal(runs(), 1);
       settings({ comfyUrl: fake.url, workflowsDir: flows, viewsOutline: 'high' });   // not a number: 0.9
       assert.equal((await checkViews('crooked-jug')).warnings.length, 1); assert.equal(runs(), 1);
+      for (const v of [0, -0.3]) {                                                   // an emptied field saves 0: 0.9, not the lowest limit
+        settings({ comfyUrl: fake.url, workflowsDir: flows, viewsOutline: v });
+        assert.equal((await checkViews('crooked-jug')).warnings.length, 1, String(v)); assert.equal(runs(), 1);
+      }
       writeFileSync(inProject('.nfgames', 'drafts', 'crooked-jug', 'views', 'left.png'), Buffer.concat([dataBytes(PNG_1PX), Buffer.from('redrawn')]));
       assert.equal((await checkViews('crooked-jug')).checked, true); assert.equal(runs(), 2);
       assert.equal((await checkViews('crooked-jug')).seconds, 0); assert.equal(runs(), 2);

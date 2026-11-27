@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
-import { SCORER, VIEWS, consistency, createMatcher, decide, drift, normaliseLoop, normaliseMatch, outlinesOf, refsVerdict, scoredViews, blenderMissing, DEFAULTS, REFS_LIMITS } from '../src/match.mjs';
+import { SCORER, VIEWS, consistency, createMatcher, decide, drift, normaliseLoop, normaliseMatch, outlineReport, outlinesOf, refsVerdict, scoredViews, blenderMissing, DEFAULTS, REFS_LIMITS } from '../src/match.mjs';
 import { createReview, listReviews } from '../src/reviews.mjs';
 import { finishLoop, openJob, recordRound, setStatus, startLoop } from '../src/matchloop.mjs';
 import { REPO, sampleCopy, makeGlb, PNG_1PX, dataBytes } from './helpers.mjs';
@@ -221,7 +221,7 @@ describe('when a loop stops', () => {
 });
 
 // a Blender that is not one: the child process the wrapper starts, and the result it would write
-function fakeSpawn({ views = ['front', 'left', 'top'], means = [0.7], fail = false, hold = false, shapes = [] } = {}) {
+function fakeSpawn({ views = ['front', 'left', 'top'], means = [0.7], fail = false, hold = false, shapes = [], planUp = null } = {}) {
   const calls = [], held = [];
   let n = 0;
   const impl = (file, args, options) => {
@@ -231,7 +231,7 @@ function fakeSpawn({ views = ['front', 'left', 'top'], means = [0.7], fail = fal
     const end = () => {
       if (!fail) {
         const per = typeof mean === 'object' ? mean : Object.fromEntries(views.map((v) => [v, mean]));
-        const out = {}; for (const v of Object.keys(settings.refs)) { out[v] = { silhouette: per[v], colour: per[v] - 0.1, combined: per[v] - 0.04, background: 'flat', refExtent: SOUND[v], modelExtent: [10, 10], planUp: null, overlay: `overlay-${v}.png`, render: `render-${v}.png` }; writeFileSync(join(settings.outDir, `overlay-${v}.png`), dataBytes(PNG_1PX)); }
+        const out = {}; for (const v of Object.keys(settings.refs)) { out[v] = { silhouette: per[v], colour: per[v] - 0.1, combined: per[v] - 0.04, background: 'flat', refExtent: SOUND[v], modelExtent: [10, 10], planUp: ['top', 'bottom'].includes(v) ? planUp : null, overlay: `overlay-${v}.png`, render: `render-${v}.png` }; writeFileSync(join(settings.outDir, `overlay-${v}.png`), dataBytes(PNG_1PX)); }
         const vals = Object.values(out), avg = (k) => vals.reduce((s, x) => s + x[k], 0) / vals.length;
         writeFileSync(settings.result, JSON.stringify({ ok: true, blender: '5.3.0', views: out, size: [1, 1, 1], mean: { silhouette: avg('silhouette'), colour: avg('colour'), combined: avg('combined') }, orientation: { up: '+Y', turn: 0, tried: [] }, warnings: [], ...(shape ? { shape } : {}) }));
       }
@@ -331,6 +331,30 @@ describe('the scorer\'s wrapper', () => {
     await left.outlines('ships/cruiser.glb', { points: 40 }); assert.equal(calls[calls.length - 1].settings.planUp, 'left');
     writeFileSync(join(copy.root, 'models', 'bare.glb'), makeGlb());
     assert.throws(() => matcher.outlines('bare.glb', { points: 40 }), /no front, back, left, right, top or bottom reference/);
+  });
+  it('outline: an "auto" plan direction comes from the model\'s score, and the references\' disagreements are in its warnings', async () => {
+    await setup();
+    const score = fakeSpawn({ planUp: 'right' }), calls = [], impl = (file, args, options) => {
+      const s = JSON.parse(readFileSync(args[args.length - 1], 'utf8'));
+      if (!s.refsOnly) return score.impl(file, args, options);
+      const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill() {} });
+      calls.push(s);
+      setImmediate(() => { writeFileSync(s.result, JSON.stringify({ ok: true, refsOnly: true, views: { front: { refExtent: [1, 1], outlines: [] }, top: { refExtent: [1, 1], planUp: s.planUp, outlines: [] } }, pairs: { 'front-back': { outline: 0.5, colour: 0.5 } }, warnings: [{ view: 'front', text: 'front: the background is not one flat colour' }] })); child.emit('close', 0); });
+      return child;
+    };
+    const matcher = createMatcher(project, { spawnImpl: impl });
+    const none = await outlineReport(matcher, 'ships/cruiser.glb', { points: 12, length: 30 });
+    assert.equal(calls[0].planUp, 'up');
+    assert.match(none.note, /Top and bottom were read with the front toward the top of the picture \(no score of the model to take the direction from\)\./);
+    assert.deepEqual(none.warnings, ['front: the background is not one flat colour', 'front and back: their outlines agree 0.50 (below 0.9): they show two different shapes']);
+    const bare = await outlineReport(matcher, 'ships/cruiser.glb', { points: 12 });
+    assert.match(bare.note, /^no --length, .*give --length <metres>\. Top and bottom were read with the front toward the top/, 'both notes');
+    await matcher.start('ships/cruiser.glb').done;
+    assert.equal(matcher.cached('ships/cruiser.glb').result.views.top.planUp, 'right');
+    const scored = await outlineReport(matcher, 'ships/cruiser.glb', { points: 12, length: 30 });
+    assert.equal(calls[calls.length - 1].planUp, 'right'); assert.doesNotMatch(scored.note || '', /Top and bottom/);
+    const fixed = createMatcher(await loadProject({ root: copy.root, config: { models: 'models', blender: process.execPath, match: { planUp: 'down' } } }), { spawnImpl: impl });
+    assert.doesNotMatch((await outlineReport(fixed, 'ships/cruiser.glb', { points: 12, length: 30 })).note || '', /Top and bottom/); assert.equal(calls[calls.length - 1].planUp, 'down', 'the config\'s own direction wins');
   });
   it('match.mjs outline: --points is a whole number of 4 to 200, and --length and --points need a value', async () => {
     await setup();
@@ -454,6 +478,7 @@ describe('match jobs and their rounds', () => {
     const r = await round(id);
     assert.equal(r.decision.stop, false); assert.equal(r.round.drift.length, 1); assert.match(r.round.drift[0], /longest side is 20 m, was 10 m/);
     assert.deepEqual(openJob(project, id).status.rounds[1].shape, { ...shape, longest: 20 });
+    assert.deepEqual(listReviews(project)[0].rounds.map((x) => x.drift), [[], r.round.drift], 'the list of jobs carries each round\'s drift');
     const fin = finishLoop(project, id, { summary: 'gave up' });
     assert.equal(fin.stopReason, 'out-of-rounds'); assert.match(fin.stopDetail, /drifted from what was sent: the longest side is 20 m, was 10 m/);
   });
@@ -462,12 +487,14 @@ describe('match jobs and their rounds', () => {
     await setup([0.62, 0.8, 0.85], undefined, [shape, { ...shape, triangles: 4000, longest: 20 }, { ...shape, triangles: 4000, longest: 20, pieces: 3, floating: 1 }]);
     const { id } = send({ workflow: 'measured' }); startLoop(project, id);
     assert.equal(openJob(project, id).job.workflow.id, 'measured');
+    assert.match(openJob(project, id).job.workflow.instructions, /The loop holds the model's origin and floating pieces to what was sent; its size and triangle count are free, because the model is being rebuilt\./);
     const r = await round(id);
     assert.equal('drift' in r.round, false, 'four times the triangles and twice the size are what a rebuild does');
     const f = await round(id);
     assert.equal(f.round.drift.length, 1); assert.match(f.round.drift[0], /1 floating piece.*, was 0/);
     await setup([0.62, 0.8], undefined, [shape, { ...shape, triangles: 4000 }]);
     const other = send(); startLoop(project, other.id);
+    assert.match(openJob(project, other.id).job.workflow.instructions, /The loop holds the model's size, triangle count, origin and floating pieces to what was sent\./);
     assert.match((await round(other.id)).round.drift[0], /4000 triangles, was 1000/, 'any other workflow keeps the limit');
   });
   it('held back by references that disagree: they are named', async () => {
