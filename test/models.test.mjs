@@ -9,7 +9,7 @@ import { listModels, resolveModel, listRefs, modelRefs, resolveRef, REF_LIMITS }
 import { makeGlb, dataBytes, PNG_1PX, JPEG_SIG, WEBP_SIG } from './helpers.mjs';
 
 describe('models', () => {
-  let root, dir, outside;
+  let root, dir, outside, top;
   before(() => {
     root = mkdtempSync(join(tmpdir(), 'nfgames-models-'));
     dir = join(root, 'models'); outside = join(root, 'secret');
@@ -21,6 +21,12 @@ describe('models', () => {
     writeFileSync(join(outside, 'leak.glb'), makeGlb());
     symlinkSync(outside, join(dir, 'link'));
     symlinkSync(join(outside, 'leak.glb'), join(dir, 'leak.glb'));
+    // a game's folder: the same model in its source folders, and copies of it where builds and caches put them
+    top = join(root, 'game');
+    for (const f of ['a/x.glb', 'web/dist/x.glb', 'web/.cache/x.glb', 'web/node_modules/p/x.glb', 'web/build/x.glb', 'web/out/x.glb', 'unity/Library/x.glb', 'unity/Temp/x.glb', 'art/raw/x.glb', 'art/town/t.glb']) {
+      mkdirSync(join(top, f, '..'), { recursive: true }); writeFileSync(join(top, f), makeGlb());
+    }
+    writeFileSync(join(top, 'art/town/T.JSON'), '{}');   // the level's own data, whatever the case of its name
   });
   after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -28,6 +34,19 @@ describe('models', () => {
     const list = listModels(dir);
     assert.deepEqual(list.map((m) => m.path), ['crate.GLB', 'ships/cruiser.glb']);
     assert.equal(list[1].size, makeGlb().length); assert.ok(list[1].mtime > 0);
+  });
+  it('skips build and cache copies at any depth, and the folders it is told to', () => {
+    const all = { copies: false };   // a whole project is searched without its builds' and caches' copies
+    assert.deepEqual(listModels(top, all).map((m) => m.path), ['a/x.glb', 'art/raw/x.glb', 'art/town/t.glb']);
+    assert.deepEqual(listModels(top, { ...all, skip: ['art/raw'] }).map((m) => m.path), ['a/x.glb', 'art/town/t.glb']);
+    assert.deepEqual(listModels(top, { ...all, skip: ['art'] }).map((m) => m.path), ['a/x.glb']);
+    // a models folder is listed as it always was: a folder in it called build or out is the project's own
+    assert.deepEqual(listModels(top).map((m) => m.path), ['a/x.glb', 'art/raw/x.glb', 'art/town/t.glb', 'unity/Library/x.glb', 'unity/Temp/x.glb', 'web/build/x.glb', 'web/dist/x.glb', 'web/out/x.glb']);
+  });
+  it('a model with a .json of its name beside it is a level, and so is one the config names', () => {
+    const by = Object.fromEntries(listModels(top, { copies: false, levels: ['a/x.glb'] }).map((m) => [m.path, m.level]));
+    assert.deepEqual(by, { 'a/x.glb': true, 'art/raw/x.glb': undefined, 'art/town/t.glb': true });
+    assert.equal('level' in listModels(top).find((m) => m.path === 'a/x.glb'), false);
   });
   it('a missing folder lists nothing', () => assert.deepEqual(listModels(join(root, 'nope')), []));
   it('resolves a model inside the folder', () => assert.equal(resolveModel(dir, 'ships/cruiser.glb'), realpathSync(join(dir, 'ships', 'cruiser.glb'))));

@@ -1,7 +1,7 @@
 {
   "id": "nfgames.comfy-model",
   "name": "3D model generation (ComfyUI)",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "engines": { "nfgames": "^1.1.0" },
   "server": "server.mjs",
   "touches": { "files": [".nfgames/drafts/**", "models/**"], "commands": ["blender", "autoremesher"], "network": true },
@@ -10,6 +10,7 @@
       "comfyUrl": { "type": "string", "default": "http://127.0.0.1:8188", "title": "ComfyUI's address" },
       "workflowsDir": { "type": "string", "default": "", "title": "Workflows folder (your checkout of comfy-ui-model-workflows)" },
       "blender": { "type": "string", "default": "", "title": "Blender program (empty: found on the PATH or where it is usually installed)" },
+      "viewsOutline": { "type": "number", "default": 0.9, "title": "Views check: how well opposite views' outlines must agree (0.5 to 0.99)" },
       "autoremesher": { "type": "string", "default": "", "title": "AutoRemesher program, for the clean-up into quads (empty: found on the PATH)" }
     },
     "services": [{
@@ -19,7 +20,8 @@
       "provider": "ComfyUI on your computer",
       "actions": [
         { "id": "status", "title": "Check what it needs", "cost": { "estimate": 0 } },
-        { "id": "generate", "title": "Generate a model", "cost": { "estimate": 0, "note": "runs on your GPU" } }
+        { "id": "generate", "title": "Generate a model", "cost": { "estimate": 0, "note": "runs on your GPU" } },
+        { "id": "checkViews", "title": "Check the views against each other", "cost": { "estimate": 0 } }
       ]
     }]
   },

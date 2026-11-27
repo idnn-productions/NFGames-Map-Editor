@@ -1,10 +1,11 @@
 // A project: its config (or the defaults), its maps folder, the schema check and what stops a save.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadProject, BUILT_IN_SCHEMAS } from '../src/project.mjs';
-import { SAMPLE, samplePlan, samplePlants, sampleCopy } from './helpers.mjs';
+import { SAMPLE, samplePlan, samplePlants, sampleCopy, makeGlb } from './helpers.mjs';
 
 const sample = () => loadProject({ root: SAMPLE });
 
@@ -98,5 +99,53 @@ describe('the config', () => {
   });
   it('a config file that is missing is an error, not a silent default', async () => {
     await assert.rejects(loadProject({ root: SAMPLE, config: join(SAMPLE, 'nope.config.mjs') }), /no such file/);
+  });
+});
+
+describe('what the model viewer browses', () => {
+  /** A game's folder: a model New model made, a level with its data, a prop, and a build's copy of the level. */
+  function game(t) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'nfgames-assets-')));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    for (const f of ['models/ship/ship.glb', 'art/town/t.glb', 'art/props/barrel.glb', 'dist/t.glb']) { mkdirSync(join(root, f, '..'), { recursive: true }); writeFileSync(join(root, f), makeGlb()); }
+    writeFileSync(join(root, 'art/town/t.json'), '{}');
+    return root;
+  }
+  const listed = (p) => p.assets().map((m) => [m.path, !!m.level]);
+
+  it('the viewer browses the whole project; the palette keeps the models folder', async (t) => {
+    const root = game(t), p = await loadProject({ root, config: {} });
+    assert.equal(p.assetsDir, root); assert.equal(p.modelsDir, join(root, 'models'));
+    assert.deepEqual(listed(p), [['art/props/barrel.glb', false], ['art/town/t.glb', true], ['models/ship/ship.glb', false]]);
+    assert.deepEqual(Object.keys(await p.kinds('x', {})).filter((k) => k.startsWith('model:')), ['model:ship']);   // the palette is as it was
+  });
+  it('a path from before this, from the models folder, still resolves, and comes back as it is now', async (t) => {
+    const root = game(t), p = await loadProject({ root, config: {} });
+    assert.deepEqual(p.resolveAsset('ship/ship.glb'), { file: join(root, 'models/ship/ship.glb'), path: 'models/ship/ship.glb' });
+    assert.equal(p.resolveAsset('models/ship/ship.glb').path, 'models/ship/ship.glb');
+    assert.equal(p.resolveAsset('dist/t.glb').path, 'dist/t.glb');                                                 // not listed, still there
+    for (const bad of ['../x.glb', 'nope.glb', 'art/town/t.json', '', null]) assert.equal(p.resolveAsset(bad), null, String(bad));
+  });
+  it('a models folder the search would pass over is still listed, and the palette offers what it always did', async (t) => {
+    const root = game(t);
+    for (const f of ['web/dist/models/crane.glb', 'web/dist/models/build/gate.glb', 'web/dist/other.glb']) { mkdirSync(join(root, f, '..'), { recursive: true }); writeFileSync(join(root, f), makeGlb()); }
+    const p = await loadProject({ root, config: { models: 'web/dist/models' } });
+    assert.deepEqual(p.assets().map((m) => m.path), ['art/props/barrel.glb', 'art/town/t.glb', 'models/ship/ship.glb', 'web/dist/models/build/gate.glb', 'web/dist/models/crane.glb']);
+    assert.deepEqual(Object.keys(await p.kinds('x', {})).filter((k) => k.startsWith('model:')).sort(), ['model:crane', 'model:gate']);
+    const skipped = await loadProject({ root, config: { models: 'web/dist/models', assets: { skip: ['web'], levels: ['web/dist/models/crane.glb'] } } });
+    assert.deepEqual(skipped.assets().map((m) => m.path), ['art/props/barrel.glb', 'art/town/t.glb', 'models/ship/ship.glb']);   // what the config leaves out stays out
+    const named = await loadProject({ root, config: { models: 'web/dist/models', assets: { levels: ['web/dist/models/crane.glb'] } } });
+    assert.equal(named.assets().find((m) => m.path === 'web/dist/models/crane.glb').level, true);
+  });
+  it('assets: false keeps the models folder as the whole list; skip and levels are checked', async (t) => {
+    const root = game(t), off = await loadProject({ root, config: { assets: false } });
+    assert.equal(off.assetsDir, join(root, 'models')); assert.deepEqual(listed(off), [['ship/ship.glb', false]]);
+    assert.equal(off.resolveAsset('ship/ship.glb').path, 'ship/ship.glb'); assert.equal(off.resolveAsset('art/town/t.glb'), null);
+    const none = await loadProject({ root, config: { assets: false, models: false } });
+    assert.equal(none.assetsDir, null); assert.deepEqual(none.assets(), []); assert.equal(none.resolveAsset('ship/ship.glb'), null);
+    const cfg = await loadProject({ root, config: { assets: { skip: ['art'], levels: ['models/ship/ship.glb'] } } });
+    assert.deepEqual(listed(cfg), [['models/ship/ship.glb', true]]);
+    for (const assets of [{ skip: ['../out'] }, { skip: 'art' }, { levels: ['art/town'] }, { levels: [7] }, 'yes', true, []])
+      await assert.rejects(loadProject({ root, config: { assets } }), /map editor config: .*assets/, JSON.stringify(assets));
   });
 });

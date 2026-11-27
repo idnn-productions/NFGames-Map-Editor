@@ -17,8 +17,10 @@ import { plantEditing } from './plan.mjs';
 import { view3d } from './view3d.mjs';
 import { checkFit, checkPlants } from './check.mjs';
 import { createJobs } from './jobs.mjs';
-import { listModels, listRefs, resolveModel, resolveRef } from './models.mjs';
+import { listRefs, resolveRef } from './models.mjs';
+import { readMaterialLibrary, resolveMaterialFile } from './materials.mjs';
 import { createReview, listReviews, publicWorkflows, LIMITS } from './reviews.mjs';
+import { LOOP, createMatcher } from './match.mjs';
 import { installThree, vendorBase, vendorFile, vendorState } from './vendor.mjs';
 import { HOME, addRecent, browse, configTrust, insideHome, recentProjects, trustConfig } from './home.mjs';
 import { createEvents } from './events.mjs';
@@ -91,7 +93,7 @@ export async function preview(project, name, plan, plants = undefined, plugins =
 
 /** The server for `project`. `port` is the one it will listen on (the Host check needs it). */
 export function createEditor(initial, { port = initial.port, defaultMap = null, dryRun = false, editorRoot = EDITOR_ROOT, fetchImpl = fetch, home = HOME, stateDir = join(HOME, '.nfgames-editor'), pluginDirs = {}, securityBin = undefined, requestInterval = 2000 } = {}) {
-  let project = initial, jobs = createJobs(project, { dryRun }), startMap = defaultMap;
+  let project = initial, jobs = createJobs(project, { dryRun }), startMap = defaultMap, matcher = createMatcher(project);
   const events = createEvents();
   const dirs = { builtinDir: join(EDITOR_ROOT, 'plugins'), userDir: join(stateDir, 'plugins'), packagesDir: join(stateDir, 'packages'), ...pluginDirs };
   const providers = new Map(), vault = createVault({ stateDir, ...(securityBin !== undefined ? { securityBin } : {}) }), spend = createSpend({ stateDir });
@@ -115,7 +117,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
     let next;
     try { next = await loadProject({ root: dir }); } catch (e) { throw Object.assign(new Error(e.message), { code: 400 }); }
     await plugins.close();
-    project = next; jobs = createJobs(project, { dryRun }); project.ctx.dryRun = dryRun; startMap = null;
+    project = next; jobs = createJobs(project, { dryRun }); matcher = createMatcher(project); project.ctx.dryRun = dryRun; startMap = null;
     plugins = makePlugins(); await plugins.fire('onStartup', 'onProject'); events.emit('project/changed', { root: dir });
     requests.stop(); requests = requestLoop();
     addRecent(stateDir, dir);
@@ -173,24 +175,45 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       if (req.method === 'GET' && path === '/api/projects') return send(200, { current: { root: project.root, name: basename(project.root), title: project.options.title || null, maps: project.listMaps().length }, recent: recentProjects(stateDir), home: insideHome(home, home) });
       if (req.method === 'GET' && path === '/api/browse') { try { return send(200, browse(home, url.searchParams.get('path') || home)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
       if (req.method === 'POST' && path === '/api/project') { const b = await body(); try { return send(200, await switchProject(b && b.root, { trust: !!b && b.trust === true })); } catch (e) { return send(e.code || 500, { error: e.message }); } }
-      if (req.method === 'GET' && path === '/api/viewer') return send(200, { three: vendorState(editorRoot), models: project.modelsDir ? project.rel(project.modelsDir) || '.' : null, reviews: project.rel(project.reviewsDir), workflows: publicWorkflows(project.reviewWorkflows), title: project.options.title || null });
+      if (req.method === 'GET' && path === '/api/viewer') return send(200, { three: vendorState(editorRoot), models: project.assetsDir ? project.rel(project.assetsDir) || '.' : null, root: basename(project.root), modelsFolder: project.modelsDir ? project.rel(project.modelsDir) || '.' : null, reviews: project.rel(project.reviewsDir), workflows: publicWorkflows(project.reviewWorkflows), match: { limits: LOOP, last: matcher.settings() }, title: project.options.title || null });
       if (req.method === 'POST' && path === '/api/vendor/install') { try { return send(200, await installThree(editorRoot, { fetchImpl })); } catch (e) { return send(502, { error: e.message }); } }
-      if (req.method === 'GET' && path === '/api/models') return send(200, { models: project.modelsDir ? listModels(project.modelsDir) : [] });
+      if (req.method === 'GET' && path === '/api/models') return send(200, { models: project.assets() });
       if (req.method === 'GET' && path === '/api/model') {
-        const file = resolveModel(project.modelsDir, url.searchParams.get('path'));
+        const asset = project.resolveAsset(url.searchParams.get('path')), file = asset && asset.file;   // anywhere in the project; a path from the models folder still opens
         if (!file) return send(404, { error: 'no such model' });
         res.writeHead(200, { 'Content-Type': 'model/gltf-binary', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
         return createReadStream(file).pipe(res);
       }
+      // external PBR material sets (for engines that bind scanned textures by material name)
+      if (req.method === 'GET' && path === '/api/materials') return send(200, readMaterialLibrary(project.materials));
+      if (req.method === 'GET' && path === '/api/material/file') {
+        const hit = resolveMaterialFile(project.materials, url.searchParams.get('set'), url.searchParams.get('file'));
+        if (!hit) return send(404, { error: 'no such material texture' });
+        res.writeHead(200, { 'Content-Type': hit.type, 'Content-Length': hit.size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
+        return createReadStream(hit.file).pipe(res);
+      }
       // a model's reference images: only image files of the .refs folder beside it, named plainly (models.mjs)
-      if (req.method === 'GET' && path === '/api/model/refs') return send(200, { refs: listRefs(project.modelsDir, url.searchParams.get('path')) });
+      if (req.method === 'GET' && path === '/api/model/refs') { const asset = project.resolveAsset(url.searchParams.get('path')); return send(200, { refs: asset ? listRefs(project.assetsDir, asset.path) : [] }); }
       if (req.method === 'GET' && path === '/api/model/ref') {
-        const ref = resolveRef(project.modelsDir, url.searchParams.get('path'), url.searchParams.get('name'));
+        const asset = project.resolveAsset(url.searchParams.get('path')), ref = asset && resolveRef(project.assetsDir, asset.path, url.searchParams.get('name'));
         if (!ref) return send(404, { error: 'no such reference' });
         res.writeHead(200, { 'Content-Type': ref.type, 'Content-Length': ref.size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
         return createReadStream(ref.file).pipe(res);
       }
-      if (req.method === 'POST' && path === '/api/review') { const job = await body(LIMITS.body); try { return send(200, createReview(project, job)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
+      // matching a model against its references: the scorer runs in Blender in the background; the page polls (match.mjs)
+      if (req.method === 'GET' && path === '/api/model/match') { try { return send(200, matcher.status(url.searchParams.get('path'))); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
+      if (req.method === 'POST' && path === '/api/model/match') {
+        const b = (await body()) || {};
+        try { matcher.start(b.path); return send(200, matcher.status(b.path)); } catch (e) { return send(e.code === 400 || e.code === 409 ? e.code : 500, { error: e.message }); }
+      }
+      if (req.method === 'GET' && path === '/api/model/match/image') {
+        const file = matcher.image(url.searchParams.get('key'), url.searchParams.get('name'));
+        if (!file) return send(404, { error: 'no such picture' });
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
+        return createReadStream(file).pipe(res);
+      }
+      if (req.method === 'POST' && path === '/api/match/settings') { const b = await body(); try { return send(200, matcher.saveSettings(b)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
+      if (req.method === 'POST' && path === '/api/review') { const job = await body(LIMITS.body); try { return send(200, createReview(project, job, { matcher })); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
       if (req.method === 'GET' && path === '/api/reviews') return send(200, { reviews: listReviews(project) });
 
       // everything below is about one map, named in the query: a plain folder name under the maps folder, or the default

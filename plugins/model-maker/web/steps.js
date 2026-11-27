@@ -16,7 +16,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   let draft = null, prompts = {}, step = 'concept', connected = true, gone = false;
   const form = { name: '', description: '', style: '', count: 4, prompt: {}, viewCount: {}, length: '', faces: 60000, ultrashape: true, cleanup: false, quads: 12000 };   // what is typed, kept across redraws
   let made = { views: [], missing: [] };   // what a model would be made from now, as the server sees the draft
-  let needs = null, checking = false, modelRun = { state: 'idle' }, elsewhere = null;   // step 3: what it needs; this tab's run; a run this tab did not start
+  let needs = null, checking = false, modelRun = { state: 'idle' }, elsewhere = null, viewsCheck = null;   // step 3: what it needs; this tab's run; a run this tab did not start; the views check ({ state, result, error })
   const running = new Set(), notes = {};   // steps generating in this tab; what went wrong, per step
   let closeLarge = null;   // the large view, while one is open
 
@@ -107,6 +107,26 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
     try { needs = await api.services.call(MODEL, 'status', { ultrashape: form.ultrashape, cleanup: form.cleanup }); }
     catch (e) { needs = { ready: false, queue: null, setup: null, checks: [{ id: 'service', ok: false, text: `The model service did not answer: ${e.message}`, help: 'See Plugins: "3D model generation (ComfyUI)" must be on.' }] }; }
     checking = false; draw();
+  }
+  /** Compares the approved views with each other (Blender on the CPU, seconds). It only warns: generating never waits on it. */
+  async function checkViews() {
+    if (viewsCheck && viewsCheck.state === 'running') return;
+    const job = await runningJob();
+    if (job) { viewsCheck = { state: 'failed', error: `The editor is busy (${job.label || job.kind || 'a job'} is running). Try again when it is done.` }; return draw(); }
+    viewsCheck = { state: 'running' }; draw();
+    try { const result = await api.services.call(MODEL, 'checkViews', { draft: draft.slug }); viewsCheck = { state: 'done', result }; }
+    catch (e) { viewsCheck = { state: 'failed', error: e.message }; }
+    if (!gone) draw();
+  }
+  /** The views check's answer: a cross per warning, a plain line per note, or that the views agree. */
+  function viewsAnswer() {
+    const c = viewsCheck;
+    if (!c) return null;
+    if (c.state === 'running') return h('p', { className: 'mm-wait', textContent: 'Comparing the views…' });
+    if (c.state === 'failed') return h('p', { className: 'mm-bad', textContent: c.error });
+    const r = c.result, lines = [...r.warnings.map((t) => ['bad', '✕', t]), ...r.notes.map((t) => ['unknown', '', t])];
+    if (!lines.length) return h('p', { className: 'mm-note', textContent: 'The views agree.' });
+    return h('ul', { className: 'mm-views-check' }, ...lines.map(([kind, mark, t]) => h('li', { className: `mm-need ${kind}` }, h('span', { className: 'mark', textContent: mark }), h('div', { textContent: t }))));
   }
   async function generateModel() {
     const length = Number(form.length), slug = draft.slug;
@@ -218,7 +238,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
           onchange: act('views', (e) => call('/draft/save', { views: { list: ALL_VIEWS.filter((y) => (y === x ? !v.list.includes(x) : v.list.includes(y))), prompts: {} } })) }), ` ${x}`))),
         h('div', { className: 'mm-row', style: 'margin:12px 0' }, btn(anyRunning ? 'Generating…' : 'Generate views', generateViews, { cls: 'primary', disabled: !connected || anyRunning || !unmade.length, title: unmade.length ? `Makes ${unmade.join(', ')}, one after another` : 'Every view has images: generate one again from its row' }),
           h('span', { className: 'grow' }), v.approved ? h('span', { className: 'mm-note', textContent: 'These views are approved.' }) : null,
-          btn(v.approved ? 'Go to Model →' : 'Approve views', act('views', async () => { if (!v.approved) await call('/draft/approve', { step: 'views' }); step = 'model'; }), { cls: 'primary', disabled: v.list.some((x) => !v.picks[x]) })),
+          btn(v.approved ? 'Go to Model →' : 'Approve views', act('views', async () => { if (!v.approved) await call('/draft/approve', { step: 'views' }); viewsCheck = null; step = 'model'; }), { cls: 'primary', disabled: v.list.some((x) => !v.picks[x]) })),
         whyNot(), notes.views ? h('p', { className: 'mm-bad', textContent: notes.views }) : null,
         ...v.list.map(row)))];
   }
@@ -242,11 +262,14 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   function model() {
     const v = draft.views, all = [['concept', draft.concept.approved], ...v.list.map((x) => [x, v.picks[x]])], unused = v.list.filter((x) => !made.views.includes(x));
     const busy = running.has('model') || !!elsewhere, can = !!needs && needs.ready && !made.missing.length && !busy && !checking;
-    const r = modelRun.result, after = r && r.report && r.report.after;
+    const r = modelRun.result, after = r && r.report && r.report.after, mesh = r && r.report && r.report.mesh;
     return [h('h2', { textContent: draft.name }),
       h('div', { className: 'mm-grid small' }, ...all.map(([title, path]) => pic(path, { title, group: all.map(([t, q]) => ({ path: q, src: src(q), caption: t })) }))),
       made.missing.length ? h('p', { className: 'mm-bad', textContent: `A model needs the front, left, back and right views. Missing: ${made.missing.join(', ')}. Add ${made.missing.length > 1 ? 'them' : 'it'} in Views.` })
         : h('p', { className: 'mm-note', textContent: `The model is made from ${made.views.join(', ')}.${unused.length ? ` Not used: ${unused.join(', ')}${unused.some((x) => x === 'top' || x === 'bottom') ? ' (top and bottom are used only as a pair)' : ''}.` : ''}` }),
+      h('div', { className: 'mm-row' }, btn(viewsCheck && viewsCheck.state === 'running' ? 'Checking the views…' : 'Check the views against each other', checkViews,
+        { disabled: busy || checking || !needs || (viewsCheck && viewsCheck.state === 'running') || needs.checks.some((c) => c.id === 'blender' && c.ok === false), title: 'Compares opposite views with each other in Blender: seconds, no graphics card. It only warns.' })),
+      viewsAnswer(),
       needsBox(),
       h('div', { className: 'mm-row', style: 'margin-top:12px' },
         h('span', { className: 'mm-note', textContent: 'Longest side (metres)' }), field.key(h('input', { type: 'number', min: 0, step: 'any', placeholder: '1.2', value: form.length, style: 'width:90px', oninput: (e) => { form.length = e.target.value; const b = el.querySelector('.mm-go'); if (b) b.disabled = !can || !(Number(form.length) > 0); } }), 'length'),
@@ -262,7 +285,10 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
       modelRun.state === 'failed' ? h('p', { className: 'mm-bad', textContent: modelRun.error }) : null,
       draft.model && modelRun.state !== 'running' ? h('div', { className: 'mm-made' },
         h('p', {}, `Saved as ${draft.model.path}, ${draft.model.length} m on its longest side`,
-          after ? `: ${r.report.cleanup && r.report.cleanup.quads ? `${Number(r.report.cleanup.quads).toLocaleString()} quads, ` : ''}${Number(after.triangles).toLocaleString()} triangles${after.mb ? `, ${after.mb} MB` : ''}${r.seconds ? `, made in ${r.seconds} s` : ''}.` : '.'),
+          after ? `: ${r.report.cleanup && r.report.cleanup.quads ? `${Number(r.report.cleanup.quads).toLocaleString()} quads, ` : ''}${Number(after.triangles).toLocaleString()} triangles${after.mb ? `, ${after.mb} MB` : ''}${r.seconds ? `, made in ${r.seconds} s` : ''}${mesh ? `, ${mesh.pieces} piece${mesh.pieces === 1 ? '' : 's'}, ${mesh.openEdges} open edge${mesh.openEdges === 1 ? '' : 's'}` : ''}.` : '.'),
+        ...(mesh ? [[mesh.floating, 'floating piece', 'parts that touch nothing'], [mesh.flippedFaces, 'flipped face', 'faces that point into the model'], [mesh.nonManifoldEdges, 'non-manifold edge', 'edges shared by more than two faces']]
+          .filter(([n]) => n > 0).map(([n, what, why]) => h('p', { className: 'mm-bad', textContent: `✕ ${n} ${what}${n === 1 ? '' : 's'}: ${why}` })) : []),
+        r && r.report && r.report.inspectError ? h('p', { className: 'mm-note', textContent: `The mesh was not inspected: ${r.report.inspectError}` }) : null,
         Object.assign(h('a', { className: 'mm-btn primary', textContent: 'Open in the model viewer', href: `/viewer?model=${encodeURIComponent(draft.model.path.replace(/^models\//, ''))}` }), { target: '_blank', rel: 'noopener' })) : null];
   }
   function draw() {

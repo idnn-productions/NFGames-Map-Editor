@@ -11,8 +11,8 @@ export const SOURCE_FACES = 200000;
 const MODEL_FILE = /\.(safetensors|sft|pt|pth|ckpt|bin|gguf|onnx)$/i;
 const VIEW_LOADER = /^in_.*_image$/;
 
-/** The workflows folder `dir` as its pipeline.json describes it: { dir, version, multiview (the graph), finish, cleanup, setup }.
- *  cleanup (the script that remeshes into quads) is null from a checkout older than it.
+/** The workflows folder `dir` as its pipeline.json describes it: { dir, version, multiview (the graph), finish, cleanup, inspect, setup }.
+ *  cleanup (the script that remeshes into quads) and inspect (the one that measures the finished mesh) are null from a checkout older than them.
  *  Throws an Error whose message is for the user. */
 export function readPipeline(dir) {
   if (typeof dir !== 'string' || !dir.trim()) throw new Error('Set the workflows folder: your checkout of comfy-ui-model-workflows.');
@@ -27,11 +27,11 @@ export function readPipeline(dir) {
     const at = resolve(root, rel); if (!existsSync(at)) throw new Error(`The workflows folder is missing ${rel}.`);
     return at;
   };
-  const finish = inside(p.finish, 'finish'), cleanup = p.cleanup == null ? null : inside(p.cleanup, 'cleanup');
+  const finish = inside(p.finish, 'finish'), cleanup = p.cleanup == null ? null : inside(p.cleanup, 'cleanup'), inspect = p.inspect == null ? null : inside(p.inspect, 'inspect');
   let multiview; try { multiview = JSON.parse(readFileSync(inside(p.multiview, 'multiview'), 'utf8')); } catch (e) { throw new Error(/missing|inside/.test(e.message) ? e.message : `${p.multiview} cannot be read as JSON.`); }
   if (!multiview || typeof multiview !== 'object' || Array.isArray(multiview) || !Object.values(multiview).every((n) => n && typeof n.class_type === 'string' && n.inputs && typeof n.inputs === 'object'))
     throw new Error(`${p.multiview} is not a workflow in ComfyUI's API format.`);
-  return { dir: root, version: p.version, multiview, finish, cleanup, setup: typeof p.setup === 'string' && /^https:\/\//.test(p.setup) ? p.setup : null };
+  return { dir: root, version: p.version, multiview, finish, cleanup, inspect, setup: typeof p.setup === 'string' && /^https:\/\//.test(p.setup) ? p.setup : null };
 }
 
 /** Where Blender is: the setting when it names a file; else on the PATH; else where it is usually installed. Or null. */

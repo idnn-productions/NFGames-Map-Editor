@@ -2,25 +2,39 @@
 // against that folder and must stay in it (real paths compared, so a symlink cannot lead out), and must name a .glb.
 // A model's reference images (what it was made from) are the image files in the folder next to it, <name>.refs/.
 import { closeSync, lstatSync, openSync, readSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 
 const MAX_MODELS = 5000;
 const isGlb = (name) => /\.glb$/i.test(name);
 
-/** Every .glb under `dir` (subfolders too; dot-folders and symlinks skipped): [{ path, size, mtime }], sorted by path. */
-export function listModels(dir) {
-  const out = [];
-  const walk = (at) => {
+/** Folders that hold a build's or a cache's copies of a project's models: left out, at any depth, when a whole project is searched. */
+export const SKIPPED = ['dist', 'build', 'out', 'Library', 'Temp'];
+
+/**
+ * Every .glb under `dir` (subfolders too; dot-folders, node_modules and symlinks left out): [{ path, size, mtime, level? }],
+ * sorted by path. `copies: false` also leaves out the SKIPPED folders: that is for a whole project; a models folder is
+ * listed as it is, since a folder in it called build or out is the project's own. `skip`: folders (paths from `dir`) left out with everything under them. A model is a level (`level: true`)
+ * when a .json of its name is beside it (town.glb, town.json: what the game reads with it), or `levels` names its path.
+ */
+export function listModels(dir, { skip = [], levels = [], copies = true } = {}) {
+  const out = [], tidy = (p) => String(p).split(/[\\/]+/).filter((s) => s && s !== '.').join('/');
+  const skipped = new Set(skip.map(tidy)), named = new Set(levels.map(tidy));
+  const walk = (at, rel) => {
     let entries;
     try { entries = readdirSync(at, { withFileTypes: true }); } catch { return; }
+    const data = new Set(entries.filter((e) => /\.json$/i.test(e.name)).map((e) => e.name.slice(0, -5).toLowerCase()));
     for (const e of entries) {
       if (out.length >= MAX_MODELS || e.name.startsWith('.') || e.name === 'node_modules' || e.isSymbolicLink()) continue;
-      const full = join(at, e.name);
-      if (e.isDirectory()) walk(full);
-      else if (e.isFile() && isGlb(e.name)) { const s = statSync(full); out.push({ path: relative(dir, full).split(sep).join('/'), size: s.size, mtime: Math.round(s.mtimeMs) }); }
+      const full = join(at, e.name), path = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { if ((copies || !SKIPPED.includes(e.name)) && !skipped.has(path)) walk(full, path); }
+      else if (e.isFile() && isGlb(e.name)) {
+        const s = statSync(full), model = { path, size: s.size, mtime: Math.round(s.mtimeMs) };
+        if (named.has(path) || data.has(e.name.slice(0, -4).toLowerCase())) model.level = true;
+        out.push(model);
+      }
     }
   };
-  walk(dir);
+  walk(dir, '');
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 

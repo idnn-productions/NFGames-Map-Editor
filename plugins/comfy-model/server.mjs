@@ -2,19 +2,31 @@
 // checkout of comfy-ui-model-workflows), the result is finished in Blender (scale, pivot, compressed textures) and
 // saved as models/<slug>/<slug>.glb with <slug>.refs/ beside it, which is what the model viewer shows.
 //   status   { ultrashape = true, cleanup = false }  ->  { ready, checks: [{ id, ok, text, help }], queue, setup }
+//   checkViews { draft }            ->  { checked, pairs, consistency, warnings, notes, seconds }
 //   generate { draft, length, faces = 60000, ultrashape = true, cleanup = false, quads = 12000, pivot = 'centre', wait = false, replace = false }
 //                                   ->  { model, refs, report, seconds }
 // cleanup: the generated mesh is remeshed into about `quads` quads with new UVs and re-baked maps (Blender runs
 // AutoRemesher) before it is finished; report.cleanup then holds what that step said.
+// When the workflows folder has an inspect script, the saved model is measured after it is saved: report.mesh holds
+// { pieces, floating, openEdges, nonManifoldEdges, flippedFaces, zeroAreaFaces, symmetryP95 } (null when it could not be
+// measured, with report.inspectError saying why). A failed inspection never takes the model away.
+// checkViews looks at the approved views alone, in Blender on the CPU (seconds, no GPU): opposite views must show one
+// shape. It warns; generate never waits on it. The scorer's raw answer is kept per draft with a hash of each view file,
+// and the verdict is made again on every call, so changing `viewsOutline` needs no new run.
 // The rules that keep a GPU run from starting by accident are here, for every caller: nothing is queued behind other
 // ComfyUI work without `wait`, and no model is replaced without `replace`.
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+// resolves only for the built-in copy of the plugin, shipped beside src/
+import { SCORER, REFS_LIMITS, refsVerdict } from '../../src/match.mjs';
 import { modelViews } from '../model-maker/draft.mjs';
 import { readPipeline, findBlender, findAutoRemesher, comfy, checksOf, setInputs, outcomeOf, SOURCE_FACES } from './comfy.mjs';
 
 const POLL = 3000, LIMIT = 30 * 60 * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const CHECKED = ['front', 'back', 'left', 'right', 'top', 'bottom'];   // the views that are compared; three-quarter is not
+const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 export function activate(api) {
   const f = api.files;
@@ -33,17 +45,62 @@ export function activate(api) {
     return { pipeline, client, blender, remesher, checks, setup, queue, ready: checks.every((c) => c.ok !== false) };
   }
 
+  /** A draft that is ready, read from its file; throws the texts both actions use. */
+  function draftOf(slug) {
+    if (typeof slug !== 'string' || !/^[a-z0-9][a-z0-9-]{0,45}$/.test(slug) || !f.exists(`.nfgames/drafts/${slug}/draft.json`)) throw new Error('draft: no such draft');
+    let draft = null; try { draft = JSON.parse(f.read(`.nfgames/drafts/${slug}/draft.json`)); } catch { /* below */ }
+    if (!draft || draft.version !== 1 || draft.slug !== slug) throw new Error('draft: its file cannot be read');
+    if (draft.status !== 'ready') throw new Error('draft: approve the views first');
+    return draft;
+  }
+  /** { view: bytes } of the approved views that have a file. */
+  const checkedViews = (slug, draft) => Object.fromEntries(CHECKED.filter((v) => draft.views.list.includes(v) && f.exists(`.nfgames/drafts/${slug}/views/${v}.png`)).map((v) => [v, f.read(`.nfgames/drafts/${slug}/views/${v}.png`, null)]));
+  const keptFile = (slug) => join(api.storage, `views-${slug}.json`);
+  const hashesOf = (bytes) => Object.fromEntries(Object.entries(bytes).map(([v, b]) => [v, sha(b)]));
+  /** The SHA-256 of the scorer script, or null when it cannot be read: a result is kept only against the scorer that made it. */
+  const scorerHash = () => { try { return sha(readFileSync(SCORER)); } catch { return null; } };
+  /** The scorer's raw result kept for these views, or null when there is none, a view or the scorer has changed since, or the record is unreadable. */
+  function keptResult(slug, hashes) {
+    try { const k = JSON.parse(readFileSync(keptFile(slug), 'utf8')), scorer = scorerHash(); return k && k.result && scorer && k.scorer === scorer && JSON.stringify(k.hashes) === JSON.stringify(hashes) ? k.result : null; } catch { return null; }
+  }
+  /** The verdict on a kept result, with the outline limit from the setting (0.5 to 0.99; 0.9 when it is 0 or less, or not a number). */
+  function verdict(result) {
+    const s = api.settings.get('viewsOutline'), outline = typeof s === 'number' && Number.isFinite(s) && s > 0 ? Math.min(0.99, Math.max(0.5, s)) : REFS_LIMITS.outline;
+    return refsVerdict(result, undefined, { ...REFS_LIMITS, outline });
+  }
+
+  api.services.provide('model', 'checkViews', async (input = {}) => {
+    const slug = input.draft, draft = draftOf(slug), bytes = checkedViews(slug, draft), names = Object.keys(bytes);
+    const hashes = hashesOf(bytes), old = keptResult(slug, hashes);
+    if (old) return { ...verdict(old), seconds: 0 };
+    if (names.length < 2) return { ...refsVerdict({ ok: false }), seconds: 0 };   // nothing to compare: no job
+    const setting = String(api.settings.get('blender') || '').trim(), blender = findBlender(setting);
+    if (!blender) throw new Error(`Not ready: ${setting ? `Blender is not at ${setting}` : 'Blender was not found'}`);
+    const work = join(api.storage, `views-${slug}`), argsFile = join(work, 'args.json'), resultFile = join(work, 'result.json'), refs = {};
+    rmSync(work, { recursive: true, force: true }); mkdirSync(work, { recursive: true });
+    for (const v of names) { refs[v] = join(work, `${v}.png`); writeFileSync(refs[v], bytes[v]); }
+    writeFileSync(argsFile, JSON.stringify({ refs, outDir: work, result: resultFile, refsOnly: true, planUp: 'up' }));
+    try {
+      const job = await api.jobs.run(`Check the views: ${draft.name}`, [
+        { label: 'Compare the views (Blender)', command: [blender, '-b', '--factory-startup', '--python', SCORER, '--', argsFile], cwd: api.storage },
+      ]).done;
+      let result = null; try { result = JSON.parse(readFileSync(resultFile, 'utf8')); } catch { /* below */ }
+      if (!result) {
+        const m = /== .* stopped at "([^"]+)": ([^\n]*)/.exec(job.log.slice(-4000));
+        throw new Error(m ? `${m[1]}: ${m[2]} (see Jobs for Blender's output)` : 'The views were not checked: see Jobs for what happened');
+      }
+      if (result.ok === true) { const scorer = scorerHash(); if (scorer) writeFileSync(keptFile(slug), JSON.stringify({ hashes, scorer, result })); }
+      return { ...verdict(result), seconds: result.ok === true && Number.isFinite(result.seconds) ? result.seconds : 0 };
+    } finally { rmSync(work, { recursive: true, force: true }); }
+  });
+
   api.services.provide('model', 'status', async (input = {}) => {
     const { ready, checks, queue, setup } = await look({ ultrashape: input.ultrashape !== false, cleanup: input.cleanup === true });
     return { ready, checks, queue, setup };
   });
 
   api.services.provide('model', 'generate', async (input = {}) => {
-    const slug = input.draft, dir = `.nfgames/drafts/${slug}`;
-    if (typeof slug !== 'string' || !/^[a-z0-9][a-z0-9-]{0,45}$/.test(slug) || !f.exists(`${dir}/draft.json`)) throw new Error('draft: no such draft');
-    let draft = null; try { draft = JSON.parse(f.read(`${dir}/draft.json`)); } catch { /* below */ }
-    if (!draft || draft.version !== 1 || draft.slug !== slug) throw new Error('draft: its file cannot be read');
-    if (draft.status !== 'ready') throw new Error('draft: approve the views first');
+    const slug = input.draft, dir = `.nfgames/drafts/${slug}`, draft = draftOf(slug);
     const { views, missing } = modelViews(draft);
     if (missing.length) throw new Error(`draft: a model needs the front, left, back and right views; missing ${missing.join(', ')}`);
     const length = input.length, faces = Math.round(Number(input.faces ?? 60000)), ultrashape = input.ultrashape !== false, pivot = input.pivot === 'base' ? 'base' : 'centre';
@@ -62,10 +119,11 @@ export function activate(api) {
     if (!seen.ready) throw new Error(`Not ready: ${seen.checks.filter((c) => c.ok === false).map((c) => c.text).join('; ')}`);
     if (seen.queue > 0 && input.wait !== true) throw new Error(`ComfyUI is working on ${seen.queue} other prompt${seen.queue > 1 ? 's' : ''}: say wait to queue behind ${seen.queue > 1 ? 'them' : 'it'}`);
     const { client, pipeline, blender, remesher } = seen, poles = views.includes('top') && views.includes('bottom');
-    const raw = join(api.storage, `${slug}-raw.glb`), clean = join(api.storage, `${slug}-clean.glb`), out = join(api.storage, `${slug}.glb`), started = Date.now();
+    const raw = join(api.storage, `${slug}-raw.glb`), clean = join(api.storage, `${slug}-clean.glb`), out = join(api.storage, `${slug}.glb`), looked = join(api.storage, `${slug}-inspect`), started = Date.now();
     const made = cleanup ? Math.max(faces, SOURCE_FACES) : faces;   // triangles asked of ComfyUI
     const headless = ['--background', '--factory-startup', '--python-exit-code', '1', '--python'];   // a script that fails stops its step
-    for (const old of [raw, clean, out]) rmSync(old, { force: true });
+    for (const old of [raw, clean, out, looked]) rmSync(old, { force: true, recursive: true });
+    if (pipeline.inspect) mkdirSync(looked, { recursive: true });
     const sent = {}; let id = null, glb = null, report = null, run = null;
 
     run = api.jobs.run(`Generate model: ${draft.name}`, [
@@ -91,6 +149,7 @@ export function activate(api) {
         const lines = run.job.log.split(/\r?\n/).reverse(), line = lines.find((l) => l.startsWith('FINISH ')), tidy = cleanup ? lines.find((l) => l.startsWith('RETOPO ')) : null;
         if (!line || !existsSync(out)) throw new Error('Blender finished without writing the model');
         try { report = JSON.parse(line.slice(7)); } catch { report = {}; }
+        report.views = null; try { const now = keptResult(slug, hashesOf(checkedViews(slug, draft))); if (now) report.views = { ...verdict(now), seconds: 0 }; } catch { /* a warning only: never fails the job */ }   // what the views check last said, if the views are as they were then
         if (tidy) { try { const t = JSON.parse(tidy.slice(7)); report.cleanup = { quads: t.after?.quads, faces: t.after?.faces, from: t.before?.faces, baked: t.baked }; } catch { /* the model is there; its numbers are not */ } }
         f.write(model, readFileSync(out));
         f.remove(refs);
@@ -98,11 +157,17 @@ export function activate(api) {
         for (const v of draft.views.list) if (f.exists(`${dir}/views/${v}.png`)) f.write(`${refs}/${v}.png`, f.read(`${dir}/views/${v}.png`, null));
         log(`${model}\n`);
       } },
+      ...(pipeline.inspect ? [{ label: 'Inspect (Blender)', command: [blender, ...headless, pipeline.inspect, '--', out, looked, '--no-render'], cwd: api.storage }] : []),
     ]);
     const job = await run.done;
-    for (const old of [raw, clean, out]) rmSync(old, { force: true });
-    if (job.state !== 'done') {
-      const m = /== .* stopped at "([^"]+)": ([^\n]*)/.exec(job.log.slice(-4000));
+    for (const old of [raw, clean, out, looked]) rmSync(old, { force: true, recursive: true });
+    const m = job.state !== 'done' ? /== .* stopped at "([^"]+)": ([^\n]*)/.exec(job.log.slice(-4000)) : null;
+    if (report && pipeline.inspect) {   // the model is saved by now: what the inspection says is added to the report, and its failure never takes the model away
+      report.mesh = null;
+      try { const i = JSON.parse(job.log.split(/\r?\n/).reverse().find((l) => l.startsWith('INSPECT ')).slice(8)); report.mesh = { pieces: i.loose_pieces, floating: i.floating_pieces, openEdges: i.open_edges, nonManifoldEdges: i.non_manifold_edges, flippedFaces: i.flipped_faces, zeroAreaFaces: i.zero_area_faces, symmetryP95: i.symmetry_error_p95_pct }; } catch { /* no line, or one that is not JSON */ }
+      if (!report.mesh) report.inspectError = m && m[1] === 'Inspect (Blender)' ? m[2] : 'the inspection printed no result';
+    } else if (report) report.mesh = null;
+    if (job.state !== 'done' && !(report && m && m[1] === 'Inspect (Blender)')) {
       throw new Error(m ? `${m[1]}: ${m[2]}${/^(Finish|Clean up)/.test(m[1]) ? ' (see Jobs for Blender\'s output)' : ''}` : 'The model was not made: see Jobs for what happened');
     }
     return { model, refs, report, seconds: Math.round((Date.now() - started) / 1000) };

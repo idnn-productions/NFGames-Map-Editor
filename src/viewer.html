@@ -63,6 +63,16 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
 #refPanel .bar b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #refPanel .bar .grow { flex: 1; }
 #refPanel .pic { flex: 1; min-height: 0; display: grid; place-items: center; padding: 8px; }
 #refPanel .pic img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
+#refPanel .pic { display: flex; gap: 10px; align-items: center; justify-content: center; }
+#refPanel .pic figure { flex: 1 1 0; min-width: 0; max-height: 100%; margin: 0; display: grid; justify-items: center; gap: 4px; } #refPanel .pic figcaption { font-size: 11px; color: var(--dim); text-align: center; }
+#refPanel .pic figure img { max-width: 100%; max-height: calc(100% - 20px); }
+/* the match panel: scores per view, the target slider */
+#match table { width: 100%; border-collapse: collapse; margin: 6px 0; font-variant-numeric: tabular-nums; } #match td, #match th { padding: 2px 4px; text-align: right; font-weight: normal; } #match th { color: var(--dim); font-size: 11px; }
+#match td:first-child, #match th:first-child { text-align: left; } #match tr.view { cursor: pointer; } #match tr.view:hover { background: #252a35; } #match tr.mean td { border-top: 1px solid var(--line); font-weight: 600; } #match td.target { color: var(--text); font-weight: 600; } #match td.ok { color: var(--ok); }
+#match tr.flag td:first-child::after { content: ' ⚠'; color: var(--bad); }
+#match .small { font-size: 12px; } #match progress { width: 100%; height: 6px; } #match label { display: grid; grid-template-columns: 78px 1fr 40px; gap: 6px; align-items: center; margin: 4px 0; } #match label input[type=number], #match label select { grid-column: 2 / 4; width: 100%; } #match input[type=range] { padding: 0; accent-color: var(--accent); }
+#match .loop { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 4px; } #match p { margin: 4px 0; }
+.rounds { font-variant-numeric: tabular-nums; } .stop { color: var(--ok); } .stop.held-back, .stop.out-of-rounds, .stop.plateau { color: var(--accent); }
 #refGrip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; } #refGrip:hover, #refGrip.drag { background: var(--accent); opacity: .5; }
 </style>
 </head>
@@ -76,7 +86,13 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
     <button id="pinMode" title="Pin mode (P): click the model to drop a pin; drag a pin to move it">📍 Pin</button>
     <button id="resetView" title="Frame the whole model">Reset view</button>
     <select id="lighting" title="Lighting"><option value="studio">Studio</option><option value="space">Dark space</option></select>
+    <select id="shading" title="Shading: Textured (maps and project materials), Clay (neutral grey), or Vertex mask (raw COLOR_0)">
+      <option value="textured">Textured</option>
+      <option value="clay">Clay</option>
+      <option value="mask">Vertex mask</option>
+    </select>
     <button id="wire" title="Wireframe">Wire</button>
+    <button id="colliders" title="Show collision meshes (*-colonly)" hidden>Colliders</button>
     <button id="gridBtn" title="The floor grid (the same switch as the map's grid)">Grid</button>
   </div>
   <div id="modelRefs" hidden><h2 id="refsHead" title="The images this model was made from. Click to fold">References</h2><div class="strip" id="refStrip"></div></div>
@@ -87,10 +103,26 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
   <div id="refGrip" title="Drag to resize"></div>
   <div class="bar"><b id="refName"></b><span id="refCount" class="dim"></span><span class="grow"></span>
    <button id="refPrev" title="Previous reference (←)">‹</button><button id="refNext" title="Next reference (→)">›</button><button id="refClose" title="Close (Esc)">×</button></div>
-  <div class="pic"><img id="refImg" alt="" title="Click to see it at full size"></div>
+  <div class="pic"><figure><img id="refImg" alt="" title="Click to see it at full size"><figcaption id="refCap" hidden></figcaption></figure>
+   <figure id="refOverlayBox" hidden><img id="refOverlay" alt="" title="Click to see it at full size"><figcaption>the model's outline (yellow) · red: only the reference has it · blue: only the model has it</figcaption></figure></div>
  </div>
 </main>
 <aside id="right">
+  <h2 id="matchHead">Match with its references</h2>
+  <div id="match">
+    <p id="matchNote" class="dim">Open a model.</p>
+    <p><button id="matchBtn" hidden title="Render the model from the reference angles and compare it with the references: silhouette, colour, and whether the references agree with each other">Measure</button> <span id="matchProg" class="dim"></span></p>
+    <progress id="matchBar" hidden max="1" value="0"></progress>
+    <table id="matchTable" hidden></table>
+    <div id="matchWarn" class="bad small"></div>
+    <div id="matchLoop" class="loop" hidden>
+      <label title="The loop stops when the mean score reaches this">Target <input id="mTarget" type="range" min="0.5" max="0.99" step="0.01" value="0.9"><output id="mTargetOut">0.90</output></label>
+      <label title="At most this many rounds of fixing and scoring">Max rounds <input id="mRounds" type="number" min="1" max="20" step="1" value="5"></label>
+      <label title="Stop early when a round improves the mean by less than this. Empty: never">Stop below <input id="mPlateau" type="number" min="0" max="0.2" step="0.005" value="0.01" placeholder="off"></label>
+      <label title="Which score the target is about">Score <select id="mScore"><option value="combined">Combined (silhouette and colour)</option><option value="silhouette">Silhouette only</option></select></label>
+      <p><button id="improve" class="primary" disabled title="Sends a job that rebuilds the model, re-measures and repeats until the target, with the workflow chosen below">Improve to target</button> <span id="improveState" class="dim"></span></p>
+    </div>
+  </div>
   <h2>Pins</h2><div id="pins" class="dim">Open a model, then use 📍 Pin (P).</div>
   <h2>Note</h2><textarea id="note" placeholder="What is wrong overall (optional)"></textarea>
   <h2>Workflow</h2><select id="workflow"></select>
@@ -128,8 +160,10 @@ const round = (v) => Math.round(v * 1e4) / 1e4;
 const MB = 1024 * 1024;
 
 // state
-let info, T, scene, camera, renderer, controls, loader, envTexture, key, ray, ndc;
-let model = null, modelPath = null, models = [], pinMode = false, wire = false, saveTimer = null, pollTimer = null;
+let info, T, scene, camera, renderer, controls, loader, ktx2Loader, texLoader, envTexture, key, ray, ndc;
+let model = null, modelPath = null, models = [], pinMode = false, wire = false, shading = 'textured', preferredShading = null, showColliders = false, saveTimer = null, pollTimer = null, loadToken = 0;
+let matLib = { sets: {}, plain: {} }, clayMat = null, clayMatDouble = null;
+const texCache = new Map();                            // "set/file:srgb" → Promise<THREE.Texture | null>
 let draft = { note: '', workflow: 'auto', pins: [] }; // a pin: { position, normal, mesh, material, uv, camera, screenshot, note, refs: [data URL] }
 const markers = [];                                    // a sprite per draft pin (in order), then the sent ones
 const sent = new Map();                                // job id → { model, positions }: greyed pins until the job finishes
@@ -175,9 +209,13 @@ async function startThree() {
   key = new T.DirectionalLight(0xffffff, 1.5); key.position.set(5, 8, 5); scene.add(key);
   setLighting('studio');
   placeGrid(); nfGrid.onChange(showGrid); showGrid(nfGrid.get());
+  ktx2Loader = new KTX2Loader().setTranscoderPath(`${base}examples/jsm/libs/basis/`).detectSupport(renderer);
+  texLoader = new T.TextureLoader();
+  clayMat = new T.MeshStandardMaterial({ color: 0xb8b2a8, roughness: 0.85, metalness: 0.0, vertexColors: false });
+  clayMatDouble = new T.MeshStandardMaterial({ color: 0xb8b2a8, roughness: 0.85, metalness: 0.0, vertexColors: false, side: T.DoubleSide });
   loader = new GLTFLoader()
     .setDRACOLoader(new DRACOLoader().setDecoderPath(`${base}examples/jsm/libs/draco/gltf/`))
-    .setKTX2Loader(new KTX2Loader().setTranscoderPath(`${base}examples/jsm/libs/basis/`).detectSupport(renderer))
+    .setKTX2Loader(ktx2Loader)
     .setMeshoptDecoder(MeshoptDecoder);
   ray = new T.Raycaster(); ndc = new T.Vector2();
   new ResizeObserver(resize).observe($('main')); resize();
@@ -205,14 +243,265 @@ function placeGrid(box = null) {
   grid.visible = nfGrid.get(); scene.add(grid);
 }
 function showGrid(on) { if (grid) grid.visible = on; $('gridBtn').classList.toggle('on', on); }
-function setWire(on) { wire = on; $('wire').classList.toggle('on', on); model?.traverse((o) => { for (const m of [].concat(o.material || [])) m.wireframe = on; }); }
+function isCollider(obj) { for (let p = obj; p; p = p.parent) if (p.name && p.name.split('.')[0].endsWith('-colonly')) return true; return false; }
+function visibleBounds(root) {
+  const box = new T.Box3();
+  root.updateMatrixWorld(true);
+  root.traverse((o) => { if (o.isMesh && o.visible) box.expandByObject(o); });
+  return box.isEmpty() ? new T.Box3().setFromObject(root) : box;
+}
+function setColliders(on) {
+  showColliders = on; $('colliders').classList.toggle('on', on);
+  model?.traverse((o) => { if (o.isMesh && o.userData.collider) o.visible = on; });
+}
+function applyShading() {
+  if (clayMat) clayMat.wireframe = wire;
+  if (clayMatDouble) clayMatDouble.wireframe = wire;
+  model?.traverse((o) => {
+    if (!o.isMesh || !o.userData.origMaterial) return;
+    const orig = o.userData.origMaterial, resolved = o.userData.resolvedMaterial;
+    let next;
+    if (shading === 'clay') {
+      next = Array.isArray(orig) ? orig.map((m) => (m?.side === T.DoubleSide ? clayMatDouble : clayMat)) : (orig?.side === T.DoubleSide ? clayMatDouble : clayMat);
+    } else if (shading === 'mask') {
+      next = orig;
+    } else {
+      next = resolved || orig;
+    }
+    o.material = next;
+    for (const m of [].concat(next || [])) if (m) m.wireframe = wire;
+  });
+}
+function setShading(mode, { byUser = false } = {}) {
+  shading = mode;
+  if (byUser) preferredShading = mode;
+  $('shading').value = mode;
+  applyShading();
+}
+function setWire(on) { wire = on; $('wire').classList.toggle('on', on); applyShading(); }
 function setPinMode(on) { pinMode = on; $('pinMode').classList.toggle('on', on); $('main').classList.toggle('pinning', on); }
-function dispose(root) { root.traverse((o) => { o.geometry?.dispose(); for (const m of [].concat(o.material || [])) { for (const v of Object.values(m)) if (v?.isTexture) v.dispose(); m.dispose(); } }); }
+function dispose(root) {
+  const seenOrig = new Set(), seenResolved = new Set();
+  root.traverse((o) => {
+    o.geometry?.dispose();
+    for (const m of [].concat(o.userData?.origMaterial || o.material || [])) {
+      if (!m || m === clayMat || m === clayMatDouble || seenOrig.has(m)) continue;
+      seenOrig.add(m);
+      for (const v of Object.values(m)) if (v?.isTexture && !v.userData?.shared) v.dispose();
+      m.dispose();
+    }
+    for (const m of [].concat(o.userData?.resolvedMaterial || [])) {
+      if (!m || seenOrig.has(m) || seenResolved.has(m)) continue;
+      seenResolved.add(m);
+      m.dispose();
+    }
+  });
+}
 function frame() {
-  const box = new T.Box3().setFromObject(model), size = box.getSize(new T.Vector3()), centre = box.getCenter(new T.Vector3()), r = Math.max(size.x, size.y, size.z) || 1;
+  const box = visibleBounds(model), size = box.getSize(new T.Vector3()), centre = box.getCenter(new T.Vector3()), r = Math.max(size.x, size.y, size.z) || 1;
   controls.target.copy(centre);
   camera.position.copy(centre).add(new T.Vector3(1, 0.6, 1).normalize().multiplyScalar(r * 1.6));
   camera.near = r / 1000; camera.far = r * 1000; camera.updateProjectionMatrix(); controls.update();
+}
+
+// ---- external PBR material resolver (for projects like Perseus that bind scanned sets by material name + COLOR_0 mask)
+const MAT_TILE = { 'wall-brick': 1.6, 'zellige-tile': 1.2, 'wall-stone': 2.4, 'step-stone': 2.4, 'broken-plaster': 2.6, 'sandstone-rock': 5, 'hangar-panel': 3, 'hangar-sheet': 2.4, 'ship-hull': 3, 'canvas-plain': 1.2, 'cliff-bedded': 4.6, 'cliff-blocky': 5.6, 'cliff-pale': 8, 'rock-weathered': 2.4, 'clay-brick': 2, 'inlaid-stone': 2.2, 'awning-canvas': 0.55, 'concrete-floor': 3 };
+// a set's `tile` in the project's materials.json (metres one repeat covers) comes first; the table above is for sets that do not say
+const ownSet = (name) => (matLib.sets && typeof name === 'string' && Object.hasOwn(matLib.sets, name) ? matLib.sets[name] : null);
+const tileScaleOf = (set) => 2.0 / (ownSet(set)?.tile || MAT_TILE[set] || 2.0);
+function loadMaterialTexture(set, file, srgb) {
+  const key = `${set}/${file}:${srgb ? 1 : 0}`;
+  if (!texCache.has(key)) {
+    const url = `/api/material/file?set=${encodeURIComponent(set)}&file=${encodeURIComponent(file)}`;
+    const p = (/\.ktx2$/i.test(file) ? ktx2Loader.loadAsync(url) : texLoader.loadAsync(url)).then((t) => {
+      const s = tileScaleOf(set);
+      t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(s, s);
+      t.colorSpace = srgb ? T.SRGBColorSpace : T.NoColorSpace;
+      t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      t.userData.shared = true;
+      t.needsUpdate = true;
+      return t;
+    }).catch(() => null);
+    texCache.set(key, p);
+  }
+  return texCache.get(key);
+}
+function meshHasMaskColor(mesh) {
+  const c = mesh.geometry?.attributes?.color;
+  if (!c || c.count === 0) return false;
+  let maxR = 0, maxG = 0, maxB = 0;
+  const step = Math.max(1, Math.floor(c.count / 2000));
+  for (let i = 0; i < c.count; i += step) {
+    const r = c.getX(i), g = c.getY(i), b = c.getZ(i);
+    if (r > maxR) maxR = r; if (g > maxG) maxG = g; if (b > maxB) maxB = b;
+  }
+  const mats = [].concat(mesh.userData?.origMaterial || mesh.material || []);
+  return maxG < 0.01 && maxB < 0.01 && (maxR > 0.01 || mats.some((m) => m?.name?.includes('|')));
+}
+function ensureBoxUVs(mesh) {
+  const g = mesh.geometry;
+  if (!g?.attributes?.position) return;
+  const uv = g.attributes.uv;
+  let needs = !uv || uv.count !== g.attributes.position.count;
+  if (!needs) {
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    const step = Math.max(1, Math.floor(uv.count / 2000));
+    for (let i = 0; i < uv.count; i += step) {
+      const u = uv.getX(i), v = uv.getY(i);
+      if (u < minU) minU = u; if (u > maxU) maxU = u; if (v < minV) minV = v; if (v > maxV) maxV = v;
+    }
+    const du = maxU - minU, dv = maxV - minV;
+    if (du < 1e-4 && dv < 1e-4) needs = true;
+    else if (minU >= -0.01 && maxU <= 1.01 && minV >= -0.01 && maxV <= 1.01 && du <= 1.01 && dv <= 1.01) {
+      if (!g.boundingBox) g.computeBoundingBox();
+      const s = g.boundingBox.getSize(new T.Vector3());
+      if (Math.max(s.x, s.y, s.z) > 1.5) needs = true;
+    }
+  }
+  if (!needs) return;
+  if (!g.attributes.normal) g.computeVertexNormals();
+  const pos = g.attributes.position, nrm = g.attributes.normal, out = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const nx = nrm.getX(i), ny = nrm.getY(i), nz = nrm.getZ(i);
+    const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+    let u, v;
+    if (ax >= ay && ax >= az) { u = -z * Math.sign(nx || 1); v = y; }
+    else if (ay >= az) { u = x; v = -z; }
+    else { u = x * Math.sign(nz || 1); v = y; }
+    out[i * 2] = u * 0.5; out[i * 2 + 1] = v * 0.5;
+  }
+  g.setAttribute('uv', new T.BufferAttribute(out, 2));
+}
+async function resolveMaterial(orig, hasColorAttr, cache) {
+  if (!orig || orig.map) return { mat: orig, resolved: false };
+  const name = orig.name || '';
+  if (!name) return { mat: orig, resolved: false };
+  const key = `${name}:${hasColorAttr ? 1 : 0}:${orig.side}`;
+  if (cache.has(key)) return cache.get(key);
+  const p = (async () => {
+    const plain = matLib.plain && Object.hasOwn(matLib.plain, name) ? matLib.plain[name] : null;   // a material called "constructor" is not one of the project's
+    if (plain) {
+      const c = new T.Color(plain.colour);
+      const m = new T.MeshStandardMaterial({ name, color: c, roughness: plain.roughness ?? 0.6, metalness: plain.metal ?? 0, vertexColors: false, side: orig.side });
+      if (plain.glow || plain.sky) { m.emissive = c.clone(); m.emissiveIntensity = Math.min(2.5, (plain.glow || plain.sky) * 0.35); }
+      return { mat: m, resolved: true, scanned: false };
+    }
+    const parts = name.split('|'), setNameA = parts[0], setA = ownSet(setNameA);
+    if (!setA) return { mat: orig, resolved: false, scanned: false };
+    const setNameB = parts[1], setB = ownSet(setNameB);
+    const amount = parseFloat(parts[2]) || 0;
+    const tint = parts[3] && /^#[0-9a-fA-F]{3,8}$/.test(parts[3]) ? new T.Color(parts[3]) : null;
+    const wantB = !!(setB && (hasColorAttr || amount > 0));
+    const [albA, nrmA, ormA, albB, nrmB, ormB] = await Promise.all([
+      loadMaterialTexture(setNameA, setA.albedo, true),
+      setA.normal ? loadMaterialTexture(setNameA, setA.normal, false) : null,
+      setA.orm ? loadMaterialTexture(setNameA, setA.orm, false) : null,
+      wantB ? loadMaterialTexture(setNameB, setB.albedo, true) : null,
+      wantB && setB.normal ? loadMaterialTexture(setNameB, setB.normal, false) : null,
+      wantB && setB.orm ? loadMaterialTexture(setNameB, setB.orm, false) : null,
+    ]);
+    if (!albA) return { mat: orig, resolved: false, scanned: false };
+    const m = new T.MeshStandardMaterial({
+      name, map: albA, color: wantB ? 0xffffff : (tint || 0xffffff),
+      normalMap: nrmA || null, roughnessMap: ormA || null, metalnessMap: ormA || null,
+      roughness: ormA ? 1 : (setA.roughness ?? 0.8), metalness: ormA ? 1 : (setA.metal ?? 0),
+      vertexColors: !!(wantB && albB && hasColorAttr),
+      side: orig.side === T.DoubleSide || setNameA.includes('canvas') ? T.DoubleSide : orig.side,
+    });
+    if (wantB && albB) {
+      const hasHeight = !!(setA.hasHeight && setB.hasHeight && ormA && ormB);
+      const hasOrmB = !!(ormA && ormB), hasNrmB = !!(nrmA && nrmB);
+      const uvRatioB = tileScaleOf(setNameB) / tileScaleOf(setNameA);
+      const tintA = tint || new T.Color(0xffffff);
+      m.customProgramCacheKey = () => `nf-blend:${hasHeight ? 1 : 0}:${hasOrmB ? 1 : 0}:${hasNrmB ? 1 : 0}:${hasColorAttr ? 1 : 0}`;
+      m.onBeforeCompile = (shader) => {
+        shader.uniforms.uMapB = { value: albB };
+        shader.uniforms.uOrmB = { value: ormB };
+        shader.uniforms.uNrmB = { value: nrmB };
+        shader.uniforms.uBlendAmount = { value: amount };
+        shader.uniforms.uUvRatioB = { value: uvRatioB };
+        shader.uniforms.uTintA = { value: tintA };
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <map_pars_fragment>', `#include <map_pars_fragment>
+            uniform sampler2D uMapB; uniform sampler2D uOrmB; uniform sampler2D uNrmB;
+            uniform float uBlendAmount; uniform float uUvRatioB; uniform vec3 uTintA;`)
+          .replace('#include <map_fragment>', `
+            float nfBlend = 0.0;
+            vec2 nfUvB = vec2(0.0);
+            #ifdef USE_MAP
+              vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+              sampledDiffuseColor.rgb *= uTintA;
+              nfUvB = vMapUv * uUvRatioB;
+              #if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA )
+                float nfMask = clamp( vColor.r + uBlendAmount, 0.0, 1.0 );
+              #else
+                float nfMask = clamp( uBlendAmount, 0.0, 1.0 );
+              #endif
+              ${hasHeight ? `
+                float nfHA = texture2D( roughnessMap, vMapUv ).a;
+                float nfHB = texture2D( uOrmB, nfUvB ).a;
+                float nfTA = nfHA + ( 1.0 - nfMask );
+                float nfTB = nfHB + nfMask;
+                float nfTop = max( nfTA, nfTB ) - 0.12;
+                float nfWA = max( nfTA - nfTop, 0.0 );
+                float nfWB = max( nfTB - nfTop, 0.0 );
+                nfBlend = nfWB / max( nfWA + nfWB, 1e-5 );
+              ` : `nfBlend = nfMask;`}
+              vec4 nfAlbB = texture2D( uMapB, nfUvB );
+              sampledDiffuseColor.rgb = mix( sampledDiffuseColor.rgb, nfAlbB.rgb, nfBlend );
+              diffuseColor *= sampledDiffuseColor;
+            #endif`)
+          .replace('#include <color_fragment>', '/* COLOR_0 drives nfBlend */');
+        if (hasOrmB) {
+          shader.fragmentShader = shader.fragmentShader
+            .replace('#include <roughnessmap_fragment>', `
+              float roughnessFactor = roughness;
+              #ifdef USE_ROUGHNESSMAP
+                vec4 texelRoughness = mix( texture2D( roughnessMap, vRoughnessMapUv ), texture2D( uOrmB, nfUvB ), nfBlend );
+                roughnessFactor *= texelRoughness.g;
+              #endif`)
+            .replace('#include <metalnessmap_fragment>', `
+              float metalnessFactor = metalness;
+              #ifdef USE_METALNESSMAP
+                vec4 texelMetalness = mix( texture2D( metalnessMap, vMetalnessMapUv ), texture2D( uOrmB, nfUvB ), nfBlend );
+                metalnessFactor *= texelMetalness.b;
+              #endif`);
+        }
+        if (hasNrmB) {
+          // the line is inside a chunk three.js writes in after this hook, so the chunk is written in here, changed
+          const own = 'vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;', chunk = T.ShaderChunk.normal_fragment_maps;
+          if (chunk.includes(own)) shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>',
+            chunk.replace(own, 'vec3 mapN = mix( texture2D( normalMap, vNormalMapUv ).xyz, texture2D( uNrmB, nfUvB ).xyz, nfBlend ) * 2.0 - 1.0;'));
+        }
+      };
+    }
+    return { mat: m, resolved: true, scanned: true };
+  })();
+  cache.set(key, p);
+  return p;
+}
+async function resolveModelMaterials(root, token) {
+  const hasLib = Object.keys(matLib.sets || {}).length > 0 || Object.keys(matLib.plain || {}).length > 0;
+  if (!hasLib) return { resolved: 0, unresolvedMask: 0 };
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh && !o.userData.collider) meshes.push(o); });
+  const cache = new Map();
+  let resolved = 0, unresolvedMask = 0;
+  await Promise.all(meshes.map(async (mesh) => {
+    const orig = mesh.userData.origMaterial, isArr = Array.isArray(orig), list = isArr ? orig : [orig];
+    const hasColor = !!mesh.geometry?.attributes?.color, mask = meshHasMaskColor(mesh);
+    const results = await Promise.all(list.map((m) => resolveMaterial(m, hasColor, cache)));
+    if (token !== loadToken) return;
+    if (results.some((r) => r.scanned)) ensureBoxUVs(mesh);
+    if (results.some((r) => r.resolved)) {
+      resolved += results.filter((r) => r.resolved).length;
+      mesh.userData.resolvedMaterial = isArr ? results.map((r) => r.mat) : results[0].mat;
+    } else if (mask && list.every((m) => !m?.map)) {
+      unresolvedMask++;
+    }
+  }));
+  return { resolved, unresolvedMask };
 }
 
 // ---- drafts of new models (the New model plugin, when it is on; only in the workbench, where its screen opens as a tab)
@@ -244,11 +533,19 @@ async function listModels() {
 }
 // Folders open and close; which are closed is kept per project. A filter shows every match with its folders open.
 let folders = nfTree.store('viewer');
+// Where a model sits in the list. A level (a town, a cave: a .glb the game reads with a .json of its name) is listed
+// once, under Levels at the top, by its name; a model directly in the project's folder goes under that folder's name.
+const LEVELS = 'Levels';
+function shownPaths() {
+  const name = (m) => m.path.split('/').pop().replace(/\.glb$/i, ''), where = (m) => m.path.split('/').slice(0, -1).join(' › ') || info.root;
+  const levels = models.filter((m) => m.level), twice = new Set(levels.map(name).filter((n, i, all) => all.indexOf(n) !== i));
+  return new Map(models.map((m) => [m.path, m.level ? `${LEVELS}/${name(m)}${twice.has(name(m)) ? ` (${where(m)})` : ''}` : m.path.includes('/') ? m.path : `${info.root || info.models}/${m.path}`]));
+}
 function drawModelList() {
-  const box = $('models'), root = `${info.models}/`;
-  // models directly in the models folder go under a folder named after it, as the others go under theirs
-  const nodes = nfTree.build(models.map((m) => ({ ...m, path: m.path.includes('/') ? m.path : `${root}${m.path}`, model: m })), { filter: $('filter').value, closed: folders.closed });
-  if (!nodes.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : `no .glb files in ${root}`; return; }
+  const box = $('models'), shown = shownPaths();
+  const items = models.map((m) => ({ ...m, path: shown.get(m.path), search: m.path, model: m })).sort((a, b) => !!b.model.level - !!a.model.level);   // levels first, the rest as listed
+  const nodes = nfTree.build(items, { filter: $('filter').value, closed: folders.closed });
+  if (!nodes.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : info.models === '.' ? 'no .glb files in this project' : `no .glb files in ${info.models}/`; return; }
   box.className = '';
   nfTree.render(box, nodes, { onToggle: (path, open) => folders.toggle(path, open),
     row: ({ model: m }, n) => el('button', { className: `model${m.path === modelPath ? ' current' : ''}`, textContent: n.label, title: `${m.path} · ${(m.size / MB).toFixed(1)} MB`, onclick: () => openModel(m) }) });
@@ -256,23 +553,54 @@ function drawModelList() {
 async function openModel(m, { keepCamera = false } = {}) {
   if (!T) return;
   if (m.size > 200 * MB && !confirm(`${m.path} is ${(m.size / MB).toFixed(0)} MB. Load it?`)) return;
+  const token = ++loadToken;
   say(`loading ${m.path}…`);
   let gltf;
-  try { gltf = await loader.loadAsync(`/api/model?path=${encodeURIComponent(m.path)}`); } catch (e) { say(`could not load ${m.path}: ${e.message}`, 'bad'); return; }
+  try { gltf = await loader.loadAsync(`/api/model?path=${encodeURIComponent(m.path)}`); } catch (e) { if (token === loadToken) say(`could not load ${m.path}: ${e.message}`, 'bad'); return; }
+  if (token !== loadToken) { dispose(gltf.scene); return; }
   if (model) { scene.remove(model); dispose(model); }
   model = gltf.scene; scene.add(model); // the scene root stays at identity, so world coordinates are the model's own
-  if (wire) setWire(true);
-  placeGrid(new T.Box3().setFromObject(model));
-  modelPath = m.path; folders.reveal(m.path.includes('/') ? m.path : `${info.models}/${m.path}`); drawModelList();
+  let hasColliders = false, maskOnlyMeshes = 0, visibleMeshes = 0, tris = 0;
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    o.userData.origMaterial = o.material;
+    if (isCollider(o)) { o.userData.collider = true; o.visible = showColliders; hasColliders = true; }
+    else {
+      visibleMeshes++;
+      if (meshHasMaskColor(o) && [].concat(o.material || []).every((mat) => !mat?.map)) maskOnlyMeshes++;
+      tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+    }
+  });
+  $('colliders').hidden = !hasColliders; $('colliders').classList.toggle('on', showColliders);
+  // start in Clay right away if the model has raw mask-only COLOR_0 so it never flashes red while textures load
+  const initialMode = preferredShading || (maskOnlyMeshes > 0 ? 'clay' : 'textured');
+  setShading(initialMode);
+  placeGrid(visibleBounds(model));
+  modelPath = m.path; folders.reveal(shownPaths().get(m.path)); drawModelList();
   history.replaceState(null, '', `/viewer?model=${encodeURIComponent(m.path)}`);
   if (!keepCamera) frame();
   $('overlayBody').replaceChildren();
-  draft = (await loadDraft(modelPath)) || { note: '', workflow: $('workflow').value, pins: [] };
+  let kept = await loadDraft(m.path);
+  // unsent pins kept before the viewer listed the whole project are under the model's path from the models folder: they move
+  const old = info.modelsFolder && info.modelsFolder !== '.' && m.path.startsWith(`${info.modelsFolder}/`) ? m.path.slice(info.modelsFolder.length + 1) : null;
+  if (!kept && old && (kept = await loadDraft(old))) { await idb('readwrite', (s) => s.put(kept, m.path)); await clearDraft(old); }
+  if (token !== loadToken) return;                      // another model was opened meanwhile: its draft, not this one
+  draft = kept || { note: '', workflow: $('workflow').value, pins: [] };
   $('note').value = draft.note || '';
   if (draft.workflow && [...$('workflow').options].some((o) => o.value === draft.workflow && !o.disabled)) $('workflow').value = draft.workflow;
-  rebuildMarkers(); drawPins(); updateSend(); loadRefs(m.path);
-  let tris = 0; model.traverse((o) => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
-  say(`${m.path} · ${Math.round(tris).toLocaleString()} triangles`);
+  rebuildMarkers(); drawPins(); updateSend(); loadRefs(m.path); loadMatch(m.path);
+  const baseStatus = `${m.path} · ${Math.round(tris).toLocaleString()} triangles`;
+  say(maskOnlyMeshes > 0 && !preferredShading ? `${baseStatus} · loading project materials…` : baseStatus);
+  const { resolved } = await resolveModelMaterials(model, token);
+  if (token !== loadToken) return;
+  if (resolved > 0) {
+    setShading(preferredShading || 'textured');
+    say(`${baseStatus} · ${resolved} project material${resolved === 1 ? '' : 's'}`);
+  } else if (maskOnlyMeshes > 0 && !preferredShading) {
+    say(`${baseStatus} · clay (vertex mask)`);
+  } else {
+    say(baseStatus);
+  }
 }
 
 // ---- the model's own reference images: the files of <name>.refs/ beside the .glb (see the README, "Reference images")
@@ -287,6 +615,7 @@ async function loadRefs(path) {
   $('modelRefs').hidden = !refs.length;
   $('refsHead').textContent = `References (${refs.length})`;
   $('refStrip').replaceChildren(...refs.map((r, i) => el('button', { className: 'mref', title: `${r.name} · ${(r.size / MB).toFixed(1)} MB`, onclick: () => showRef(refAt === i ? -1 : i) }, el('img', { src: refUrl(r), alt: '', loading: 'lazy' }), el('span', { textContent: refLabel(r) }))));
+  drawRefScores();
   // a reference left open stays open on the next model (the same view when it has one), so models can be compared in turn
   showRef(was === null || !refs.length ? -1 : Math.max(0, refs.findIndex((r) => r.name === was)));
 }
@@ -295,11 +624,12 @@ function showRef(i) {
   refAt = i >= 0 && i < refs.length ? i : -1;
   $('refPanel').hidden = refAt < 0;
   [...$('refStrip').children].forEach((b, j) => b.classList.toggle('on', j === refAt));
-  if (refAt < 0) { $('refImg').removeAttribute('src'); return; }
+  if (refAt < 0) { $('refImg').removeAttribute('src'); $('refOverlay').removeAttribute('src'); $('refOverlayBox').hidden = true; return; }
   const r = refs[refAt];
   $('refName').textContent = refLabel(r); $('refCount').textContent = `${refAt + 1} / ${refs.length}`;
   $('refImg').src = refUrl(r); $('refImg').alt = `reference: ${refLabel(r)}`;
   $('refPrev').disabled = $('refNext').disabled = refs.length < 2;
+  showOverlay();
   refWidth();
   $('refStrip').children[refAt]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
@@ -316,7 +646,7 @@ function wireRefs() {
   box.classList.toggle('closed', keep.get('viewer-refs-closed') === '1');
   $('refsHead').onclick = () => keep.set('viewer-refs-closed', box.classList.toggle('closed') ? '1' : '0');
   $('refPrev').onclick = () => stepRef(-1); $('refNext').onclick = () => stepRef(1); $('refClose').onclick = () => showRef(-1);
-  $('refImg').onclick = () => zoom($('refImg').src);
+  $('refImg').onclick = () => zoom($('refImg').src); $('refOverlay').onclick = () => zoom($('refOverlay').src);
   // Escape closes what is on top first: the full-size picture, then pin mode (the 3D view's own handler), then the reference
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $('zoom').style.display === 'grid') { $('zoom').style.display = 'none'; return; }
@@ -349,7 +679,7 @@ function hitModel(e) { aim(e); return ray.intersectObject(model, true).find((h) 
 function hitMarker(e) { aim(e); const h = ray.intersectObjects(markers.filter((m) => !m.userData.sent), false)[0]; return h ? markers.indexOf(h.object) : -1; }
 function describeHit(h) {
   const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new T.Vector3(0, 1, 0);
-  const mats = [].concat(h.object.material), mat = mats[h.face?.materialIndex ?? 0] || mats[0];
+  const mats = [].concat(h.object.userData?.origMaterial || h.object.material), mat = mats[h.face?.materialIndex ?? 0] || mats[0];
   return { position: h.point.toArray().map(round), normal: n.toArray().map(round), mesh: h.object.name || null, material: mat?.name || null, uv: h.uv ? [round(h.uv.x), round(h.uv.y)] : null };
 }
 const camState = () => ({ position: camera.position.toArray().map(round), target: controls.target.toArray().map(round), fov: camera.fov });
@@ -395,7 +725,9 @@ function wireView() {
   addEventListener('keydown', (e) => { if (e.target.closest('textarea, input, select')) return; if (e.key === 'p' || e.key === 'P') setPinMode(!pinMode); if (e.key === 'Escape') setPinMode(false); });
   $('resetView').onclick = () => model && frame();
   $('lighting').onchange = (e) => setLighting(e.target.value);
+  $('shading').onchange = (e) => setShading(e.target.value, { byUser: true });
   $('wire').onclick = () => setWire(!wire);
+  $('colliders').onclick = () => setColliders(!showColliders);
   $('gridBtn').onclick = () => nfGrid.toggle();
 }
 async function shrink(file) { // at most 2048 px on the long side; PNG when it has transparency, else JPEG
@@ -439,22 +771,97 @@ function drawPins() {
   }));
 }
 
+// ---- match: how well the model agrees with its references (see the README, "Matching a model to its references")
+// The scorer runs in Blender on the server, in the background; this page asks for it and polls how far it is.
+let matchState = null, matchTimer = null, matchSaveTimer = null;
+const f2 = (v) => (typeof v === 'number' ? v.toFixed(2) : '–');
+const SCORE_NAMES = { silhouette: 'Silhouette', colour: 'Colour', combined: 'Combined' };
+const VIEW_ORDER = ['front', 'back', 'left', 'right', 'top', 'bottom'];
+const matchResult = () => (matchState && matchState.state === 'done' ? matchState.result : null);
+const viewOfRef = (r) => { const v = refLabel(r).toLowerCase(); return VIEW_ORDER.includes(v) ? v : null; };
+const loopSettings = () => ({ target: Math.round(Number($('mTarget').value) * 100) / 100, maxRounds: Math.round(Number($('mRounds').value)), plateau: $('mPlateau').value === '' ? null : Number($('mPlateau').value), score: $('mScore').value });
+function setLoopControls(v) { $('mTarget').value = v.target; $('mTargetOut').textContent = f2(v.target); $('mRounds').value = v.maxRounds; $('mPlateau').value = v.plateau === null ? '' : v.plateau; $('mScore').value = v.score; }
+function saveLoop() { clearTimeout(matchSaveTimer); matchSaveTimer = setTimeout(() => { post('/api/match/settings', loopSettings()).catch(() => { /* an out-of-range field: the next valid value is kept */ }); }, 400); drawMatch(); }
+async function loadMatch(path) {
+  clearTimeout(matchTimer);
+  try { const s = await api(`/api/model/match?path=${encodeURIComponent(path)}`); if (path !== modelPath) return; matchState = s; } catch (e) { if (path !== modelPath) return; matchState = { state: 'error', error: e.message }; }
+  drawMatch(); drawRefScores(); showOverlay();
+  if (matchState.state === 'running') matchTimer = setTimeout(() => loadMatch(path), 1000);
+}
+async function startMatch() {
+  $('matchBtn').disabled = true;
+  try { matchState = await post('/api/model/match', { path: modelPath }); drawMatch(); matchTimer = setTimeout(() => loadMatch(modelPath), 700); }
+  catch (e) { matchState = { ...(matchState || {}), state: 'failed', error: e.message }; drawMatch(); }
+}
+function drawMatch() {
+  const s = matchState, ok = matchResult(), loop = $('matchLoop'), note = $('matchNote'), btn = $('matchBtn');
+  const clear = () => { $('matchTable').hidden = true; $('matchBar').hidden = true; $('matchProg').textContent = ''; $('matchWarn').textContent = ''; loop.hidden = true; btn.hidden = true; };
+  if (!model || !s) { clear(); note.className = 'dim'; note.textContent = model ? 'Looking at its references…' : 'Open a model.'; return; }
+  note.className = 'dim';
+  if (s.state === 'error') { clear(); note.className = 'bad'; note.textContent = s.error; return; }
+  if (s.state === 'no-views') { clear(); note.textContent = 'To measure this model against its references, put images named front, back, left, right, top or bottom in its .refs folder (see References). Concept and three-quarter images are shown, not scored.'; return; }
+  btn.hidden = false;
+  note.textContent = `Renders the model from ${s.views.join(', ')} and compares each with its reference.`;
+  if (!s.blender.found) { note.className = 'bad'; note.textContent = s.blender.text; }
+  btn.disabled = s.state === 'running' || !s.blender.found; btn.textContent = ok ? 'Measure again' : 'Measure';
+  btn.title = ok ? 'The model has not changed since this was measured: the same scores come back at once' : btn.title;
+  $('matchBar').hidden = s.state !== 'running';
+  if (s.state === 'running') { $('matchBar').max = Math.max(1, s.progress.total); $('matchBar').value = s.progress.done; $('matchProg').textContent = s.progress.text; }
+  else $('matchProg').textContent = s.state === 'failed' ? '' : '';
+  const warn = [];
+  if (s.state === 'failed') warn.push(s.error);
+  const table = $('matchTable');
+  if (ok) {
+    const key = loopSettings().score, want = Number($('mTarget').value);
+    const rows = VIEW_ORDER.filter((v) => ok.views[v]).map((v) => {
+      const x = ok.views[v], flag = ok.consistency && ok.consistency.flagged.includes(v);
+      const cell = (k) => el('td', { className: `${k === key ? 'target' : ''} ${x[k] >= want ? 'ok' : ''}`, textContent: f2(x[k]) });
+      return el('tr', { className: `view${flag ? ' flag' : ''}`, title: flag ? 'This reference disagrees with the others' : `Open the ${v} reference beside its overlay`, onclick: () => { const i = refs.findIndex((r) => viewOfRef(r) === v); if (i >= 0) showRef(i); } }, el('td', { textContent: v }), cell('silhouette'), cell('colour'), cell('combined'));
+    });
+    const mean = (k) => el('td', { className: `${k === key ? 'target' : ''} ${ok.mean[k] >= want ? 'ok' : ''}`, textContent: f2(ok.mean[k]) });
+    table.replaceChildren(el('tr', {}, el('th'), ...Object.values(SCORE_NAMES).map((t) => el('th', { textContent: t }))), ...rows, el('tr', { className: 'mean' }, el('td', { textContent: 'mean' }), mean('silhouette'), mean('colour'), mean('combined')));
+    table.hidden = false;
+    const o = ok.orientation; if (o.turn || o.up !== '+Y') warn.push(`The model is ${o.up !== '+Y' ? `lying with ${o.up} up and ` : ''}turned ${o.turn}° about its up axis from the references: scored as turned back.`);
+    for (const w of ok.warnings || []) warn.push(w.text);
+    for (const w of (ok.consistency && ok.consistency.warnings) || []) warn.push(w);
+    if (ok.consistency && !ok.consistency.checked) { /* fewer than three views: nothing to compare */ }
+  } else table.hidden = true;
+  $('matchWarn').replaceChildren(...warn.map((t) => el('div', { textContent: `⚠ ${t}` })));
+  loop.hidden = !ok; $('improve').disabled = !ok || !model;
+  if (ok) $('matchHead').textContent = `Match with its references · ${f2(ok.mean[loopSettings().score])}`; else $('matchHead').textContent = 'Match with its references';
+}
+// each reference's score under its thumbnail, and the model's outline over it in the large panel
+function drawRefScores() {
+  const ok = matchResult(); if (!$('refStrip')) return;
+  [...$('refStrip').children].forEach((b, i) => { const v = refs[i] && viewOfRef(refs[i]), x = ok && v && ok.views[v], span = b.querySelector('span'); if (span) span.textContent = x ? `${refLabel(refs[i])} ${f2(x.combined)}` : refLabel(refs[i]); });
+}
+function showOverlay() {
+  const ok = matchResult(), r = refAt >= 0 ? refs[refAt] : null, v = r && viewOfRef(r), x = ok && v && ok.views[v];
+  $('refOverlayBox').hidden = !x; $('refCap').hidden = !x;
+  if (!x) { $('refOverlay').removeAttribute('src'); return; }
+  $('refCap').textContent = `reference · ${v} · silhouette ${f2(x.silhouette)} · colour ${f2(x.colour)}`;
+  $('refOverlay').src = `/api/model/match/image?key=${ok.key}&name=${encodeURIComponent(x.overlay)}`; $('refOverlay').alt = `${v}: the model's outline over the reference`;
+}
+$('matchBtn').onclick = startMatch;
+for (const id of ['mTarget', 'mRounds', 'mPlateau', 'mScore']) $(id).oninput = () => { $('mTargetOut').textContent = f2(Number($('mTarget').value)); saveLoop(); };
+$('improve').onclick = () => send({ match: true });
+
 // ---- send, and the jobs
 function updateSend() { $('send').disabled = !model || (!draft.pins.length && !draft.note.trim()); }
-async function send() {
-  const btn = $('send'); btn.disabled = true; $('sendState').textContent = 'sending…';
-  const job = { model: modelPath, note: draft.note, workflow: $('workflow').value, overview: screenshot(),
+async function send({ match = false } = {}) {
+  const btn = $(match ? 'improve' : 'send'), said = $(match ? 'improveState' : 'sendState'); btn.disabled = true; said.textContent = 'sending…';
+  const job = { model: modelPath, note: draft.note, workflow: $('workflow').value, overview: screenshot(), ...(match ? { match: loopSettings() } : {}),
     pins: draft.pins.map((p) => ({ note: p.note, position: p.position, normal: p.normal, mesh: p.mesh, material: p.material, uv: p.uv, camera: p.camera, screenshot: p.screenshot, refs: p.refs })) };
   const size = JSON.stringify(job).length;
-  if (size > 23.5 * MB) { $('sendState').textContent = `too big (${(size / MB).toFixed(1)} MB of 24): remove some reference images`; btn.disabled = false; return; }
+  if (size > 23.5 * MB) { said.textContent = `too big (${(size / MB).toFixed(1)} MB of 24): remove some reference images`; btn.disabled = false; return; }
   try {
     const { id } = await post('/api/review', job);
     sent.set(id, { model: modelPath, positions: draft.pins.map((p) => p.position) });
     await clearDraft(modelPath);
     draft = { note: '', workflow: job.workflow, pins: [] }; $('note').value = '';
     rebuildMarkers(); drawPins(); updateSend();
-    $('sendState').textContent = `sent: ${id}`; pollJobs();
-  } catch (e) { $('sendState').textContent = ''; say(`not sent (your pins are kept): ${e.message}`, 'bad'); btn.disabled = false; }
+    said.textContent = `sent: ${id}`; pollJobs(); drawMatch();
+  } catch (e) { said.textContent = ''; say(`not sent (your pins are kept): ${e.message}`, 'bad'); btn.disabled = false; updateSend(); drawMatch(); }
 }
 async function pollJobs() {
   clearTimeout(pollTimer);
@@ -465,6 +872,7 @@ async function pollJobs() {
   } catch { /* the editor may be restarting: the next poll tries again */ }
   pollTimer = setTimeout(pollJobs, 3000);
 }
+const STOPS = { 'target-reached': 'Target reached', 'out-of-rounds': 'Out of rounds', plateau: 'Stopped: no longer improving', 'held-back': 'Held back by inconsistent references' };
 function drawJobs(reviews) {
   const queued = reviews.filter((j) => j.state === 'queued'), oldest = queued.length ? Math.min(...queued.map((j) => Date.parse(j.createdAt))) : null;
   $('warn').textContent = oldest && Date.now() - oldest > 120000 ? 'No Claude session seems to be watching. In your terminal, say "watch the review inbox". Jobs stay queued until then.' : '';
@@ -473,9 +881,14 @@ function drawJobs(reviews) {
   box.className = '';
   box.replaceChildren(...reviews.slice(0, 20).map((j) => {
     const kids = [el('div', {}, el('span', { className: `state ${j.state}`, textContent: j.state }), ' ', el('span', { textContent: j.model || j.id }), el('span', { className: 'dim', textContent: ` · ${j.pins} pin${j.pins === 1 ? '' : 's'}${j.workflow ? ` · ${j.workflow}` : ''}` }))];
+    if (j.match) {
+      const last = j.rounds[j.rounds.length - 1], means = j.rounds.map((r) => f2(r.mean)).join(' → ');
+      kids.push(el('div', { className: 'rounds', textContent: `${SCORE_NAMES[j.match.score]} target ${f2(j.match.target)} · ${last ? `round ${last.round}/${j.match.maxRounds}: ${means}` : 'not started'}`, title: j.rounds.map((r) => `round ${r.round}: ${f2(r.mean)}${r.note ? ` · ${r.note}` : ''}${r.unchanged ? ' · the model file had not changed' : ''}${r.flagged.length ? ` · references off: ${r.flagged.join(', ')}` : ''}${r.drift && r.drift.length ? ` · drifted: ${r.drift.join('; ')}` : ''}`).join('\n') }));
+      if (j.stopReason) kids.push(el('div', { className: `stop ${j.stopReason}`, textContent: `${STOPS[j.stopReason]}${j.stopDetail ? ` — ${j.stopDetail}` : ''}` }));
+    }
     if (j.summary) kids.push(el('div', { textContent: j.summary }));
     if (j.question) kids.push(el('div', { className: 'bad', textContent: `Question: ${j.question}` }));
-    if (j.state === 'done' && j.modelChanged && j.model === modelPath) kids.push(el('button', { textContent: 'Reload model', onclick: async () => { await listModels(); const m = models.find((x) => x.path === j.model); if (m) openModel(m, { keepCamera: true }); } }));
+    if (j.state === 'done' && j.modelChanged && j.model === modelPath) kids.push(el('button', { textContent: 'Reload model', onclick: async () => { await listModels(); const m = models.find((x) => x.path === j.model); if (m) { await openModel(m, { keepCamera: true }); } } }));
     return el('div', { className: 'job', title: j.id }, ...kids);
   }));
 }
@@ -488,12 +901,17 @@ $('send').onclick = send;
 $('zoom').onclick = () => { $('zoom').style.display = 'none'; };
 wireRefs();
 info = await api('/api/viewer');
+try { matLib = await api('/api/materials'); } catch { matLib = { sets: {}, plain: {} }; }
+setLoopControls(info.match.last); Object.assign($('mTarget'), { min: info.match.limits.target.min, max: info.match.limits.target.max, step: info.match.limits.target.step }); $('mTarget').value = info.match.last.target;
 document.title = `${info.title ? `${info.title}: ` : ''}model review`;
 for (const w of info.workflows) $('workflow').append(el('option', { value: w.id, textContent: w.enabled ? w.label : `${w.label} (not set up yet)`, disabled: !w.enabled, title: w.description }));
 if (info.three.installed) await startThree(); else showInstall();
 await listModels();
-const want = new URLSearchParams(location.search).get('model'), first = want && models.find((x) => x.path === want);
-if (want && !first) say(`${want} is not in this project's models (${info.models || 'none'}/): pick one on the left.`, 'bad');
+// a link from before names a model from the models folder (where New model writes, and what the palette offers): that
+// one opens; failing that, the one model whose path ends with it
+const want = new URLSearchParams(location.search).get('model'), ends = want ? models.filter((x) => x.path.endsWith(`/${want}`)) : [];
+const first = want && (models.find((x) => x.path === want) || models.find((x) => x.path === `${info.modelsFolder}/${want}`) || (ends.length === 1 ? ends[0] : null));
+if (want && !first) say(`no such model: ${want}${ends.length > 1 ? ` (${ends.length} models end with it)` : ''}. Pick one on the left.`, 'bad');
 if (first && T) await openModel(first);
 pollJobs();
 </script>

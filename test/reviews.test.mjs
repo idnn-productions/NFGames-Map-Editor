@@ -34,13 +34,23 @@ describe('review jobs', () => {
     assert.throws(() => imageFromDataUrl('data:image/svg+xml;base64,PHN2Zz4=', 'ref'), /not a PNG, JPEG or WebP/);
     assert.throws(() => imageFromDataUrl(`data:image/png;base64,${Buffer.alloc(7 * 1024 * 1024).toString('base64')}`, 'ref'), /larger than/);
   });
+  it('a job from before, naming its model from the models folder, is still listed with its model found', () => {
+    const { id } = createReview(project, { model: `models/${MODEL}`, workflow: 'auto', note: 'old' }, { now: new Date('2026-11-20T00:00:00Z') });
+    const file = join(inbox, id, 'job.json'), job = JSON.parse(readFileSync(file, 'utf8'));
+    job.model.path = MODEL; writeFileSync(file, JSON.stringify(job));                       // as it was written before the viewer browsed the whole project
+    const listed = listReviews(project).find((j) => j.id === id);
+    assert.equal(listed.model, `models/${MODEL}`); assert.equal(listed.modelChanged, false);
+    writeFileSync(join(copy.root, 'models', MODEL), Buffer.concat([makeGlb(), Buffer.alloc(4)]));
+    assert.equal(listReviews(project).find((j) => j.id === id).modelChanged, true);          // found, so a change to it is seen
+    writeFileSync(join(copy.root, 'models', MODEL), makeGlb()); rmSync(join(inbox, id), { recursive: true, force: true });
+  });
   it('writes a job folder with server-made names', () => {
     const { id } = createReview(project, { model: MODEL, note: 'overall', workflow: 'auto', overview: JPEG_SIG, pins: [pin(), pin({ refs: [] })] }, { now: new Date('2026-11-22T04:12:33Z') });
     assert.equal(id, '2026-11-22T041233-light-cruiser');
     const dir = join(inbox, id);
     assert.deepEqual(readdirSync(dir).sort(), ['job.json', 'overview.jpg', 'pin-1-ref-1.png', 'pin-1.jpg', 'pin-2.jpg']);
     const job = JSON.parse(readFileSync(join(dir, 'job.json'), 'utf8'));
-    assert.equal(job.model.path, MODEL); assert.equal(job.model.sha256.length, 64);
+    assert.equal(job.model.path, `models/${MODEL}`); assert.equal(job.model.file, `models/${MODEL}`); assert.equal(job.model.sha256.length, 64);   // sent by its old path, kept by the one the viewer lists
     assert.equal(job.workflow.id, 'auto'); assert.match(job.workflow.instructions, /build/);
     assert.deepEqual(job.pins[0].refs, ['pin-1-ref-1.png']); assert.equal(job.pins[0].screenshot, 'pin-1.jpg'); assert.deepEqual(job.pins[0].uv, [0.5, 0.25]);
     assert.ok(!existsSync(`${dir}.tmp`));
@@ -67,7 +77,7 @@ describe('review jobs', () => {
   it('refuses bad jobs, writing nothing', () => {
     const count = readdirSync(inbox).length, base = { model: MODEL, workflow: 'auto', pins: [pin()] };
     for (const [job, why] of [
-      [{ ...base, model: '../layout.json' }, /no such model/], [{ ...base, workflow: 'blender' }, /not set up yet/], [{ ...base, workflow: 'nope' }, /no such workflow/],
+      [{ ...base, model: '../layout.json' }, /no such model/], [{ ...base, workflow: 'comfyui' }, /not set up yet/], [{ ...base, workflow: 'nope' }, /no such workflow/],
       [{ ...base, pins: [pin({ position: [1, 2] })] }, /three numbers/], [{ ...base, pins: [pin({ screenshot: 'x' })] }, /screenshot: not a PNG/],
       [{ ...base, pins: [pin({ refs: [PNG_1PX, PNG_1PX, PNG_1PX, PNG_1PX, PNG_1PX] })] }, /at most 4/], [{ ...base, pins: [] }, /a pin or a note/],
       [{ ...base, pins: Array.from({ length: 41 }, () => pin({ refs: [] })) }, /at most 40 pins/],
@@ -97,12 +107,15 @@ describe('review jobs', () => {
     assert.deepEqual(newJobs(inbox, seen), [id]);
   });
   it('workflows: the defaults, a default by its id, a project\'s own', () => {
-    assert.deepEqual(normaliseWorkflows(undefined, copy.root).map((w) => [w.id, w.enabled]), [['auto', true], ['blender', false], ['comfyui', false]]);
+    assert.deepEqual(normaliseWorkflows(undefined, copy.root).map((w) => [w.id, w.enabled]), [['auto', true], ['blender', true], ['angelo', true], ['measured', true], ['comfyui', false]]);
     const own = normaliseWorkflows(['auto', { id: 'cruiser-build', label: 'Cruiser build', instructionsFile: 'notes.md' }], copy.root);
     assert.deepEqual(own.map((w) => w.id), ['auto', 'cruiser-build']); assert.equal(own[1].instructionsFile, join(copy.root, 'notes.md'));
     assert.throws(() => normaliseWorkflows([{ id: 'x', instructionsFile: '../out.md' }], copy.root), /inside the project/);
     assert.throws(() => normaliseWorkflows(['nope'], copy.root), /no default workflow/);
     assert.throws(() => normaliseWorkflows([{ id: 'Bad Id' }], copy.root), /needs an id/);
     assert.equal(DEFAULT_WORKFLOWS[0].id, 'auto');
+    const measured = DEFAULT_WORKFLOWS.find((w) => w.id === 'measured');
+    assert.equal(measured.enabled, true); assert.equal(measured.label, 'Build from measurements');
+    for (const word of ['match.mjs outline', 'parts.json', 'build.py', 'job.match.baseline.shape.origin']) assert.ok(measured.instructions.includes(word), word);
   });
 });

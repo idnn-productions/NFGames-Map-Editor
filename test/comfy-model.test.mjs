@@ -2,7 +2,7 @@
 // Blender into models/<slug>/. No ComfyUI, Blender or GPU is used.
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHost } from '../src/host.mjs';
@@ -15,7 +15,25 @@ import { fakeComfy, fakeWorkflow, FAKE_GLB } from './fake-comfy.mjs';
 // a stand-in for Blender: copies the model it is given to where it should write, and reports like the finish script
 const BLENDER = `#!/usr/bin/env node
 const fs = require('fs'), a = process.argv.slice(2), rest = a.slice(a.indexOf('--') + 1), name = rest[rest.indexOf('--name') + 1];
+if (/score\.py$/.test(a[a.indexOf('--python') + 1] || '')) {   // the editor's own scorer, on the references alone: the left and right outlines agree 0.6 for a draft called "crooked"
+  const cfg = JSON.parse(fs.readFileSync(rest[0], 'utf8'));
+  if (!a.includes('-b') || !a.includes('--factory-startup') || !cfg.refsOnly || cfg.planUp !== 'up' || Object.values(cfg.refs).some((f) => !fs.existsSync(f))) { console.error('wrong scorer arguments'); process.exit(6); }
+  if (process.env.NF_SCORER_LOG) fs.appendFileSync(process.env.NF_SCORER_LOG, Object.keys(cfg.refs).join(',') + '\\n');
+  if (/mute/.test(cfg.refs.front)) process.exit(0);   // ends without writing its result
+  const crooked = /crooked/.test(cfg.refs.front), views = {}, pairs = {};
+  for (const v of Object.keys(cfg.refs)) views[v] = { background: 'clean', refSize: [100, 100], refExtent: [100, 100], planUp: null };
+  if (cfg.refs.left && cfg.refs.right) pairs['left-right'] = { outline: crooked ? 0.6 : 0.98, colour: 0.5 };
+  if (cfg.refs.front && cfg.refs.back) pairs['front-back'] = { outline: 0.98, colour: 0.5 };
+  fs.writeFileSync(cfg.result, JSON.stringify({ ok: true, refsOnly: true, views, pairs, warnings: [], seconds: 2 }));
+  process.exit(0);
+}
 if (!a.includes('--background') || !a.includes('--python')) { console.error('not headless'); process.exit(4); }
+if (process.env.NF_BLENDER_LOG) fs.appendFileSync(process.env.NF_BLENDER_LOG, require('path').basename(a[a.indexOf('--python') + 1]) + '\\n');
+if (/blender_inspect\\.py$/.test(a[a.indexOf('--python') + 1])) {   // the inspection of the finished file: it is named after the file, and a draft called "unseen" cannot be inspected
+  if (/unseen/.test(rest[0]) || !fs.existsSync(rest[0]) || !fs.existsSync(rest[1]) || rest[2] !== '--no-render') { console.error('Error: Python: cannot inspect'); process.exit(3); }
+  console.log('INSPECT ' + JSON.stringify({ loose_pieces: /pieces/.test(rest[0]) ? 3 : 1, floating_pieces: /pieces/.test(rest[0]) ? 2 : null, open_edges: 0, non_manifold_edges: 0, flipped_faces: 0, zero_area_faces: 0, symmetry_error_p95_pct: 1.5 }));
+  process.exit(0);
+}
 if (/fails/.test(name)) { console.error('Error: Python: Traceback'); process.exit(3); }
 if (/blender_retopo\.py$/.test(a[a.indexOf('--python') + 1])) {
   if (/crumples/.test(name)) { console.error('AutoRemesher failed (exit 1)'); process.exit(1); }
@@ -30,8 +48,8 @@ console.log('FINISH ' + JSON.stringify({ name, length: Number(rest[rest.indexOf(
 /** A workflows folder as the repository lays it out. */
 function workflowsDir(top, name = 'workflows', pipeline = {}) {
   const dir = join(top, name); mkdirSync(join(dir, 'workflows', 'api'), { recursive: true }); mkdirSync(join(dir, 'tools'), { recursive: true });
-  writeFileSync(join(dir, 'workflows', 'api', 'mv.json'), JSON.stringify(fakeWorkflow())); writeFileSync(join(dir, 'tools', 'blender_finish.py'), '# finish\n'); writeFileSync(join(dir, 'tools', 'blender_retopo.py'), '# clean-up\n');
-  writeFileSync(join(dir, 'pipeline.json'), JSON.stringify({ pipeline: 'asset3d', version: 1, multiview: 'workflows/api/mv.json', finish: 'tools/blender_finish.py', cleanup: 'tools/blender_retopo.py', setup: 'https://example.org/setup', ...pipeline }));
+  writeFileSync(join(dir, 'workflows', 'api', 'mv.json'), JSON.stringify(fakeWorkflow())); writeFileSync(join(dir, 'tools', 'blender_finish.py'), '# finish\n'); writeFileSync(join(dir, 'tools', 'blender_retopo.py'), '# clean-up\n'); writeFileSync(join(dir, 'tools', 'blender_inspect.py'), '# inspect\n');
+  writeFileSync(join(dir, 'pipeline.json'), JSON.stringify({ pipeline: 'asset3d', version: 1, multiview: 'workflows/api/mv.json', finish: 'tools/blender_finish.py', cleanup: 'tools/blender_retopo.py', inspect: 'tools/blender_inspect.py', setup: 'https://example.org/setup', ...pipeline }));
   return dir;
 }
 
@@ -151,6 +169,7 @@ describe('the model service', () => {
     top = realpathSync(mkdtempSync(join(tmpdir(), 'nfgames-comfy-'))); copy = sampleCopy(); bin = join(top, 'bin');
     const builtinDir = join(top, 'builtin');
     for (const p of ['comfy-model', 'model-maker']) cpSync(join(REPO, 'plugins', p), join(builtinDir, p), { recursive: true });
+    symlinkSync(join(REPO, 'src'), join(top, 'src'), 'junction');   // where the copied plugin's `../../src/match.mjs` leads, as in the repository
     restorePath = fakeCommand(bin, 'blender', BLENDER);
     flows = workflowsDir(top); mkdirSync(join(top, 'state'), { recursive: true });
     remesher = join(top, 'autoremesher-stand-in'); writeFileSync(remesher, '');   // only where it is matters: Blender is what would run it
@@ -162,7 +181,7 @@ describe('the model service', () => {
 
   it('is listed as a service that needs no key', async () => {
     const s = (await (await fetch(`${origin}/api/services`)).json()).services.find((x) => x.key === KEY);
-    assert.ok(s); assert.equal(s.connected, true); assert.deepEqual(s.actions.map((a) => a.id), ['status', 'generate']);
+    assert.ok(s); assert.equal(s.connected, true); assert.deepEqual(s.actions.map((a) => a.id), ['status', 'generate', 'checkViews']);
   });
   it('status: everything there', async () => {
     const s = await status();
@@ -206,7 +225,7 @@ describe('the model service', () => {
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const out = r.body.result;
     assert.equal(out.model, 'models/kettle/kettle.glb'); assert.equal(out.refs, 'models/kettle/kettle.refs');
-    assert.deepEqual(out.report, { name: 'kettle', length: 0.4, pivot: 'centre', after: { triangles: 12 } });
+    assert.deepEqual(out.report, { name: 'kettle', length: 0.4, pivot: 'centre', after: { triangles: 12 }, views: null, mesh: { pieces: 1, floating: null, openEdges: 0, nonManifoldEdges: 0, flippedFaces: 0, zeroAreaFaces: 0, symmetryP95: 1.5 } });   // the views were never checked
     assert.deepEqual(readFileSync(inProject('models', 'kettle', 'kettle.glb')), FAKE_GLB);
     assert.deepEqual(readdirSync(inProject('models', 'kettle', 'kettle.refs')).sort(), ['back.png', 'concept.png', 'front.png', 'left.png', 'right.png']);
     assert.deepEqual(fake.calls.uploads.map((u) => `${u.subfolder}/${u.name}`), ['front', 'left', 'back', 'right'].map((v) => `nfgames/kettle/${v}.png`));
@@ -240,6 +259,34 @@ describe('the model service', () => {
     ready('it-crumples');
     const bad = await call('generate', { draft: 'it-crumples', length: 1, cleanup: true });
     assert.notEqual(bad.status, 200); assert.match(bad.body.error, /Clean up into quads[^:]*: exit 1/); assert.ok(!existsSync(inProject('models', 'it-crumples')));
+    assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')), []);
+  });
+  it('inspection: the saved model is inspected after it is saved, and what is wrong is reported', async () => {
+    ready('two-pieces');
+    const r = await call('generate', { draft: 'two-pieces', length: 1 });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body.result.report.mesh, { pieces: 3, floating: 2, openEdges: 0, nonManifoldEdges: 0, flippedFaces: 0, zeroAreaFaces: 0, symmetryP95: 1.5 });
+    assert.equal(r.body.result.report.inspectError, undefined);
+    assert.deepEqual(readFileSync(inProject('models', 'two-pieces', 'two-pieces.glb')), FAKE_GLB);
+    assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')), []);
+  });
+  it('inspection: an older checkout has none, and no third Blender step is run', async () => {
+    const older = workflowsDir(top, 'no-inspect', { inspect: undefined }); assert.equal(readPipeline(older).inspect, null);
+    assert.ok(readPipeline(flows).inspect.endsWith('blender_inspect.py'));
+    assert.throws(() => readPipeline(workflowsDir(top, 'bad-inspect', { inspect: 'tools/none.py' })), /missing tools\/none\.py/);
+    settings({ comfyUrl: fake.url, workflowsDir: older }); ready('plain');
+    const log = join(top, 'blender-ran.log'); process.env.NF_BLENDER_LOG = log;
+    let r; try { r = await call('generate', { draft: 'plain', length: 1 }); } finally { delete process.env.NF_BLENDER_LOG; }
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.result.report.mesh, null); assert.equal(r.body.result.report.inspectError, undefined);
+    assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), ['blender_finish.py']);
+  });
+  it('inspection: a model the inspection cannot look at is still saved, and says so', async () => {
+    ready('unseen');
+    const r = await call('generate', { draft: 'unseen', length: 1 });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.result.model, 'models/unseen/unseen.glb'); assert.deepEqual(readFileSync(inProject('models', 'unseen', 'unseen.glb')), FAKE_GLB);
+    assert.equal(r.body.result.report.mesh, null); assert.match(r.body.result.report.inspectError, /Inspect \(Blender\)|exit 3/);
     assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')), []);
   });
   it('generate: top and bottom go too when both are approved; one of them alone does not', async () => {
@@ -297,5 +344,76 @@ describe('the model service', () => {
     ready('late'); settings({ comfyUrl: fake.url, workflowsDir: '' });
     const r = await call('generate', { draft: 'late', length: 1 });
     assert.notEqual(r.status, 200); assert.match(r.body.error, /Not ready: Set the workflows folder/);
+  });
+  describe('check the views against each other', () => {
+    let log, runs;
+    beforeEach(() => { log = join(top, 'scorer-runs.log'); rmSync(log, { force: true }); process.env.NF_SCORER_LOG = log; runs = () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0); });
+    after(() => { delete process.env.NF_SCORER_LOG; });
+    const checkViews = async (draft) => { const r = await call('checkViews', { draft }); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body.result; };
+    it('a draft whose opposite views disagree is warned about; one whose views agree is not', async () => {
+      ready('crooked-pot'); ready('straight-pot', ['front', 'back', 'left', 'right', 'top', 'three-quarter']);
+      const bad = await checkViews('crooked-pot');
+      assert.equal(bad.checked, true); assert.equal(bad.warnings.length, 1); assert.match(bad.warnings[0], /left and right: their outlines agree 0\.60 \(below 0\.9\)/);
+      assert.equal(bad.pairs['left-right'].outline, 0.6); assert.equal(bad.seconds, 2); assert.equal(runs(), 1);
+      const good = await checkViews('straight-pot');
+      assert.equal(good.checked, true); assert.deepEqual(good.warnings, []); assert.deepEqual(good.notes, []); assert.equal(runs(), 2);
+      assert.equal(readFileSync(log, 'utf8').split('\n')[1], 'front,back,left,right,top');   // the approved views that have a file; three-quarter is never sent
+      assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')).filter((f) => !/^views-.*\.json$/.test(f)), []);   // only the kept answers stay
+    });
+    it('a second call, and a changed viewsOutline, start no job; a changed view file starts one', async () => {
+      ready('crooked-jug');
+      assert.equal((await checkViews('crooked-jug')).warnings.length, 1); assert.equal(runs(), 1);
+      const again = await checkViews('crooked-jug'); assert.equal(again.warnings.length, 1); assert.equal(again.seconds, 0); assert.equal(runs(), 1);
+      settings({ comfyUrl: fake.url, workflowsDir: flows, viewsOutline: 0.5 });
+      assert.deepEqual((await checkViews('crooked-jug')).warnings, []); assert.equal(runs(), 1);
+      settings({ comfyUrl: fake.url, workflowsDir: flows, viewsOutline: 'high' });   // not a number: 0.9
+      assert.equal((await checkViews('crooked-jug')).warnings.length, 1); assert.equal(runs(), 1);
+      for (const v of [0, -0.3]) {                                                   // an emptied field saves 0: 0.9, not the lowest limit
+        settings({ comfyUrl: fake.url, workflowsDir: flows, viewsOutline: v });
+        assert.equal((await checkViews('crooked-jug')).warnings.length, 1, String(v)); assert.equal(runs(), 1);
+      }
+      writeFileSync(inProject('.nfgames', 'drafts', 'crooked-jug', 'views', 'left.png'), Buffer.concat([dataBytes(PNG_1PX), Buffer.from('redrawn')]));
+      assert.equal((await checkViews('crooked-jug')).checked, true); assert.equal(runs(), 2);
+      assert.equal((await checkViews('crooked-jug')).seconds, 0); assert.equal(runs(), 2);
+    });
+    it('generate reports the kept answer, or null when the views were never checked, and does not run the check', async () => {
+      ready('crooked-vase');
+      assert.equal((await call('generate', { draft: 'crooked-vase', length: 1 })).body.result.report.views, null); assert.equal(runs(), 0);
+      const kept = await checkViews('crooked-vase');
+      const r = await call('generate', { draft: 'crooked-vase', length: 1, replace: true });
+      assert.equal(r.status, 200, JSON.stringify(r.body)); assert.deepEqual(r.body.result.report.views, { ...kept, seconds: 0 }); assert.equal(runs(), 1);
+    });
+    it('a kept answer made by another scorer, or one that is not JSON, is not kept: the views are checked again', async () => {
+      ready('crooked-cup'); const kept = join(top, 'state', 'storage', 'nfgames.comfy-model', 'views-crooked-cup.json');
+      await checkViews('crooked-cup'); assert.equal(runs(), 1);
+      const record = JSON.parse(readFileSync(kept, 'utf8')); assert.match(record.scorer, /^[0-9a-f]{64}$/);
+      writeFileSync(kept, JSON.stringify({ ...record, scorer: 'f'.repeat(64) })); await checkViews('crooked-cup'); assert.equal(runs(), 2);
+      const { scorer, ...old } = JSON.parse(readFileSync(kept, 'utf8')); writeFileSync(kept, JSON.stringify(old)); await checkViews('crooked-cup'); assert.equal(runs(), 3);   // a record without a scorer hash
+      writeFileSync(kept, '{ not json'); assert.equal((await checkViews('crooked-cup')).warnings.length, 1); assert.equal(runs(), 4);
+      writeFileSync(kept, '{ not json');
+      const r = await call('generate', { draft: 'crooked-cup', length: 1 });
+      assert.equal(r.status, 200, JSON.stringify(r.body)); assert.equal(r.body.result.report.views, null); assert.equal(runs(), 4);
+    });
+    it('a scorer that ends without a result fails with a readable error and keeps nothing', async () => {
+      ready('mute-pan'); const r = await call('checkViews', { draft: 'mute-pan' });
+      assert.notEqual(r.status, 200); assert.match(r.body.error, /The views were not checked: see Jobs/); assert.equal(runs(), 1);
+      assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')).filter((f) => /mute-pan/.test(f)), []);   // neither a kept answer nor the working folder
+    });
+    it('fewer than two views to compare is answered without starting a job', async () => {
+      ready('crooked-lid');
+      for (const v of ['back', 'left', 'right']) rmSync(inProject('.nfgames', 'drafts', 'crooked-lid', 'views', `${v}.png`));
+      const r = await checkViews('crooked-lid');
+      assert.equal(r.checked, false); assert.deepEqual(r.pairs, {}); assert.deepEqual(r.warnings, []); assert.deepEqual(r.notes, ['fewer than two views with a clean background: not checked']); assert.equal(r.seconds, 0); assert.equal(runs(), 0);
+    });
+    it('a draft that is not ready, or is not there, is refused; so is a missing Blender', async () => {
+      ready('crooked-urn');
+      const d = JSON.parse(readFileSync(inProject('.nfgames', 'drafts', 'crooked-urn', 'draft.json'), 'utf8'));
+      writeFileSync(inProject('.nfgames', 'drafts', 'crooked-urn', 'draft.json'), JSON.stringify({ ...d, status: 'views', views: { ...d.views, approved: false } }));
+      assert.match((await call('checkViews', { draft: 'crooked-urn' })).body.error, /draft: approve the views first/);
+      assert.match((await call('checkViews', { draft: 'nobody' })).body.error, /draft: no such draft/);
+      assert.match((await call('checkViews', { draft: '../x' })).body.error, /draft: no such draft/);
+      ready('crooked-bin'); settings({ comfyUrl: fake.url, workflowsDir: flows, blender: join(top, 'no', 'blender') });
+      assert.match((await call('checkViews', { draft: 'crooked-bin' })).body.error, /Not ready: Blender is not at /); assert.equal(runs(), 0);
+    });
   });
 });

@@ -2,13 +2,16 @@
 // project's root) says about them. Everything game-specific lives in that config; with none, the defaults below
 // make a plain editor of <project>/maps/<name>/layout.json. README.md "Running it against your own project" lists
 // every option and hook.
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, resolve, isAbsolute, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { NAME, formatPlan, formatPlants, writeKeeping, fileStamp } from './plan.mjs';
 import { checkFile } from './schema.mjs';
 import { normaliseWorkflows } from './reviews.mjs';
+import { normaliseMatch } from './match.mjs';
 import { createModelKinds } from './modelkinds.mjs';
+import { listModels, resolveModel } from './models.mjs';
+import { resolveMaterialsConfig } from './materials.mjs';
 
 export const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const BUILT_IN_SCHEMAS = { layout: join(EDITOR_ROOT, 'schemas', 'map.schema.json'), plants: join(EDITOR_ROOT, 'schemas', 'map-plants.schema.json') };
@@ -69,8 +72,55 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
   const inside = (p, what) => { const abs = resolve(root, p), r = relative(root, abs); if (r.startsWith('..') || isAbsolute(r)) fail(`${what} must be a folder inside the project: ${p}`); return abs; };
   const modelsDir = options.models === false || options.models === null ? null : options.models ? inside(options.models, '"models"') : existsSync(join(root, 'models')) ? join(root, 'models') : root;
   const modelKindsOn = options.modelKinds !== false, modelKinds = createModelKinds(modelKindsOn ? modelsDir : null);
+  // what the viewer browses: every model of the project, wherever it is kept (models.mjs says which folders are left out).
+  // `assets: false` keeps it to the models folder; `assets: { skip, levels }` leaves folders out and names levels.
+  const assetsOpt = options.assets;
+  if (assetsOpt !== undefined && assetsOpt !== false && (!assetsOpt || typeof assetsOpt !== 'object' || Array.isArray(assetsOpt))) fail('"assets" must be false or { skip, levels }');
+  const assetPaths = (key, isOk = () => true) => {
+    const list = (assetsOpt && assetsOpt[key]) || [];
+    if (!Array.isArray(list) || !list.every((p) => typeof p === 'string' && p && isOk(p))) fail(`"assets.${key}" must be a list of ${key === 'levels' ? '.glb files' : 'folders'} inside the project`);
+    return list.map((p) => relative(root, inside(p, `"assets.${key}"`)).split(/[\\/]/).join('/'));
+  };
+  const assetSkip = assetPaths('skip'), assetLevels = assetPaths('levels', (p) => /\.glb$/i.test(p));
+  const assetsDir = assetsOpt === false ? modelsDir : root;
+  let assetList = null, assetsAt = 0;
+  /** Every model the viewer lists: [{ path (from assetsDir), size, mtime, level? }], looked for again after 2 seconds.
+   *  The models folder is listed whole, as it always was, even where the search of the project passes it over (a
+   *  models folder under dist/, or a folder in it called build); what the config's assets.skip leaves out stays out. */
+  function assets() {
+    if (!assetsDir) return [];
+    if (assetList && Date.now() - assetsAt <= 2000) return assetList;
+    if (assetsOpt === false) assetList = listModels(assetsDir);
+    else {
+      const found = new Map(listModels(assetsDir, { skip: assetSkip, levels: assetLevels, copies: false }).map((m) => [m.path, m]));
+      const prefix = modelsDir && modelsDir !== assetsDir ? relative(assetsDir, modelsDir).split(/[\\/]/).join('/') : null;
+      const left = (path) => assetSkip.some((s) => path === s || path.startsWith(`${s}/`));
+      if (prefix && !prefix.startsWith('..')) for (const m of listModels(modelsDir)) {
+        const path = `${prefix}/${m.path}`;
+        if (!found.has(path) && !left(path)) found.set(path, { ...m, path, ...(assetLevels.includes(path) ? { level: true } : {}) });
+      }
+      assetList = [...found.values()].sort((a, b) => a.path.localeCompare(b.path));
+    }
+    assetsAt = Date.now();
+    return assetList;
+  }
+  /** A model by its path from a request: { file (its real path), path (from assetsDir) }, or null. A path that is not
+   *  there is tried under the models folder, where paths were counted from before the viewer browsed the whole project. */
+  function resolveAsset(rel) {
+    for (const dir of new Set([assetsDir, modelsDir])) {
+      const file = dir && resolveModel(dir, rel);
+      if (!file) continue;
+      const base = realpathSync(assetsDir), path = relative(base, file);
+      if (path.startsWith('..') || isAbsolute(path)) continue;
+      return { file, path: path.split(/[\\/]/).join('/') };
+    }
+    return null;
+  }
+  const materials = resolveMaterialsConfig(root, options.materials, inside);
   const reviewsDir = inside(options.reviews || '.review', '"reviews"');
   const reviewWorkflows = normaliseWorkflows(options.reviewWorkflows, root);
+  normaliseMatch(options.match);                                   // a mistake in the match settings is found at start
+  if (options.blender !== undefined && typeof options.blender !== 'string') fail('"blender" must be the path of the Blender program');
 
   // where the maps are: the config's, or the first of maps/ and data/maps/ that exists
   const mapsDir = options.maps ? at(options.maps) : [join(root, 'maps'), join(root, 'data', 'maps')].find((d) => existsSync(d)) || join(root, 'maps');
@@ -104,7 +154,9 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
   const listMaps = () => (existsSync(mapsDir) ? readdirSync(mapsDir).filter((n) => NAME.test(n) && statSync(join(mapsDir, n)).isDirectory() && existsSync(join(mapsDir, n, 'layout.json'))).sort() : []);
   /** A map name from a request: a plain folder name with a plan in it, or null. */
   const knownMap = (name) => { if (typeof name !== 'string' || !NAME.test(name)) return null; try { return existsSync(planFile(name)) ? name : null; } catch { return null; } };
-  const rel = (file) => { const r = relative(root, file); return (r.startsWith('..') || isAbsolute(r) ? file : r).replace(/\\/g, '/'); };
+  // a path of the project from its root: a file's real path (a model's, say) is measured from the root's real path too, as a temporary folder on macOS is behind a link
+  let realRoot = root; try { realRoot = realpathSync(root); } catch { /* not there: the root as given */ }
+  const rel = (file) => { for (const base of [root, realRoot]) { const r = relative(base, file); if (!r.startsWith('..') && !isAbsolute(r)) return r.replace(/\\/g, '/'); } return file.replace(/\\/g, '/'); };
 
   // what every hook gets as its second argument: where things are, and the editor's own helpers (no import of the editor needed)
   const ctx = { root, editorRoot: EDITOR_ROOT, mapsDir, mapDir, planFile, plantsFile, readPlan, readPlants, readJson, rel, formatPlan, formatPlants, fileStamp, dryRun: false };
@@ -150,7 +202,7 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
 
   return {
     root, configFile, mapsDir, schemaFile, plantsSchemaFile, ctx, options,
-    modelsDir, reviewsDir, reviewWorkflows, modelProblems: () => modelKinds().problems,
+    modelsDir, assetsDir, assets, resolveAsset, materials, reviewsDir, reviewWorkflows, modelProblems: () => modelKinds().problems,
     port: options.port || DEFAULT_PORT, defaultMap: options.defaultMap || null,
     mapDir, planFile, plantsFile, readPlan, readPlants, listMaps, knownMap, rel,
     planErrors, plantsErrors, kinds, presets, presetOf, actions, overlays, plants: plantsCfg, reserved,

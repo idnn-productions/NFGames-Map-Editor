@@ -50,3 +50,4 @@
 .mm-need a { color: var(--nf-accent); margin-right: var(--nf-s2); } .mm-need .mm-btn { padding: 1px 8px; font-size: 12px; } summary.mm-need { display: list-item; margin: var(--nf-s2) 0 0; }
 .mm label.mm-inline { display: inline; text-transform: none; letter-spacing: 0; font-size: inherit; color: var(--nf-text); margin: 0; }
 .mm-made { display: flex; align-items: center; gap: var(--nf-s3); flex-wrap: wrap; } .mm-made p { margin: 0; flex: 1; } a.mm-btn { text-decoration: none; display: inline-block; }
+.mm-views-check { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--nf-s2); }

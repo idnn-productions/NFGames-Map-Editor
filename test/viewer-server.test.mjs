@@ -19,6 +19,8 @@ describe('the model viewer over HTTP', () => {
     copy = sampleCopy();
     mkdirSync(join(copy.root, 'models'), { recursive: true });
     writeFileSync(join(copy.root, 'models', 'cruiser.glb'), makeGlb()); writeFileSync(join(copy.root, 'models', 'bare.glb'), makeGlb());
+    for (const f of ['art/town/town.glb', 'dist/town.glb', 'top.glb']) { mkdirSync(join(copy.root, f, '..'), { recursive: true }); writeFileSync(join(copy.root, f), makeGlb()); }
+    writeFileSync(join(copy.root, 'art', 'town', 'town.json'), '{}');
     mkdirSync(join(copy.root, 'models', 'cruiser.refs'));
     for (const [name, data] of [['front.jpg', dataBytes(JPEG_SIG)], ['concept.png', dataBytes(PNG_1PX)], ['icon.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>'], ['fake.png', '<script>']]) writeFileSync(join(copy.root, 'models', 'cruiser.refs', name), data);
     editorRoot = mkdtempSync(join(tmpdir(), 'nfgames-editor-root-'));
@@ -46,7 +48,7 @@ describe('the model viewer over HTTP', () => {
   });
   it('says three.js is not installed, and serves none of it', async () => {
     const v = await (await ask('/api/viewer')).json();
-    assert.equal(v.three.installed, false); assert.equal(v.models, 'models'); assert.equal(v.workflows[0].id, 'auto');
+    assert.equal(v.three.installed, false); assert.equal(v.models, '.'); assert.equal(typeof v.root, 'string'); assert.equal(v.modelsFolder, 'models'); assert.equal(v.workflows[0].id, 'auto');   // the viewer browses the whole project
     assert.equal((await ask(`${v.three.base}build/three.module.js`)).status, 404);
   });
   it('installs only from this page, and nothing when the download does not match', async () => {
@@ -57,13 +59,18 @@ describe('the model viewer over HTTP', () => {
     assert.equal(fetched, 1); assert.deepEqual(readdirSync(editorRoot), []);
   });
   it('lists and streams models, nothing else', async () => {
-    assert.deepEqual((await (await ask('/api/models')).json()).models.map((m) => m.path), ['bare.glb', 'cruiser.glb']);
-    const r = await ask('/api/model?path=cruiser.glb');
+    // every model of the project, by its path from the project's folder; a build's copy is not listed; a model with its .json is a level
+    const { models } = await (await ask('/api/models')).json();
+    assert.deepEqual(models.map((m) => [m.path, !!m.level]), [['art/town/town.glb', true], ['models/bare.glb', false], ['models/cruiser.glb', false], ['top.glb', false]]);
+    for (const path of ['models/cruiser.glb', 'art/town/town.glb', 'top.glb', 'dist/town.glb']) assert.equal((await ask(`/api/model?path=${path}`)).status, 200, path);
+    assert.equal((await ask('/api/model?path=art/town/town.json')).status, 404);
+    const r = await ask('/api/model?path=cruiser.glb');   // a path from before this, counted from the models folder
     assert.equal(r.status, 200); assert.equal(r.headers.get('content-type'), 'model/gltf-binary');
     assert.equal(Buffer.from(await r.arrayBuffer()).length, makeGlb().length);
     for (const bad of ['../maps/plaza/layout.json', '..%2Fmaps%2Fplaza%2Flayout.json', 'nope.glb', '']) assert.equal((await ask(`/api/model?path=${bad}`)).status, 404, bad);
   });
   it('lists a model\'s reference images in order, and none for a model without them', async () => {
+    assert.deepEqual((await (await ask('/api/model/refs?path=models/cruiser.glb')).json()).refs.map((x) => x.name), ['concept.png', 'front.jpg']);
     const r = await ask('/api/model/refs?path=cruiser.glb');
     assert.equal(r.status, 200); assert.equal(r.headers.get('x-content-type-options'), 'nosniff'); assert.equal(r.headers.get('cache-control'), 'no-store');
     const { refs } = await r.json();
