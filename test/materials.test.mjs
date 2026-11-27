@@ -24,7 +24,7 @@ describe('materials discovery and resolution', () => {
     mkdirSync(join(srcDir, 'only-source'), { recursive: true });
     mkdirSync(join(root, 'dist', 'materials', 'ignored-set'), { recursive: true });
     mkdirSync(join(root, 'web', 'game', 'src', 'look'), { recursive: true });
-    writeFileSync(join(builtDir, 'materials.json'), JSON.stringify({ 'whitewash-plaster': { colour: [0.7, 0.65, 0.55], roughness: 0.85, metal: 0 } }));
+    writeFileSync(join(builtDir, 'materials.json'), JSON.stringify({ 'whitewash-plaster': { colour: [0.7, 0.65, 0.55], roughness: 0.85, metal: 0, tile: 1.6 }, 'only-source': { tile: -2 } }));
     writeFileSync(join(builtDir, 'whitewash-plaster', 'albedo-1k.ktx2'), KTX2);
     writeFileSync(join(builtDir, 'whitewash-plaster', 'normal-1k.ktx2'), KTX2);
     writeFileSync(join(builtDir, 'whitewash-plaster', 'ormh-1k.ktx2'), KTX2);
@@ -48,6 +48,8 @@ describe('materials discovery and resolution', () => {
     const lib = readMaterialLibrary(cfg);
     assert.deepEqual(Object.keys(lib.sets).sort(), ['only-source', 'whitewash-plaster']);
     assert.equal(lib.sets['whitewash-plaster'].albedo, 'albedo-1k.ktx2');
+    assert.equal(lib.sets['whitewash-plaster'].tile, 1.6);                // how many metres one repeat of the texture covers, when the project says
+    assert.equal('tile' in lib.sets['only-source'], false);               // not said, or not a size: the viewer's own guess stands
     assert.equal(lib.sets['whitewash-plaster'].orm, 'ormh-1k.ktx2');
     assert.equal(lib.sets['whitewash-plaster'].hasHeight, true);
     assert.deepEqual(lib.sets['whitewash-plaster'].colour, [0.7, 0.65, 0.55]);

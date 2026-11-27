@@ -109,7 +109,7 @@ export function resolveMaterialsConfig(root, option, inside) {
 }
 
 /**
- * The material catalogue for the viewer: `{ sets: { name: { albedo, normal?, orm?, hasHeight, colour?, roughness?, metal? } }, plain: { ... } }`.
+ * The material catalogue for the viewer: `{ sets: { name: { albedo, normal?, orm?, hasHeight, colour?, roughness?, metal?, tile? } }, plain: { ... } }`.
  * No filesystem paths leave the server. Earlier folders in `cfg.dirs` win on name collisions.
  */
 export function readMaterialLibrary(cfg) {
@@ -139,6 +139,7 @@ export function readMaterialLibrary(cfg) {
       if (Array.isArray(info.colour) && info.colour.length === 3) entry.colour = info.colour;
       if (typeof info.roughness === 'number') entry.roughness = info.roughness;
       if (typeof info.metal === 'number') entry.metal = info.metal;
+      if (typeof info.tile === 'number' && info.tile > 0 && Number.isFinite(info.tile)) entry.tile = info.tile;   // metres one repeat covers
       sets[e.name] = entry;
     }
   }

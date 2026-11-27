@@ -306,7 +306,9 @@ function frame() {
 
 // ---- external PBR material resolver (for projects like Perseus that bind scanned sets by material name + COLOR_0 mask)
 const MAT_TILE = { 'wall-brick': 1.6, 'zellige-tile': 1.2, 'wall-stone': 2.4, 'step-stone': 2.4, 'broken-plaster': 2.6, 'sandstone-rock': 5, 'hangar-panel': 3, 'hangar-sheet': 2.4, 'ship-hull': 3, 'canvas-plain': 1.2, 'cliff-bedded': 4.6, 'cliff-blocky': 5.6, 'cliff-pale': 8, 'rock-weathered': 2.4, 'clay-brick': 2, 'inlaid-stone': 2.2, 'awning-canvas': 0.55, 'concrete-floor': 3 };
-const tileScaleOf = (set) => 2.0 / (MAT_TILE[set] || 2.0);
+// a set's `tile` in the project's materials.json (metres one repeat covers) comes first; the table above is for sets that do not say
+const ownSet = (name) => (matLib.sets && typeof name === 'string' && Object.hasOwn(matLib.sets, name) ? matLib.sets[name] : null);
+const tileScaleOf = (set) => 2.0 / (ownSet(set)?.tile || MAT_TILE[set] || 2.0);
 function loadMaterialTexture(set, file, srgb) {
   const key = `${set}/${file}:${srgb ? 1 : 0}`;
   if (!texCache.has(key)) {
@@ -378,16 +380,16 @@ async function resolveMaterial(orig, hasColorAttr, cache) {
   const key = `${name}:${hasColorAttr ? 1 : 0}:${orig.side}`;
   if (cache.has(key)) return cache.get(key);
   const p = (async () => {
-    const plain = matLib.plain && matLib.plain[name];
+    const plain = matLib.plain && Object.hasOwn(matLib.plain, name) ? matLib.plain[name] : null;   // a material called "constructor" is not one of the project's
     if (plain) {
       const c = new T.Color(plain.colour);
       const m = new T.MeshStandardMaterial({ name, color: c, roughness: plain.roughness ?? 0.6, metalness: plain.metal ?? 0, vertexColors: false, side: orig.side });
       if (plain.glow || plain.sky) { m.emissive = c.clone(); m.emissiveIntensity = Math.min(2.5, (plain.glow || plain.sky) * 0.35); }
       return { mat: m, resolved: true, scanned: false };
     }
-    const parts = name.split('|'), setNameA = parts[0], setA = matLib.sets && matLib.sets[setNameA];
+    const parts = name.split('|'), setNameA = parts[0], setA = ownSet(setNameA);
     if (!setA) return { mat: orig, resolved: false, scanned: false };
-    const setNameB = parts[1], setB = setNameB && matLib.sets[setNameB] ? matLib.sets[setNameB] : null;
+    const setNameB = parts[1], setB = ownSet(setNameB);
     const amount = parseFloat(parts[2]) || 0;
     const tint = parts[3] && /^#[0-9a-fA-F]{3,8}$/.test(parts[3]) ? new T.Color(parts[3]) : null;
     const wantB = !!(setB && (hasColorAttr || amount > 0));
@@ -467,10 +469,10 @@ async function resolveMaterial(orig, hasColorAttr, cache) {
               #endif`);
         }
         if (hasNrmB) {
-          shader.fragmentShader = shader.fragmentShader.replace(
-            'vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;',
-            'vec3 mapN = mix( texture2D( normalMap, vNormalMapUv ).xyz, texture2D( uNrmB, nfUvB ).xyz, nfBlend ) * 2.0 - 1.0;'
-          );
+          // the line is inside a chunk three.js writes in after this hook, so the chunk is written in here, changed
+          const own = 'vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;', chunk = T.ShaderChunk.normal_fragment_maps;
+          if (chunk.includes(own)) shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>',
+            chunk.replace(own, 'vec3 mapN = mix( texture2D( normalMap, vNormalMapUv ).xyz, texture2D( uNrmB, nfUvB ).xyz, nfBlend ) * 2.0 - 1.0;'));
         }
       };
     }
