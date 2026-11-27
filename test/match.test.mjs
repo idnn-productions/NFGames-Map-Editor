@@ -2,15 +2,16 @@
 // the scorer's wrapper (a fixed command, a cache by hash, progress, Blender missing), and the loop's job and status fields.
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
-import { SCORER, consistency, createMatcher, decide, drift, normaliseLoop, normaliseMatch, refsVerdict, scoredViews, blenderMissing, DEFAULTS, REFS_LIMITS } from '../src/match.mjs';
+import { SCORER, VIEWS, consistency, createMatcher, decide, drift, normaliseLoop, normaliseMatch, outlinesOf, refsVerdict, scoredViews, blenderMissing, DEFAULTS, REFS_LIMITS } from '../src/match.mjs';
 import { createReview, listReviews } from '../src/reviews.mjs';
 import { finishLoop, openJob, recordRound, setStatus, startLoop } from '../src/matchloop.mjs';
-import { sampleCopy, makeGlb, PNG_1PX, dataBytes } from './helpers.mjs';
+import { REPO, sampleCopy, makeGlb, PNG_1PX, dataBytes } from './helpers.mjs';
 
 describe('match settings', () => {
   it('the config\'s match: defaults, and mistakes named', () => {
@@ -65,6 +66,44 @@ describe('reference consistency', () => {
     const three = consistency({ front: { refExtent: [600, 200] }, left: sound.left, top: sound.top }, 0.05);
     assert.equal(three.checked, true); assert.equal(three.ambiguous, true); assert.deepEqual(three.flagged, ['front']);      // any of the three could be the odd one: the sides and the top are trusted
     assert.equal(consistency({ front: { refExtent: [0, 5] }, left: sound.left, top: sound.top }).checked, false);
+  });
+  it('gives the object\'s proportions, the largest side 1, when the views solve them', () => {
+    assert.deepEqual(consistency(VIEWS3).proportions, { x: 0.667, y: 0.333, z: 1 });
+    assert.deepEqual(consistency(sound).proportions, { x: 1, y: 0.5, z: 0.75 });
+    assert.equal(consistency({ front: sound.front, left: sound.left }).proportions, null);
+    assert.equal(consistency({ front: sound.front, back: sound.back, top: { refExtent: [0, 3] } }).proportions, null);
+  });
+});
+
+// a 2 x 1 x 3 object (width, height, depth): front 2 by 1, left 3 by 1, top 2 by 3
+const VIEWS3 = { front: { refExtent: [200, 100], planUp: null }, left: { refExtent: [300, 100], planUp: null }, top: { refExtent: [200, 300], planUp: 'up' } };
+describe('the references as outlines', () => {
+  const result = (planUp = 'up') => ({ ok: true, refsOnly: true, views: { ...VIEWS3, front: { ...VIEWS3.front, outlines: [[[0, 0], [1, 0], [1, 1], [0, 1]]] }, left: { ...VIEWS3.left, outlines: [[[0, 0], [1, 1], [0.123456, 0.5]], [[0.5, 0.5], [0.6, 0.5], [0.6, 0.6]]] }, top: { refExtent: planUp === 'up' ? [200, 300] : [300, 200], planUp, outlines: [[[1, 1]]] } }, pairs: {}, warnings: [] });
+  it('in metres from the longest side: the object\'s size, each view\'s size and its points', () => {
+    const r = result(), o = outlinesOf(r, refsVerdict(r), 30);
+    assert.equal(o.length, 30); assert.deepEqual(o.size, { x: 20, y: 10, z: 30 });
+    assert.deepEqual(o.views.left.size, [30, 10]); assert.deepEqual(o.views.left.outlines[0][1], [30, 10]); assert.deepEqual(o.views.left.outlines[0][2], [3.704, 5]);
+    assert.equal(o.views.left.outlines.length, 2); assert.deepEqual(o.views.front.outlines[0], [[0, 0], [20, 0], [20, 10], [0, 10]]);
+    assert.deepEqual(o.views.top.size, [20, 30]); assert.deepEqual(o.views.top.outlines, [[[20, 30]]]);
+    assert.deepEqual(o.views.front.axes, ['width, the model\'s left on the right', 'height']); assert.deepEqual(o.views.left.axes, ['depth, front toward the left', 'height']);
+    assert.deepEqual(o.views.top.axes, ['width', 'depth, front toward the top']);
+  });
+  it('a top drawn with the front toward its side is depth by width', () => {
+    const r = result('right'), o = outlinesOf(r, refsVerdict(r), 30);
+    assert.deepEqual(o.size, { x: 20, y: 10, z: 30 }); assert.deepEqual(o.views.top.size, [30, 20]); assert.deepEqual(o.views.top.axes, ['depth, front toward the right', 'width']);
+  });
+  it('without a length, or without proportions, the points stay fractions of each view\'s outline box', () => {
+    const r = result(), o = outlinesOf(r, refsVerdict(r));
+    assert.equal(o.length, null); assert.equal(o.size, null); assert.equal(o.views.left.size, null);
+    assert.deepEqual(o.views.left.outlines[0][2], [0.1235, 0.5]); assert.deepEqual(o.views.left.axes, ['depth, front toward the left', 'height']);
+    const two = { ...r, views: { front: r.views.front, left: r.views.left } }, t = outlinesOf(two, refsVerdict(two), 30);
+    assert.equal(t.length, 30); assert.equal(t.size, null); assert.equal(t.views.front.size, null); assert.deepEqual(t.views.front.outlines[0][1], [1, 0]);
+    const all = { ok: true, views: Object.fromEntries(VIEWS.map((v) => [v, { refExtent: [1, 1], planUp: ['top', 'bottom'].includes(v) ? 'down' : null, outlines: [] }])) };
+    assert.deepEqual(Object.fromEntries(Object.entries(outlinesOf(all, refsVerdict(all)).views).map(([v, x]) => [v, x.axes])), {
+      front: ['width, the model\'s left on the right', 'height'], back: ['width, the model\'s right on the right', 'height'],
+      left: ['depth, front toward the left', 'height'], right: ['depth, front toward the right', 'height'],
+      top: ['width', 'depth, front toward the bottom'], bottom: ['width', 'depth, front toward the bottom'],
+    });
   });
 });
 
@@ -242,6 +281,35 @@ describe('the scorer\'s wrapper', () => {
     assert.equal(bad.status('bare.glb').state, 'no-views'); assert.throws(() => bad.start('bare.glb'), /no front, back, left, right, top or bottom reference/);
     assert.throws(() => bad.status('../x.glb'), /no such model/);
     assert.throws(() => createMatcher(project).status('nope.glb'), (e) => e.code === 400);
+  });
+  it('outlines: the references alone, as a fixed command, never from or into the scores\' cache', async () => {
+    await setup();
+    const calls = [], impl = (file, args, options) => {
+      const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill() {} }), s = JSON.parse(readFileSync(args[args.length - 1], 'utf8'));
+      calls.push({ file, args, options, settings: s });
+      setImmediate(() => { writeFileSync(s.result, JSON.stringify({ ok: true, refsOnly: true, views: { front: { refExtent: [1, 1], outlines: [] } }, pairs: {}, warnings: [] })); child.emit('close', 0); });
+      return child;
+    };
+    const matcher = createMatcher(project, { spawnImpl: impl });
+    await matcher.start('ships/cruiser.glb', {}).done.catch(() => {});                                       // a score in the cache does not answer for outlines
+    const r = await matcher.outlines('ships/cruiser.glb', { points: 12 }), call = calls[calls.length - 1];
+    assert.deepEqual(r.views.front.outlines, []);
+    assert.equal(call.file, process.execPath); assert.deepEqual(call.args.slice(0, 5), ['-b', '--factory-startup', '--python', SCORER, '--']); assert.equal(call.args.length, 6); assert.equal(call.options.shell, false);
+    assert.deepEqual(Object.keys(call.settings.refs), ['front', 'left', 'top']); assert.equal(call.settings.model, undefined);
+    assert.deepEqual([call.settings.refsOnly, call.settings.outlines, call.settings.planUp], [true, 12, 'up']);
+    await matcher.outlines('ships/cruiser.glb', { points: 12 }); assert.equal(calls.length, 3, 'run again each time');
+    assert.deepEqual(readdirSync(join(copy.root, '.review', '.match')).filter((n) => n.startsWith('outlines-')), [], 'its folder goes');
+    const left = createMatcher(await loadProject({ root: copy.root, config: { models: 'models', blender: process.execPath, match: { planUp: 'left' } } }), { spawnImpl: impl });
+    await left.outlines('ships/cruiser.glb', { points: 40 }); assert.equal(calls[calls.length - 1].settings.planUp, 'left');
+    writeFileSync(join(copy.root, 'models', 'bare.glb'), makeGlb());
+    assert.throws(() => matcher.outlines('bare.glb', { points: 40 }), /no front, back, left, right, top or bottom reference/);
+  });
+  it('match.mjs outline: --points is a whole number of 4 to 200', async () => {
+    await setup();
+    for (const p of ['3', '201', '4.5', 'x']) {
+      const r = spawnSync(process.execPath, [join(REPO, 'bin', 'match.mjs'), 'outline', '--project', copy.root, 'ships/cruiser.glb', '--points', p], { encoding: 'utf8', shell: false });
+      assert.equal(r.status, 2, p); assert.match(r.stderr, /--points: a whole number of 4 to 200/);
+    }
   });
   it('serves only the scorer\'s own pictures, by a key it made', async () => {
     await setup();

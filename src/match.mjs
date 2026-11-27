@@ -8,7 +8,7 @@
 // file of settings), with shell: false, and nothing from a request becomes part of a command.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BLENDER_DOWNLOAD, findBlender } from './blender.mjs';
@@ -95,15 +95,15 @@ const TRUST = ['left', 'right', 'top', 'front', 'back', 'bottom'];
 const UNIT = { X: [1, 0], Y: [0, 0], Z: [0, 1] };
 const axesOf = (view, v) => (view === 'top' || view === 'bottom') && (v.planUp === 'right' || v.planUp === 'left') ? [AXES[view][1], AXES[view][0]] : AXES[view];
 
-/** { checked, flagged: [view], views: { view: { aspect, expected, deviation, flagged } }, warnings: [text] } from the scorer's per-view reference extents. */
-export function consistency(views, tolerance = DEFAULTS.tolerance) {
+/** The sizes that explain the views best: { eq, tied, pick } (pick.u is [ln(X/Y), ln(Z/Y)]), or { eq, why } when they cannot be solved. */
+function solve(views) {
   const eq = [];
   for (const [name, v] of Object.entries(views || {})) {
     if (!v || !Array.isArray(v.refExtent) || !(v.refExtent[0] > 0) || !(v.refExtent[1] > 0)) continue;
     const [h, w] = axesOf(name, v);
     eq.push({ view: name, row: [UNIT[h][0] - UNIT[w][0], UNIT[h][1] - UNIT[w][1]], obs: Math.log(v.refExtent[0] / v.refExtent[1]) });
   }
-  if (eq.length < 3) return { checked: false, flagged: [], views: {}, warnings: [], why: 'needs at least three scored views to compare them' };
+  if (eq.length < 3) return { eq, why: 'needs at least three scored views to compare them' };
   const solutions = [];
   for (let i = 0; i < eq.length; i++) for (let j = i + 1; j < eq.length; j++) {
     const [a, b] = [eq[i].row, eq[j].row], det = a[0] * b[1] - a[1] * b[0];
@@ -112,8 +112,22 @@ export function consistency(views, tolerance = DEFAULTS.tolerance) {
     const res = eq.map((e) => e.obs - (e.row[0] * u[0] + e.row[1] * u[1]));
     solutions.push({ u, res, cost: res.reduce((s, r) => s + Math.abs(r), 0), rank: TRUST.indexOf(eq[i].view) + TRUST.indexOf(eq[j].view) });
   }
-  if (!solutions.length) return { checked: false, flagged: [], views: {}, warnings: [], why: 'these views do not share a size to compare' };
-  const best = Math.min(...solutions.map((s) => s.cost)), tied = solutions.filter((s) => s.cost < best + 1e-9).sort((a, b) => a.rank - b.rank), pick = tied[0];
+  if (!solutions.length) return { eq, why: 'these views do not share a size to compare' };
+  const best = Math.min(...solutions.map((s) => s.cost)), tied = solutions.filter((s) => s.cost < best + 1e-9).sort((a, b) => a.rank - b.rank);
+  return { eq, tied, pick: tied[0] };
+}
+/** The object's width, height and depth as a solution of solve() has them, the largest 1 (unrounded). */
+function proportionsOf(pick) {
+  const s = [Math.exp(pick.u[0]), 1, Math.exp(pick.u[1])], top = Math.max(...s);
+  return { x: s[0] / top, y: s[1] / top, z: s[2] / top };
+}
+const round = (x, d) => Math.round(x * 10 ** d) / 10 ** d;
+
+/** { checked, flagged: [view], views: { view: { aspect, expected, deviation, flagged } }, warnings: [text], proportions: { x, y, z } | null } from the scorer's per-view reference extents. `proportions`: the object's width, height and depth as the views imply them, the largest 1, to 3 decimals. */
+export function consistency(views, tolerance = DEFAULTS.tolerance) {
+  const { eq, tied, pick, why } = solve(views);
+  if (!pick) return { checked: false, flagged: [], views: {}, warnings: [], why, proportions: null };
+  const p = proportionsOf(pick), proportions = { x: round(p.x, 3), y: round(p.y, 3), z: round(p.z, 3) };
   const out = {}, flagged = [], warnings = [];
   eq.forEach((e, k) => {
     const worst = pick.res[k];
@@ -124,7 +138,7 @@ export function consistency(views, tolerance = DEFAULTS.tolerance) {
       warnings.push(`${e.view} reference: its shape is ${Math.round(deviation * 100)}% ${worst > 0 ? 'wider' : 'narrower'} than the other references imply${tied.length > 1 ? ' (the references alone cannot tell which of them is off; the sides and the top are taken as right)' : ''}, which caps the score any model can reach there`);
     }
   });
-  return { checked: true, flagged, views: out, warnings, ambiguous: tied.length > 1 };
+  return { checked: true, flagged, views: out, warnings, ambiguous: tied.length > 1, proportions };
 }
 
 // ---- the references alone, before any model: an outline seen from one side is the mirror image of the outline from the
@@ -144,6 +158,33 @@ export function refsVerdict(result, tolerance = DEFAULTS.tolerance, limits = REF
   const checked = Object.keys(pairs).length > 0 || c.checked;
   if (!checked) notes.push('fewer than two views with a clean background: not checked');
   return { checked, pairs, consistency: c, warnings, notes };
+}
+
+// ---- the references as outlines, for building a model from measurements: the scorer's refsOnly `outlines` (fractions of each
+// view's outline box, y up) in metres, from the proportions the views imply and the length of the object's longest side.
+/** What a view's horizontal and vertical are, as score.py draws the views. */
+function axesText(view, planUp) {
+  if (view === 'front') return ['width, the model\'s left on the right', 'height'];
+  if (view === 'back') return ['width, the model\'s right on the right', 'height'];
+  if (view === 'left' || view === 'right') return [`depth, front toward the ${view}`, 'height'];
+  const where = ['right', 'down', 'left'].includes(planUp) ? planUp : 'up', front = `depth, front toward the ${{ up: 'top', down: 'bottom' }[where] || where}`;
+  return where === 'right' || where === 'left' ? [front, 'width'] : ['width', front];
+}
+/**
+ * { length, size: { x, y, z } | null, views: { view: { axes: [horizontal, vertical], size: [w, h] | null, outlines } } } from a refsOnly
+ * result with outlines, its refsVerdict() and the longest side in metres. With the verdict's proportions and a length, the size and
+ * each view's points are in metres (3 decimals; the size from the proportions unrounded); without, the points stay fractions
+ * (4 decimals) and the sizes are null.
+ */
+export function outlinesOf(result, verdict, length) {
+  const views = (result && result.views) || {}, L = num(length) && length > 0 ? length : null;
+  const pick = L && verdict && verdict.consistency && verdict.consistency.proportions ? solve(views).pick : null, p = pick ? proportionsOf(pick) : null;
+  const size = p && { x: round(p.x * L, 3), y: round(p.y * L, 3), z: round(p.z * L, 3) };
+  return { length: L, size, views: Object.fromEntries(Object.entries(views).map(([name, v]) => {
+    const wh = p ? axesOf(name, v).map((a) => p[a.toLowerCase()] * L) : null;
+    const outlines = (v.outlines || []).map((o) => o.map(([x, y]) => (wh ? [round(x * wh[0], 3), round(y * wh[1], 3)] : [round(x, 4), round(y, 4)])));
+    return [name, { axes: axesText(name, v.planUp), size: wh && wh.map((s) => round(s, 3)), outlines }];
+  })) };
 }
 
 // ---- what must stay as it was sent
@@ -284,6 +325,28 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
     done.catch(() => {});                 // the page polls; a caller that awaits it hears the failure itself
     return { started: true, done };
   }
+  /**
+   * The references of `rel` alone, each traced as outlines of at most `points` points (the scorer's refsOnly with outlines). Resolves
+   * with the scorer's result. It is run every time, in a folder of its own that then goes: the scores' cache is neither read nor written.
+   */
+  function outlines(rel, { points = 40 } = {}) {
+    const p = plan(rel);
+    if (!p.views.length) bad('this model has no front, back, left, right, top or bottom reference to trace');
+    const blender = findBlender(project.options.blender);
+    if (!blender) bad(blenderMissing(project.options.blender), 409);
+    mkdirSync(root, { recursive: true }); const tmp = mkdtempSync(join(root, 'outlines-')), argsFile = join(tmp, 'args.json');
+    writeFileSync(argsFile, JSON.stringify({ refs: p.files, outDir: tmp, result: join(tmp, 'result.json'), refsOnly: true, outlines: points, planUp: ['up', 'right', 'down', 'left'].includes(config.planUp) ? config.planUp : 'up' }));
+    return new Promise((ok, no) => {
+      let log = '';
+      // the same fixed command as a score: Blender, in the background, with the scorer and one settings file; no shell, no input
+      const child = spawnImpl(blender, ['-b', '--factory-startup', '--python', SCORER, '--', argsFile], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, TIMEOUT);
+      const end = (error, result) => { clearTimeout(timer); rmSync(tmp, { recursive: true, force: true }); return error ? no(Object.assign(new Error(error), { code: 502 })) : ok(result); };
+      child.stdout.on('data', (d) => { log = (log + d).slice(-4000); }); child.stderr.on('data', (d) => { log = (log + d).slice(-4000); });
+      child.on('error', (e) => end(`Blender could not be started: ${e.message}`));
+      child.on('close', (code) => { const result = readResult(tmp); return result ? end(null, result) : end(`Blender stopped (exit ${code}) without a result. ${log.trim().split('\n').slice(-3).join(' | ')}`); });
+    });
+  }
   /** Keeps the newest KEEP result folders (and never `keep`); stray .tmp folders go. */
   function prune(keep) {
     try {
@@ -301,7 +364,7 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
   const settingsFile = join(root, 'settings.json');
   const settings = () => { try { return normaliseLoop(JSON.parse(readFileSync(settingsFile, 'utf8'))); } catch { return normaliseLoop({}); } };
   const saveSettings = (input) => { const s = normaliseLoop(input); mkdirSync(root, { recursive: true }); writeFileSync(settingsFile, `${JSON.stringify(s)}\n`); return s; };
-  return { status, start, cached, image, settings, saveSettings, config, plan };
+  return { status, start, outlines, cached, image, settings, saveSettings, config, plan };
 }
 
 export const blenderMissing = (setting) => (typeof setting === 'string' && setting.trim()

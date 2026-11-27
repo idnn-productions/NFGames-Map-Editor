@@ -3,7 +3,7 @@
 // search must recover, references with a transparent or an unclean background, and a reference that disagrees with the rest.
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import { loadProject } from '../src/project.mjs';
 import { SCORER, VIEWS, createMatcher } from '../src/match.mjs';
 import { findBlender } from '../src/blender.mjs';
 import { boxesGlb, linear, manyBoxesGlb, sphereGlb, turnedBoxes, writeRefs } from './match-fixtures.mjs';
+import { REPO } from './helpers.mjs';
 
 const RED = [200, 30, 30];
 const SHAPE = [{ min: [-1, 0, -1.5], max: [1, 0.8, 1.5] }, { min: [0.2, 0.8, -1.5], max: [1, 2, -0.5] }, { min: [-0.4, 0.2, 1.5], max: [0.4, 0.6, 2.5] }];   // a base, a tower to one side at the back, a nose at the front
@@ -159,5 +160,51 @@ describe('the scorer in Blender', { skip: findBlender('') ? false : 'Blender is 
     const d = writeRefs(join(dir, 'refs6'), { boxes: SHAPE }, ['front'], { colour: RED }); writeFileSync(join(d, 'back.png'), 'not an image');
     const r = await refsOnly(d);
     assert.equal(r.ok, false); assert.match(r.error, /^back: the image could not be read/);
+  });
+  const shoelace = (pts) => Math.abs(pts.reduce((s, [x, y], i) => { const [u, v] = pts[(i + 1) % pts.length]; return s + x * v - u * y; }, 0)) / 2;
+  const near = (a, b, d) => Math.abs(a - b) <= d;
+  it('references alone, as outlines: a box is its four corners in every view, a shape keeps its area in a few points', async () => {
+    const box = await refsOnly(writeRefs(join(dir, 'refs7'), { boxes: BOX }, VIEWS, { colour: RED }), { outlines: 40 });
+    for (const v of VIEWS) {
+      const o = box.views[v].outlines[0]; assert.equal(o.length, 4, `${v} ${JSON.stringify(o)}`); assert.equal(box.views[v].outlines.length, 1);
+      for (const [x, y] of [[0, 0], [1, 0], [1, 1], [0, 1]]) assert.ok(o.some((p) => near(p[0], x, 0.02) && near(p[1], y, 0.02)), `${v}: no point at ${x}, ${y}: ${JSON.stringify(o)}`);
+    }
+    assert.deepEqual(Object.keys(box.pairs), ['left-right', 'front-back', 'top-bottom']);
+    // the left view of SHAPE: 4 m (depth) by 2 m (height), 4 m² of it covered, the front (the nose, 0.2 to 0.6 m up) on the left
+    const shape = await refsOnly(writeRefs(join(dir, 'refs8'), { boxes: SHAPE }, ['left'], { colour: RED }), { outlines: 40 }), left = shape.views.left.outlines[0];
+    assert.ok(left.length <= 12, `${left.length} points`); assert.ok(near(shoelace(left), 0.5, 0.5 * 0.03), `area ${shoelace(left)}`);
+    const nose = left.filter(([x]) => x < 0.1).map(([, y]) => y).sort();
+    assert.equal(nose.length, 2); assert.ok(near(nose[0], 0.1, 0.02) && near(nose[1], 0.3, 0.02), `the nose at ${nose}`);
+    const few = await refsOnly(writeRefs(join(dir, 'refs9'), { sphere: 1 }, ['front'], { colour: RED }), { outlines: 8 });
+    assert.ok(few.views.front.outlines[0].length <= 8); assert.ok(near(shoelace(few.views.front.outlines[0]), Math.PI / 4, 0.1), 'a circle in 8 points is still about a circle');
+  });
+  it('references alone, as outlines: one polygon per piece, the largest first; none for an unclean background', async () => {
+    const apart = [{ min: [-2, 0, -0.5], max: [0, 1, 0.5] }, { min: [1, 0, -0.5], max: [1.5, 0.5, 0.5] }, { min: [1.9, 0, -0.5], max: [2, 0.1, 0.5] }];   // two boxes apart, and a speck under 1% of the area (it still counts for the box the points are in)
+    const r = await refsOnly(writeRefs(join(dir, 'refs10'), { boxes: apart }, ['front', 'left'], { colour: RED }, { left: { gradient: true } }), { outlines: 40 });
+    const [big, small] = r.views.front.outlines;
+    assert.equal(r.views.front.outlines.length, 2); assert.ok(shoelace(big) > shoelace(small));
+    assert.ok(big.every(([x]) => x <= 0.51) && small.every(([x]) => x >= 0.74 && x <= 0.89), `${JSON.stringify(r.views.front.outlines)}`);
+    assert.deepEqual(r.views.left.outlines, []); assert.equal(r.views.left.background, 'unclean');
+  });
+  it('match.mjs outline: the references in metres, written beside the model; the length from the model\'s score when not given', async () => {
+    const root = join(dir, `p${++n}`); mkdirSync(join(root, 'models'), { recursive: true });
+    writeFileSync(join(root, 'models', 'thing.glb'), boxesGlb(BOX, linear(RED))); writeRefs(join(root, 'models', 'thing.refs'), { boxes: BOX }, ['front', 'left', 'top'], { colour: RED });
+    writeFileSync(join(root, 'map-editor.config.mjs'), 'export default { models: "models" };\n');
+    const cli = (...a) => { const r = spawnSync(process.execPath, [join(REPO, 'bin', 'match.mjs'), 'outline', '--project', root, 'thing.glb', ...a], { encoding: 'utf8', shell: false }); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout); };
+    const file = join(root, 'models', 'thing.outlines.json'), within = (a, b) => near(a, b, b * 0.03 + 1e-9);
+    const metres = cli('--length', '4');                                                                  // the box is 2 x 1 x 1.5: twice that
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), metres); assert.equal(metres.model, 'thing.glb'); assert.equal(metres.length, 4);
+    assert.ok(within(metres.size.x, 4) && within(metres.size.y, 2) && within(metres.size.z, 3), JSON.stringify(metres.size));
+    const front = metres.views.front;
+    assert.deepEqual(front.axes, ['width, the model\'s left on the right', 'height']); assert.ok(within(front.size[0], 4) && within(front.size[1], 2));
+    for (const [x, y] of [[0, 0], [front.size[0], 0], front.size, [0, front.size[1]]]) assert.ok(front.outlines[0].some((p) => near(p[0], x, 0.01) && near(p[1], y, 0.01)), `front: no point at ${x}, ${y}`);
+    assert.deepEqual(metres.views.left.axes, ['depth, front toward the left', 'height']); assert.deepEqual(metres.warnings, []); assert.equal(metres.note, undefined);
+    const fractions = cli();
+    assert.equal(fractions.length, null); assert.equal(fractions.size, null); assert.equal(fractions.views.front.size, null); assert.match(fractions.note, /fractions/);
+    assert.ok(fractions.views.front.outlines[0].every((p) => p.every((c) => c >= 0 && c <= 1)));
+    await createMatcher(await loadProject({ root })).start('thing.glb').done;                             // a score of the model gives its longest side
+    const scored = cli('--points', '4');
+    assert.equal(scored.length, 2); assert.ok(within(scored.size.x, 2), JSON.stringify(scored.size)); assert.equal(scored.note, undefined);
+    assert.ok(Object.values(scored.views).every((v) => v.outlines.every((o) => o.length <= 4)));
   });
 });

@@ -8,7 +8,8 @@ orthographic reference image per view (front, back, left, right, top, bottom), a
 overlay-<view>.png (the model's outline over the reference) and render-<view>.png (a textured render) into outDir.
 With { refs, outDir, result, refsOnly: true, planUp } (no model) it reads only the references and scores each pair of
 opposite views against each other (left-right, front-back, top-bottom): see "the references alone" below. There a reference
-that cannot be read ends the run with ok: false.
+that cannot be read ends the run with ok: false. With outlines: n as well, each view also gives its outlines: one closed
+polygon per piece of its mask, at most n points each (see "the references as outlines").
 
 Views (the model seen from ...; the image's up is the model's up, except top and bottom, where it is the model's front):
   front: the front (+Z), the model's left on the image's right        back: behind, the model's right on the image's right
@@ -186,6 +187,80 @@ ref_warnings = [{"view": v, "kind": "background", "text": f"{v}: {REFS[v]['why']
 def ref_extent(R):
     c = crop(R["mask"], R["px"]); return None if c is None else list(c[0].shape[::-1])
 
+# ---------------------------------------------------------------- the references as outlines (refsOnly with outlines: n)
+def pieces(m):
+    """The 4-connected pieces of a mask, each a list of runs (row, first column, column after the last): the runs of each row,
+    joined to the runs of the row above that they share a column with."""
+    runs, rows = [], []
+    for y in range(m.shape[0]):
+        d = np.diff(np.concatenate(([0], m[y].astype(np.int8), [0])))
+        s, e = np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]
+        rows.append(range(len(runs), len(runs) + len(s))); runs += [(y, int(a), int(b)) for a, b in zip(s, e)]
+    parent = list(range(len(runs)))
+    def find(i):
+        while parent[i] != i: parent[i] = parent[parent[i]]; i = parent[i]
+        return i
+    for y in range(1, len(rows)):
+        up, cur = rows[y - 1], rows[y]; i = j = 0
+        while i < len(up) and j < len(cur):
+            a, b = runs[up[i]], runs[cur[j]]
+            if a[1] < b[2] and b[1] < a[2]:
+                ra, rb = find(up[i]), find(cur[j])
+                if ra != rb: parent[ra] = rb
+            if a[2] < b[2]: i += 1
+            else: j += 1
+    out = {}
+    for i, r in enumerate(runs): out.setdefault(find(i), []).append(r)
+    return list(out.values())
+
+def outer(runs):
+    """The outer boundary of a piece, along its pixels' edges: the corners where it turns, as (x, y) in pixel edges (y down),
+    going round with the piece on the right (clockwise as the image shows it). Holes are not followed. Only the piece's own
+    pixels count, so a piece touching another at a corner is not entered."""
+    y0, x0 = min(r[0] for r in runs), min(r[1] for r in runs)
+    p = np.zeros((max(r[0] for r in runs) - y0 + 3, max(r[2] for r in runs) - x0 + 2), bool)   # a ring of one pixel around it
+    for y, a, b in runs: p[y - y0 + 1, a - x0 + 1:b - x0 + 1] = True
+    sx, sy = int(np.argmax(p[1])), 1                           # the top-left corner of the top row's first pixel
+    x, y, dx, dy, pts = sx, sy, 1, 0, []
+    while True:
+        x += dx; y += dy; nx, ny = -dy, dx                      # (nx, ny): the right of the way
+        right = p[y + (dy + ny - 1) // 2, x + (dx + nx - 1) // 2]; left = p[y + (dy - ny - 1) // 2, x + (dx - nx - 1) // 2]
+        if not right: dx, dy = -dy, dx; pts.append((x, y))      # the piece ends ahead: turn right
+        elif left: dx, dy = dy, -dx; pts.append((x, y))         # the piece goes on to the left too: turn left
+        if (x, y) == (sx, sy): break
+    return [(x + x0 - 1, y + y0 - 1) for x, y in pts]
+
+def simplify(pts, tol):
+    """Douglas-Peucker on a closed polygon: cut at its first point and the point farthest from it, and in each half keep the
+    point farthest from the line between its ends while that is more than `tol` away."""
+    n = len(pts)
+    if n <= 3: return pts
+    P = np.asarray(pts, float); Q = np.vstack([P, P[:1]])        # Q[n] is the first point again
+    far = int(np.argmax(((P - P[0]) ** 2).sum(1))); keep = np.zeros(n, bool); keep[0] = keep[far] = True
+    stack = [(0, far), (far, n)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2: continue
+        seg, rel = Q[b] - Q[a], Q[a + 1:b] - Q[a]; ln = math.hypot(*seg)
+        d = np.abs(seg[0] * rel[:, 1] - seg[1] * rel[:, 0]) / ln if ln > 0 else np.hypot(rel[:, 0], rel[:, 1])
+        i = int(np.argmax(d))
+        if d[i] > tol: k = a + 1 + i; keep[k] = True; stack += [(a, k), (k, b)]
+    return [pts[i] for i in range(n) if keep[i]]
+
+def outlines(m, n):
+    """One closed polygon per piece of the mask of at least 1% of its area, the largest first, each of at most n points: traced
+    along the pixels' edges (outer), simplified (simplify) from half a pixel, the tolerance doubled until it has at most n.
+    In fractions of the whole mask's bounding box: x from its left edge, y from its bottom edge; the points go round clockwise."""
+    ys, xs = np.nonzero(m)
+    if not len(xs): return []
+    X0, X1, Y0, Y1 = int(xs.min()), int(xs.max()) + 1, int(ys.min()), int(ys.max()) + 1; total = len(xs); out = []
+    for area, runs in sorted(((sum(b - a for _, a, b in rs), rs) for rs in pieces(m)), key=lambda t: -t[0]):
+        if area < 0.01 * total: break
+        pts = outer(runs); tol = 0.5; s = simplify(pts, tol)
+        while len(s) > n: tol *= 2; s = simplify(pts, tol)
+        out.append([[round((x - X0) / (X1 - X0), 4), round((Y1 - y) / (Y1 - Y0), 4)] for x, y in s])
+    return out
+
 # ---------------------------------------------------------------- the references alone (refsOnly): no model is read
 # An object's outline seen from one side is the mirror image of its outline from the opposite side: each pair is scored as
 # the first view's mask against the second's mirrored: left to right, except top and bottom drawn with the front toward
@@ -205,9 +280,11 @@ if cfg.get("refsOnly"):
             (am, ar), (bm, br) = pair
             iou = float((am & bm).sum() / max(1, (am | bm).sum())); col = colour_score(am, ar, bm, br)
         pairs[f"{a}-{b}"] = {"outline": round(iou, 4), "colour": round(col, 4)}
+    views = {v: {"background": REFS[v]["background"], "refSize": REFS[v]["size"], "refExtent": ref_extent(REFS[v]), "planUp": pu if v in PLAN else None} for v in VIEWS}
+    if cfg.get("outlines"):   # a view with an unclean background has none: its mask is not the object
+        for v in VIEWS: views[v]["outlines"] = [] if REFS[v]["background"] == "unclean" else outlines(REFS[v]["mask"], int(cfg["outlines"]))
     finish({
-        "ok": True, "refsOnly": True,
-        "views": {v: {"background": REFS[v]["background"], "refSize": REFS[v]["size"], "refExtent": ref_extent(REFS[v]), "planUp": pu if v in PLAN else None} for v in VIEWS},
+        "ok": True, "refsOnly": True, "views": views,
         "pairs": pairs, "warnings": ref_warnings, "seconds": round(time.time() - t0, 1),
     })
 

@@ -9,8 +9,17 @@
 //                                                                                    score the model as it is, record the round, say go on or stop
 //   match.mjs status --project <dir> <job id> --state working|needs-input [--question <text>] [--summary <text>]
 //   match.mjs finish --project <dir> <job id> --summary <text> [--state done|failed] [--changed <file>]...
+//   match.mjs outline --project <dir> <model path> [--length <metres>] [--points <4 to 200, default 40>]
+//                                                                                    the references as measured outlines, to build parts from:
+//     prints { model, length, size: { x, y, z }, views: { view: { axes: [horizontal, vertical], size: [w, h], outlines: [[[x, y], ...]] } },
+//     warnings } and writes it to <model's folder>/<name>.outlines.json. Each outline is one closed piece of the view's silhouette,
+//     the largest first, its points from the bottom-left corner of the view's outline box, in metres: the size comes from the
+//     proportions the views imply and --length, the longest side (left out: the model's longest side from its last score). Without
+//     either the points are fractions of each view's box and the sizes are null, and `note` says why.
+import { renameSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
-import { createMatcher } from '../src/match.mjs';
+import { createMatcher, outlinesOf, refsVerdict } from '../src/match.mjs';
 import { finishLoop, recordRound, setStatus, startLoop } from '../src/matchloop.mjs';
 
 const args = process.argv.slice(2), command = args.shift();
@@ -21,16 +30,29 @@ for (let i = 0; i < args.length; i++) {
 const one = (k) => (flags[k] ? flags[k][flags[k].length - 1] : undefined);
 const out = (o) => console.log(JSON.stringify(o, null, 2));
 const die = (text, code = 1) => { console.error(`match: ${text}`); process.exit(code); };
-if (!['score', 'start', 'round', 'status', 'finish'].includes(command)) die('commands: score, start, round, status, finish (see the top of bin/match.mjs)', 2);
+if (!['score', 'start', 'round', 'status', 'finish', 'outline'].includes(command)) die('commands: score, start, round, status, finish, outline (see the top of bin/match.mjs)', 2);
+const points = one('points') === undefined ? 40 : Number(one('points')), length = one('length') === undefined ? undefined : Number(one('length'));
+if (command === 'outline' && !(Number.isInteger(points) && points >= 4 && points <= 200)) die('--points: a whole number of 4 to 200', 2);
+if (command === 'outline' && length !== undefined && !(Number.isFinite(length) && length > 0)) die('--length: the longest side in metres, a number above 0', 2);
 let project; try { project = await loadProject({ root: one('project') || process.cwd(), config: one('config') }); } catch (e) { die(e.message); }
 const matcher = createMatcher(project), target = rest[0];
-if (!target) die(`${command} needs ${command === 'score' ? 'a model path' : 'a job id'}`, 2);
+if (!target) die(`${command} needs ${command === 'score' || command === 'outline' ? 'a model path' : 'a job id'}`, 2);
 const progress = ({ done, total, text }) => process.stderr.write(`  ${done}/${total} ${text}\n`);
 const summary = (r) => ({ views: Object.fromEntries(Object.entries(r.views).map(([v, s]) => [v, { silhouette: s.silhouette, colour: s.colour, combined: s.combined, background: s.background }])), mean: r.mean, orientation: r.orientation, consistency: r.consistency, warnings: r.warnings });
 try {
   if (command === 'score') {
     const { done } = matcher.start(target, { onProgress: progress }), { result, dir } = await done;
     out(one('json') ? result : { ...summary(result), files: dir });
+  } else if (command === 'outline') {
+    const result = await matcher.outlines(target, { points });
+    if (!result.ok) die(`the references could not be traced: ${result.error}`);
+    const verdict = refsVerdict(result, matcher.config.tolerance), o = outlinesOf(result, verdict, length ?? matcher.cached(target)?.result.shape?.longest);
+    const note = !o.length ? 'no --length, and the model has no score yet to take its longest side from: the points are fractions of each view\'s outline box; give --length <metres>'
+      : !o.size ? `the references do not give the object's proportions (${verdict.consistency.why}): the points are fractions of each view's outline box` : undefined;
+    const report = { model: target, ...o, warnings: (result.warnings || []).map((w) => w.text), ...(note ? { note } : {}) };
+    const file = matcher.plan(target).file, dest = join(dirname(file), `${basename(file, extname(file))}.outlines.json`);
+    writeFileSync(`${dest}.tmp`, `${JSON.stringify(report, null, 1)}\n`); renameSync(`${dest}.tmp`, dest);
+    out(report);
   } else if (command === 'start') out(startLoop(project, target));
   else if (command === 'round') {
     const num = (v) => (v === undefined ? undefined : Number(v));
