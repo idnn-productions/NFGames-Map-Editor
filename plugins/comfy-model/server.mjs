@@ -7,6 +7,9 @@
 //                                   ->  { model, refs, report, seconds }
 // cleanup: the generated mesh is remeshed into about `quads` quads with new UVs and re-baked maps (Blender runs
 // AutoRemesher) before it is finished; report.cleanup then holds what that step said.
+// When the workflows folder has an inspect script, the saved model is measured after it is saved: report.mesh holds
+// { pieces, floating, openEdges, nonManifoldEdges, flippedFaces, zeroAreaFaces, symmetryP95 } (null when it could not be
+// measured, with report.inspectError saying why). A failed inspection never takes the model away.
 // checkViews looks at the approved views alone, in Blender on the CPU (seconds, no GPU): opposite views must show one
 // shape. It warns; generate never waits on it. The scorer's raw answer is kept per draft with a hash of each view file,
 // and the verdict is made again on every call, so changing `viewsOutline` needs no new run.
@@ -115,10 +118,11 @@ export function activate(api) {
     if (!seen.ready) throw new Error(`Not ready: ${seen.checks.filter((c) => c.ok === false).map((c) => c.text).join('; ')}`);
     if (seen.queue > 0 && input.wait !== true) throw new Error(`ComfyUI is working on ${seen.queue} other prompt${seen.queue > 1 ? 's' : ''}: say wait to queue behind ${seen.queue > 1 ? 'them' : 'it'}`);
     const { client, pipeline, blender, remesher } = seen, poles = views.includes('top') && views.includes('bottom');
-    const raw = join(api.storage, `${slug}-raw.glb`), clean = join(api.storage, `${slug}-clean.glb`), out = join(api.storage, `${slug}.glb`), started = Date.now();
+    const raw = join(api.storage, `${slug}-raw.glb`), clean = join(api.storage, `${slug}-clean.glb`), out = join(api.storage, `${slug}.glb`), looked = join(api.storage, `${slug}-inspect`), started = Date.now();
     const made = cleanup ? Math.max(faces, SOURCE_FACES) : faces;   // triangles asked of ComfyUI
     const headless = ['--background', '--factory-startup', '--python-exit-code', '1', '--python'];   // a script that fails stops its step
-    for (const old of [raw, clean, out]) rmSync(old, { force: true });
+    for (const old of [raw, clean, out, looked]) rmSync(old, { force: true, recursive: true });
+    if (pipeline.inspect) mkdirSync(looked, { recursive: true });
     const sent = {}; let id = null, glb = null, report = null, run = null;
 
     run = api.jobs.run(`Generate model: ${draft.name}`, [
@@ -152,11 +156,17 @@ export function activate(api) {
         for (const v of draft.views.list) if (f.exists(`${dir}/views/${v}.png`)) f.write(`${refs}/${v}.png`, f.read(`${dir}/views/${v}.png`, null));
         log(`${model}\n`);
       } },
+      ...(pipeline.inspect ? [{ label: 'Inspect (Blender)', command: [blender, ...headless, pipeline.inspect, '--', out, looked, '--no-render'], cwd: api.storage }] : []),
     ]);
     const job = await run.done;
-    for (const old of [raw, clean, out]) rmSync(old, { force: true });
-    if (job.state !== 'done') {
-      const m = /== .* stopped at "([^"]+)": ([^\n]*)/.exec(job.log.slice(-4000));
+    for (const old of [raw, clean, out, looked]) rmSync(old, { force: true, recursive: true });
+    const m = job.state !== 'done' ? /== .* stopped at "([^"]+)": ([^\n]*)/.exec(job.log.slice(-4000)) : null;
+    if (report && pipeline.inspect) {   // the model is saved by now: what the inspection says is added to the report, and its failure never takes the model away
+      report.mesh = null;
+      try { const i = JSON.parse(job.log.split(/\r?\n/).reverse().find((l) => l.startsWith('INSPECT ')).slice(8)); report.mesh = { pieces: i.loose_pieces, floating: i.floating_pieces, openEdges: i.open_edges, nonManifoldEdges: i.non_manifold_edges, flippedFaces: i.flipped_faces, zeroAreaFaces: i.zero_area_faces, symmetryP95: i.symmetry_error_p95_pct }; } catch { /* no line, or one that is not JSON */ }
+      if (!report.mesh) report.inspectError = m && m[1] === 'Inspect (Blender)' ? m[2] : 'the inspection printed no result';
+    } else if (report) report.mesh = null;
+    if (job.state !== 'done' && !(report && m && m[1] === 'Inspect (Blender)')) {
       throw new Error(m ? `${m[1]}: ${m[2]}${/^(Finish|Clean up)/.test(m[1]) ? ' (see Jobs for Blender\'s output)' : ''}` : 'The model was not made: see Jobs for what happened');
     }
     return { model, refs, report, seconds: Math.round((Date.now() - started) / 1000) };

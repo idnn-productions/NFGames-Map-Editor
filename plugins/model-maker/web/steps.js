@@ -262,7 +262,7 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
   function model() {
     const v = draft.views, all = [['concept', draft.concept.approved], ...v.list.map((x) => [x, v.picks[x]])], unused = v.list.filter((x) => !made.views.includes(x));
     const busy = running.has('model') || !!elsewhere, can = !!needs && needs.ready && !made.missing.length && !busy && !checking;
-    const r = modelRun.result, after = r && r.report && r.report.after;
+    const r = modelRun.result, after = r && r.report && r.report.after, mesh = r && r.report && r.report.mesh;
     return [h('h2', { textContent: draft.name }),
       h('div', { className: 'mm-grid small' }, ...all.map(([title, path]) => pic(path, { title, group: all.map(([t, q]) => ({ path: q, src: src(q), caption: t })) }))),
       made.missing.length ? h('p', { className: 'mm-bad', textContent: `A model needs the front, left, back and right views. Missing: ${made.missing.join(', ')}. Add ${made.missing.length > 1 ? 'them' : 'it'} in Views.` })
@@ -285,7 +285,10 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
       modelRun.state === 'failed' ? h('p', { className: 'mm-bad', textContent: modelRun.error }) : null,
       draft.model && modelRun.state !== 'running' ? h('div', { className: 'mm-made' },
         h('p', {}, `Saved as ${draft.model.path}, ${draft.model.length} m on its longest side`,
-          after ? `: ${r.report.cleanup && r.report.cleanup.quads ? `${Number(r.report.cleanup.quads).toLocaleString()} quads, ` : ''}${Number(after.triangles).toLocaleString()} triangles${after.mb ? `, ${after.mb} MB` : ''}${r.seconds ? `, made in ${r.seconds} s` : ''}.` : '.'),
+          after ? `: ${r.report.cleanup && r.report.cleanup.quads ? `${Number(r.report.cleanup.quads).toLocaleString()} quads, ` : ''}${Number(after.triangles).toLocaleString()} triangles${after.mb ? `, ${after.mb} MB` : ''}${r.seconds ? `, made in ${r.seconds} s` : ''}${mesh ? `, ${mesh.pieces} piece${mesh.pieces === 1 ? '' : 's'}, ${mesh.openEdges} open edge${mesh.openEdges === 1 ? '' : 's'}` : ''}.` : '.'),
+        ...(mesh ? [[mesh.floating, 'floating piece', 'parts that touch nothing'], [mesh.flippedFaces, 'flipped face', 'faces that point into the model'], [mesh.nonManifoldEdges, 'non-manifold edge', 'edges shared by more than two faces']]
+          .filter(([n]) => n > 0).map(([n, what, why]) => h('p', { className: 'mm-bad', textContent: `✕ ${n} ${what}${n === 1 ? '' : 's'}: ${why}` })) : []),
+        r && r.report && r.report.inspectError ? h('p', { className: 'mm-note', textContent: `The mesh was not inspected: ${r.report.inspectError}` }) : null,
         Object.assign(h('a', { className: 'mm-btn primary', textContent: 'Open in the model viewer', href: `/viewer?model=${encodeURIComponent(draft.model.path.replace(/^models\//, ''))}` }), { target: '_blank', rel: 'noopener' })) : null];
   }
   function draw() {

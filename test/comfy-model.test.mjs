@@ -28,6 +28,12 @@ if (/score\.py$/.test(a[a.indexOf('--python') + 1] || '')) {   // the editor's o
   process.exit(0);
 }
 if (!a.includes('--background') || !a.includes('--python')) { console.error('not headless'); process.exit(4); }
+if (process.env.NF_BLENDER_LOG) fs.appendFileSync(process.env.NF_BLENDER_LOG, require('path').basename(a[a.indexOf('--python') + 1]) + '\\n');
+if (/blender_inspect\\.py$/.test(a[a.indexOf('--python') + 1])) {   // the inspection of the finished file: it is named after the file, and a draft called "unseen" cannot be inspected
+  if (/unseen/.test(rest[0]) || !fs.existsSync(rest[0]) || !fs.existsSync(rest[1]) || rest[2] !== '--no-render') { console.error('Error: Python: cannot inspect'); process.exit(3); }
+  console.log('INSPECT ' + JSON.stringify({ loose_pieces: /pieces/.test(rest[0]) ? 3 : 1, floating_pieces: /pieces/.test(rest[0]) ? 2 : null, open_edges: 0, non_manifold_edges: 0, flipped_faces: 0, zero_area_faces: 0, symmetry_error_p95_pct: 1.5 }));
+  process.exit(0);
+}
 if (/fails/.test(name)) { console.error('Error: Python: Traceback'); process.exit(3); }
 if (/blender_retopo\.py$/.test(a[a.indexOf('--python') + 1])) {
   if (/crumples/.test(name)) { console.error('AutoRemesher failed (exit 1)'); process.exit(1); }
@@ -42,8 +48,8 @@ console.log('FINISH ' + JSON.stringify({ name, length: Number(rest[rest.indexOf(
 /** A workflows folder as the repository lays it out. */
 function workflowsDir(top, name = 'workflows', pipeline = {}) {
   const dir = join(top, name); mkdirSync(join(dir, 'workflows', 'api'), { recursive: true }); mkdirSync(join(dir, 'tools'), { recursive: true });
-  writeFileSync(join(dir, 'workflows', 'api', 'mv.json'), JSON.stringify(fakeWorkflow())); writeFileSync(join(dir, 'tools', 'blender_finish.py'), '# finish\n'); writeFileSync(join(dir, 'tools', 'blender_retopo.py'), '# clean-up\n');
-  writeFileSync(join(dir, 'pipeline.json'), JSON.stringify({ pipeline: 'asset3d', version: 1, multiview: 'workflows/api/mv.json', finish: 'tools/blender_finish.py', cleanup: 'tools/blender_retopo.py', setup: 'https://example.org/setup', ...pipeline }));
+  writeFileSync(join(dir, 'workflows', 'api', 'mv.json'), JSON.stringify(fakeWorkflow())); writeFileSync(join(dir, 'tools', 'blender_finish.py'), '# finish\n'); writeFileSync(join(dir, 'tools', 'blender_retopo.py'), '# clean-up\n'); writeFileSync(join(dir, 'tools', 'blender_inspect.py'), '# inspect\n');
+  writeFileSync(join(dir, 'pipeline.json'), JSON.stringify({ pipeline: 'asset3d', version: 1, multiview: 'workflows/api/mv.json', finish: 'tools/blender_finish.py', cleanup: 'tools/blender_retopo.py', inspect: 'tools/blender_inspect.py', setup: 'https://example.org/setup', ...pipeline }));
   return dir;
 }
 
@@ -219,7 +225,7 @@ describe('the model service', () => {
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const out = r.body.result;
     assert.equal(out.model, 'models/kettle/kettle.glb'); assert.equal(out.refs, 'models/kettle/kettle.refs');
-    assert.deepEqual(out.report, { name: 'kettle', length: 0.4, pivot: 'centre', after: { triangles: 12 }, views: null });   // the views were never checked
+    assert.deepEqual(out.report, { name: 'kettle', length: 0.4, pivot: 'centre', after: { triangles: 12 }, views: null, mesh: { pieces: 1, floating: null, openEdges: 0, nonManifoldEdges: 0, flippedFaces: 0, zeroAreaFaces: 0, symmetryP95: 1.5 } });   // the views were never checked
     assert.deepEqual(readFileSync(inProject('models', 'kettle', 'kettle.glb')), FAKE_GLB);
     assert.deepEqual(readdirSync(inProject('models', 'kettle', 'kettle.refs')).sort(), ['back.png', 'concept.png', 'front.png', 'left.png', 'right.png']);
     assert.deepEqual(fake.calls.uploads.map((u) => `${u.subfolder}/${u.name}`), ['front', 'left', 'back', 'right'].map((v) => `nfgames/kettle/${v}.png`));
@@ -253,6 +259,34 @@ describe('the model service', () => {
     ready('it-crumples');
     const bad = await call('generate', { draft: 'it-crumples', length: 1, cleanup: true });
     assert.notEqual(bad.status, 200); assert.match(bad.body.error, /Clean up into quads[^:]*: exit 1/); assert.ok(!existsSync(inProject('models', 'it-crumples')));
+    assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')), []);
+  });
+  it('inspection: the saved model is inspected after it is saved, and what is wrong is reported', async () => {
+    ready('two-pieces');
+    const r = await call('generate', { draft: 'two-pieces', length: 1 });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body.result.report.mesh, { pieces: 3, floating: 2, openEdges: 0, nonManifoldEdges: 0, flippedFaces: 0, zeroAreaFaces: 0, symmetryP95: 1.5 });
+    assert.equal(r.body.result.report.inspectError, undefined);
+    assert.deepEqual(readFileSync(inProject('models', 'two-pieces', 'two-pieces.glb')), FAKE_GLB);
+    assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')), []);
+  });
+  it('inspection: an older checkout has none, and no third Blender step is run', async () => {
+    const older = workflowsDir(top, 'no-inspect', { inspect: undefined }); assert.equal(readPipeline(older).inspect, null);
+    assert.ok(readPipeline(flows).inspect.endsWith('blender_inspect.py'));
+    assert.throws(() => readPipeline(workflowsDir(top, 'bad-inspect', { inspect: 'tools/none.py' })), /missing tools\/none\.py/);
+    settings({ comfyUrl: fake.url, workflowsDir: older }); ready('plain');
+    const log = join(top, 'blender-ran.log'); process.env.NF_BLENDER_LOG = log;
+    let r; try { r = await call('generate', { draft: 'plain', length: 1 }); } finally { delete process.env.NF_BLENDER_LOG; }
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.result.report.mesh, null); assert.equal(r.body.result.report.inspectError, undefined);
+    assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), ['blender_finish.py']);
+  });
+  it('inspection: a model the inspection cannot look at is still saved, and says so', async () => {
+    ready('unseen');
+    const r = await call('generate', { draft: 'unseen', length: 1 });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.result.model, 'models/unseen/unseen.glb'); assert.deepEqual(readFileSync(inProject('models', 'unseen', 'unseen.glb')), FAKE_GLB);
+    assert.equal(r.body.result.report.mesh, null); assert.match(r.body.result.report.inspectError, /Inspect \(Blender\)|exit 3/);
     assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')), []);
   });
   it('generate: top and bottom go too when both are approved; one of them alone does not', async () => {
