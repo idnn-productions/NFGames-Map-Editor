@@ -33,14 +33,14 @@ Rules that hold across it:
 - Any change to `src/match/score.py` changes the scorer's hash, so cached scores and kept view checks are made
   again once. That is intended.
 
-## Handoff, 2026-11-26: test this branch on the PC
+## Handoff, 2026-11-26: test this on the PC
 
-Branch `feature/pipeline-guards` (cut from `feature/reference-match`) was built and reviewed on the Mac, which has
-Blender but no ComfyUI and none of the real drafts. Nothing is pushed. The plan is
+This work was built and reviewed on the Mac, which has Blender but no ComfyUI and none of the real drafts. It is
+merged into `main` and pushed (2026-11-27): pull `main` in both repositories. The plan is
 `docs/superpowers/plans/2026-11-26-model-pipeline-guards.md`.
 
-The other repository has one matching branch, `inspect-in-pipeline`, also not pushed. The editor's
-**3D model generation** setting "Workflows folder" must point at that checkout, on that branch, or the mesh
+The other repository's matching work is on its `main` too. The editor's
+**3D model generation** setting "Workflows folder" must point at that checkout, pulled to `main`, or the mesh
 inspection is skipped.
 
 ### What the branch added
@@ -95,7 +95,7 @@ inspection is skipped.
 
 ## Handoff, 2026-11-27: the viewer finds every asset
 
-Branch `feature/find-assets` sits on top of `feature/pipeline-guards` (not pushed). Test it after the steps above.
+This is on `main` as well (merged and pushed 2026-11-27). Test it after the steps above.
 
 - The model viewer lists every `.glb` in the project, not only the `models` folder. Build and cache folders are left
   out (`dist`, `build`, `out`, Unity's `Library` and `Temp`, dot-folders). Config: `assets: { skip, levels }`, or
