@@ -52,9 +52,12 @@ export function activate(api) {
   /** { view: bytes } of the approved views that have a file. */
   const checkedViews = (slug, draft) => Object.fromEntries(CHECKED.filter((v) => draft.views.list.includes(v) && f.exists(`.nfgames/drafts/${slug}/views/${v}.png`)).map((v) => [v, f.read(`.nfgames/drafts/${slug}/views/${v}.png`, null)]));
   const keptFile = (slug) => join(api.storage, `views-${slug}.json`);
-  /** The scorer's raw result kept for these views, or null when there is none or a view has changed since. */
+  const hashesOf = (bytes) => Object.fromEntries(Object.entries(bytes).map(([v, b]) => [v, sha(b)]));
+  /** The SHA-256 of the scorer script, or null when it cannot be read: a result is kept only against the scorer that made it. */
+  const scorerHash = () => { try { return sha(readFileSync(SCORER)); } catch { return null; } };
+  /** The scorer's raw result kept for these views, or null when there is none, a view or the scorer has changed since, or the record is unreadable. */
   function keptResult(slug, hashes) {
-    try { const k = JSON.parse(readFileSync(keptFile(slug), 'utf8')); return k && k.result && JSON.stringify(k.hashes) === JSON.stringify(hashes) ? k.result : null; } catch { return null; }
+    try { const k = JSON.parse(readFileSync(keptFile(slug), 'utf8')), scorer = scorerHash(); return k && k.result && scorer && k.scorer === scorer && JSON.stringify(k.hashes) === JSON.stringify(hashes) ? k.result : null; } catch { return null; }
   }
   /** The verdict on a kept result, with the outline limit from the setting (0.5 to 0.99; 0.9 when it is not a number). */
   function verdict(result) {
@@ -64,8 +67,9 @@ export function activate(api) {
 
   api.services.provide('model', 'checkViews', async (input = {}) => {
     const slug = input.draft, draft = draftOf(slug), bytes = checkedViews(slug, draft), names = Object.keys(bytes);
-    const hashes = Object.fromEntries(names.map((v) => [v, sha(bytes[v])])), old = keptResult(slug, hashes);
+    const hashes = hashesOf(bytes), old = keptResult(slug, hashes);
     if (old) return { ...verdict(old), seconds: 0 };
+    if (names.length < 2) return { ...refsVerdict({ ok: false }), seconds: 0 };   // nothing to compare: no job
     const setting = String(api.settings.get('blender') || '').trim(), blender = findBlender(setting);
     if (!blender) throw new Error(`Not ready: ${setting ? `Blender is not at ${setting}` : 'Blender was not found'}`);
     const work = join(api.storage, `views-${slug}`), argsFile = join(work, 'args.json'), resultFile = join(work, 'result.json'), refs = {};
@@ -81,7 +85,7 @@ export function activate(api) {
         const m = /== .* stopped at "([^"]+)": ([^\n]*)/.exec(job.log.slice(-4000));
         throw new Error(m ? `${m[1]}: ${m[2]} (see Jobs for Blender's output)` : 'The views were not checked: see Jobs for what happened');
       }
-      if (result.ok === true) writeFileSync(keptFile(slug), JSON.stringify({ hashes, result }));
+      if (result.ok === true) { const scorer = scorerHash(); if (scorer) writeFileSync(keptFile(slug), JSON.stringify({ hashes, scorer, result })); }
       return { ...verdict(result), seconds: result.ok === true && Number.isFinite(result.seconds) ? result.seconds : 0 };
     } finally { rmSync(work, { recursive: true, force: true }); }
   });
@@ -140,7 +144,7 @@ export function activate(api) {
         const lines = run.job.log.split(/\r?\n/).reverse(), line = lines.find((l) => l.startsWith('FINISH ')), tidy = cleanup ? lines.find((l) => l.startsWith('RETOPO ')) : null;
         if (!line || !existsSync(out)) throw new Error('Blender finished without writing the model');
         try { report = JSON.parse(line.slice(7)); } catch { report = {}; }
-        report.views = (() => { const now = keptResult(slug, Object.fromEntries(Object.entries(checkedViews(slug, draft)).map(([v, b]) => [v, sha(b)]))); return now ? { ...verdict(now), seconds: 0 } : null; })();   // what the views check last said, if the views are as they were then
+        report.views = null; try { const now = keptResult(slug, hashesOf(checkedViews(slug, draft))); if (now) report.views = { ...verdict(now), seconds: 0 }; } catch { /* a warning only: never fails the job */ }   // what the views check last said, if the views are as they were then
         if (tidy) { try { const t = JSON.parse(tidy.slice(7)); report.cleanup = { quads: t.after?.quads, faces: t.after?.faces, from: t.before?.faces, baked: t.baked }; } catch { /* the model is there; its numbers are not */ } }
         f.write(model, readFileSync(out));
         f.remove(refs);

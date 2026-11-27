@@ -19,6 +19,7 @@ if (/score\.py$/.test(a[a.indexOf('--python') + 1] || '')) {   // the editor's o
   const cfg = JSON.parse(fs.readFileSync(rest[0], 'utf8'));
   if (!a.includes('-b') || !a.includes('--factory-startup') || !cfg.refsOnly || cfg.planUp !== 'up' || Object.values(cfg.refs).some((f) => !fs.existsSync(f))) { console.error('wrong scorer arguments'); process.exit(6); }
   if (process.env.NF_SCORER_LOG) fs.appendFileSync(process.env.NF_SCORER_LOG, Object.keys(cfg.refs).join(',') + '\\n');
+  if (/mute/.test(cfg.refs.front)) process.exit(0);   // ends without writing its result
   const crooked = /crooked/.test(cfg.refs.front), views = {}, pairs = {};
   for (const v of Object.keys(cfg.refs)) views[v] = { background: 'clean', refSize: [100, 100], refExtent: [100, 100], planUp: null };
   if (cfg.refs.left && cfg.refs.right) pairs['left-right'] = { outline: crooked ? 0.6 : 0.98, colour: 0.5 };
@@ -343,6 +344,28 @@ describe('the model service', () => {
       const kept = await checkViews('crooked-vase');
       const r = await call('generate', { draft: 'crooked-vase', length: 1, replace: true });
       assert.equal(r.status, 200, JSON.stringify(r.body)); assert.deepEqual(r.body.result.report.views, { ...kept, seconds: 0 }); assert.equal(runs(), 1);
+    });
+    it('a kept answer made by another scorer, or one that is not JSON, is not kept: the views are checked again', async () => {
+      ready('crooked-cup'); const kept = join(top, 'state', 'storage', 'nfgames.comfy-model', 'views-crooked-cup.json');
+      await checkViews('crooked-cup'); assert.equal(runs(), 1);
+      const record = JSON.parse(readFileSync(kept, 'utf8')); assert.match(record.scorer, /^[0-9a-f]{64}$/);
+      writeFileSync(kept, JSON.stringify({ ...record, scorer: 'f'.repeat(64) })); await checkViews('crooked-cup'); assert.equal(runs(), 2);
+      const { scorer, ...old } = JSON.parse(readFileSync(kept, 'utf8')); writeFileSync(kept, JSON.stringify(old)); await checkViews('crooked-cup'); assert.equal(runs(), 3);   // a record without a scorer hash
+      writeFileSync(kept, '{ not json'); assert.equal((await checkViews('crooked-cup')).warnings.length, 1); assert.equal(runs(), 4);
+      writeFileSync(kept, '{ not json');
+      const r = await call('generate', { draft: 'crooked-cup', length: 1 });
+      assert.equal(r.status, 200, JSON.stringify(r.body)); assert.equal(r.body.result.report.views, null); assert.equal(runs(), 4);
+    });
+    it('a scorer that ends without a result fails with a readable error and keeps nothing', async () => {
+      ready('mute-pan'); const r = await call('checkViews', { draft: 'mute-pan' });
+      assert.notEqual(r.status, 200); assert.match(r.body.error, /The views were not checked: see Jobs/); assert.equal(runs(), 1);
+      assert.deepEqual(readdirSync(join(top, 'state', 'storage', 'nfgames.comfy-model')).filter((f) => /mute-pan/.test(f)), []);   // neither a kept answer nor the working folder
+    });
+    it('fewer than two views to compare is answered without starting a job', async () => {
+      ready('crooked-lid');
+      for (const v of ['back', 'left', 'right']) rmSync(inProject('.nfgames', 'drafts', 'crooked-lid', 'views', `${v}.png`));
+      const r = await checkViews('crooked-lid');
+      assert.equal(r.checked, false); assert.deepEqual(r.pairs, {}); assert.deepEqual(r.warnings, []); assert.deepEqual(r.notes, ['fewer than two views with a clean background: not checked']); assert.equal(r.seconds, 0); assert.equal(runs(), 0);
     });
     it('a draft that is not ready, or is not there, is refused; so is a missing Blender', async () => {
       ready('crooked-urn');
