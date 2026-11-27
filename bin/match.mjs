@@ -11,11 +11,14 @@
 //   match.mjs finish --project <dir> <job id> --summary <text> [--state done|failed] [--changed <file>]...
 //   match.mjs outline --project <dir> <model path> [--length <metres>] [--points <4 to 200, default 40>]
 //                                                                                    the references as measured outlines, to build parts from:
-//     prints { model, length, size: { x, y, z }, views: { view: { axes: [horizontal, vertical], size: [w, h], outlines: [[[x, y], ...]] } },
-//     warnings } and writes it to <model's folder>/<name>.outlines.json. Each outline is one closed piece of the view's silhouette,
-//     the largest first, its points from the bottom-left corner of the view's outline box, in metres: the size comes from the
+//     prints { model, length, size: { x, y, z }, views: { view: { axes: [horizontal, vertical], size: [w, h], outlines: [[[x, y], ...]],
+//     frame, parts } }, warnings } and writes it to <model's folder>/<name>.outlines.json. Each outline is one closed piece of the
+//     view's silhouette, the largest first, its points from the bottom-left corner of the view's outline box, in metres: the size comes from the
 //     proportions the views imply and --length, the longest side (left out: the model's longest side from its last score). Without
-//     either the points are fractions of each view's box and the sizes are null, and `note` says why.
+//     either the points are fractions of each view's box and the sizes are null, and `note` says why. `parts` are the same polygons
+//     in parts.json's terms (along from the back end, across from the middle toward the model's left, up from the lowest point),
+//     `frame` naming each point's two numbers ("across", "up" for front and back; "along", "up" for left and right; "across",
+//     "along" for top and bottom); both are null when the sizes are.
 import { renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
@@ -31,6 +34,7 @@ const one = (k) => (flags[k] ? flags[k][flags[k].length - 1] : undefined);
 const out = (o) => console.log(JSON.stringify(o, null, 2));
 const die = (text, code = 1) => { console.error(`match: ${text}`); process.exit(code); };
 if (!['score', 'start', 'round', 'status', 'finish', 'outline'].includes(command)) die('commands: score, start, round, status, finish, outline (see the top of bin/match.mjs)', 2);
+for (const k of ['length', 'points']) if (command === 'outline' && flags[k] && flags[k].some((v) => typeof v !== 'string')) die(`--${k} needs a value`, 2);
 const points = one('points') === undefined ? 40 : Number(one('points')), length = one('length') === undefined ? undefined : Number(one('length'));
 if (command === 'outline' && !(Number.isInteger(points) && points >= 4 && points <= 200)) die('--points: a whole number of 4 to 200', 2);
 if (command === 'outline' && length !== undefined && !(Number.isFinite(length) && length > 0)) die('--length: the longest side in metres, a number above 0', 2);

@@ -161,29 +161,55 @@ export function refsVerdict(result, tolerance = DEFAULTS.tolerance, limits = REF
 }
 
 // ---- the references as outlines, for building a model from measurements: the scorer's refsOnly `outlines` (fractions of each
-// view's outline box, y up) in metres, from the proportions the views imply and the length of the object's longest side.
-/** What a view's horizontal and vertical are, as score.py draws the views. */
+// view's outline box, y up) in metres, from the proportions the views imply and the length of the object's longest side, and the
+// same points in parts.json's frame: along (from the back end toward the front), across (from the middle, positive toward the
+// model's left, glTF +X), up (from the lowest point).
+// Where each side of the model lands in a picture, from score.py's VIEWDEF, aim() and plan_up() (the camera's right is its
+// forward x its up): [the picture's horizontal, its vertical], each the frame's number it is and +1 when that number grows
+// toward the picture's right (or top), -1 when it shrinks. Front: the model's left (+X) on the right. Back: its right. Left: the
+// front on the left. Right: the front on the right. Top, from above: front up, the model's right on the right; front down, its
+// left on the right; front right, its left toward the top; front left, its right toward the top. Bottom, from below, is the
+// mirror of top: front up, its left on the right; down, its right; front right, its right toward the top; front left, its left.
+const PICTURE = {
+  front: [['across', 1], ['up', 1]], back: [['across', -1], ['up', 1]], left: [['along', -1], ['up', 1]], right: [['along', 1], ['up', 1]],
+  top: { up: [['across', -1], ['along', 1]], down: [['across', 1], ['along', -1]], right: [['along', 1], ['across', 1]], left: [['along', -1], ['across', -1]] },
+  bottom: { up: [['across', 1], ['along', 1]], down: [['across', -1], ['along', -1]], right: [['along', 1], ['across', -1]], left: [['along', -1], ['across', 1]] },
+};
+const FRAME = { front: ['across', 'up'], back: ['across', 'up'], left: ['along', 'up'], right: ['along', 'up'], top: ['across', 'along'], bottom: ['across', 'along'] };
+const pictureOf = (view, planUp) => (Array.isArray(PICTURE[view]) ? PICTURE[view] : PICTURE[view][['right', 'down', 'left'].includes(planUp) ? planUp : 'up']);
+/** What a view's horizontal and vertical are, as score.py draws the views (from PICTURE). */
 function axesText(view, planUp) {
-  if (view === 'front') return ['width, the model\'s left on the right', 'height'];
-  if (view === 'back') return ['width, the model\'s right on the right', 'height'];
-  if (view === 'left' || view === 'right') return [`depth, front toward the ${view}`, 'height'];
-  const where = ['right', 'down', 'left'].includes(planUp) ? planUp : 'up', front = `depth, front toward the ${{ up: 'top', down: 'bottom' }[where] || where}`;
-  return where === 'right' || where === 'left' ? [front, 'width'] : ['width', front];
+  return pictureOf(view, planUp).map(([k, sign], i) => {
+    if (k === 'up') return 'height';
+    if (k === 'across') return `width, the model's ${sign > 0 ? 'left' : 'right'} ${i === 0 ? 'on the right' : 'toward the top'}`;
+    return `depth, front toward the ${i === 0 ? (sign > 0 ? 'right' : 'left') : (sign > 0 ? 'top' : 'bottom')}`;
+  });
+}
+/** A point of a view's picture in metres ([x, y] from its bottom-left corner, the view's size [w, h]) in the view's FRAME. */
+function framed(view, planUp, [x, y], wh) {
+  const out = {};
+  pictureOf(view, planUp).forEach(([k, sign], i) => {
+    const f = i === 0 ? x : y, s = wh[i];
+    out[k] = k === 'across' ? (sign > 0 ? f * s - s / 2 : s / 2 - f * s) : k === 'along' && sign < 0 ? s - f * s : f * s;
+  });
+  return FRAME[view].map((k) => round(out[k], 3) + 0);   // + 0: no -0
 }
 /**
- * { length, size: { x, y, z } | null, views: { view: { axes: [horizontal, vertical], size: [w, h] | null, outlines } } } from a refsOnly
- * result with outlines, its refsVerdict() and the longest side in metres. With the verdict's proportions and a length, the size and
- * each view's points are in metres (3 decimals; the size from the proportions unrounded); without, the points stay fractions
- * (4 decimals) and the sizes are null.
+ * { length, size: { x, y, z } | null, views: { view: { axes: [horizontal, vertical], size: [w, h] | null, outlines, frame, parts } } }
+ * from a refsOnly result with outlines, its refsVerdict() and the longest side in metres. With the verdict's proportions and a
+ * length, the size and each view's points are in metres (3 decimals; the size from the proportions unrounded), and `parts` are the
+ * same polygons in parts.json's terms, `frame` naming their two numbers; without, the points stay fractions (4 decimals) and the
+ * sizes, `frame` and `parts` are null.
  */
 export function outlinesOf(result, verdict, length) {
   const views = (result && result.views) || {}, L = num(length) && length > 0 ? length : null;
   const pick = L && verdict && verdict.consistency && verdict.consistency.proportions ? solve(views).pick : null, p = pick ? proportionsOf(pick) : null;
   const size = p && { x: round(p.x * L, 3), y: round(p.y * L, 3), z: round(p.z * L, 3) };
   return { length: L, size, views: Object.fromEntries(Object.entries(views).map(([name, v]) => {
-    const wh = p ? axesOf(name, v).map((a) => p[a.toLowerCase()] * L) : null;
-    const outlines = (v.outlines || []).map((o) => o.map(([x, y]) => (wh ? [round(x * wh[0], 3), round(y * wh[1], 3)] : [round(x, 4), round(y, 4)])));
-    return [name, { axes: axesText(name, v.planUp), size: wh && wh.map((s) => round(s, 3)), outlines }];
+    const wh = p ? axesOf(name, v).map((a) => p[a.toLowerCase()] * L) : null, raw = v.outlines || [];
+    const outlines = raw.map((o) => o.map(([x, y]) => (wh ? [round(x * wh[0], 3), round(y * wh[1], 3)] : [round(x, 4), round(y, 4)])));
+    const parts = wh && raw.map((o) => o.map((pt) => framed(name, v.planUp, pt, wh)));
+    return [name, { axes: axesText(name, v.planUp), size: wh && wh.map((s) => round(s, 3)), outlines, frame: wh ? [...FRAME[name]] : null, parts }];
   })) };
 }
 

@@ -86,23 +86,24 @@ describe('the references as outlines', () => {
     assert.equal(o.views.left.outlines.length, 2); assert.deepEqual(o.views.front.outlines[0], [[0, 0], [20, 0], [20, 10], [0, 10]]);
     assert.deepEqual(o.views.top.size, [20, 30]); assert.deepEqual(o.views.top.outlines, [[[20, 30]]]);
     assert.deepEqual(o.views.front.axes, ['width, the model\'s left on the right', 'height']); assert.deepEqual(o.views.left.axes, ['depth, front toward the left', 'height']);
-    assert.deepEqual(o.views.top.axes, ['width', 'depth, front toward the top']);
+    assert.deepEqual(o.views.top.axes, ['width, the model\'s right on the right', 'depth, front toward the top']);
   });
   it('a top drawn with the front toward its side is depth by width', () => {
     const r = result('right'), o = outlinesOf(r, refsVerdict(r), 30);
-    assert.deepEqual(o.size, { x: 20, y: 10, z: 30 }); assert.deepEqual(o.views.top.size, [30, 20]); assert.deepEqual(o.views.top.axes, ['depth, front toward the right', 'width']);
+    assert.deepEqual(o.size, { x: 20, y: 10, z: 30 }); assert.deepEqual(o.views.top.size, [30, 20]); assert.deepEqual(o.views.top.axes, ['depth, front toward the right', 'width, the model\'s left toward the top']);
   });
   it('without a length, or without proportions, the points stay fractions of each view\'s outline box', () => {
     const r = result(), o = outlinesOf(r, refsVerdict(r));
     assert.equal(o.length, null); assert.equal(o.size, null); assert.equal(o.views.left.size, null);
     assert.deepEqual(o.views.left.outlines[0][2], [0.1235, 0.5]); assert.deepEqual(o.views.left.axes, ['depth, front toward the left', 'height']);
+    assert.equal(o.views.left.frame, null); assert.equal(o.views.left.parts, null);
     const two = { ...r, views: { front: r.views.front, left: r.views.left } }, t = outlinesOf(two, refsVerdict(two), 30);
     assert.equal(t.length, 30); assert.equal(t.size, null); assert.equal(t.views.front.size, null); assert.deepEqual(t.views.front.outlines[0][1], [1, 0]);
     const all = { ok: true, views: Object.fromEntries(VIEWS.map((v) => [v, { refExtent: [1, 1], planUp: ['top', 'bottom'].includes(v) ? 'down' : null, outlines: [] }])) };
     assert.deepEqual(Object.fromEntries(Object.entries(outlinesOf(all, refsVerdict(all)).views).map(([v, x]) => [v, x.axes])), {
       front: ['width, the model\'s left on the right', 'height'], back: ['width, the model\'s right on the right', 'height'],
       left: ['depth, front toward the left', 'height'], right: ['depth, front toward the right', 'height'],
-      top: ['width', 'depth, front toward the bottom'], bottom: ['width', 'depth, front toward the bottom'],
+      top: ['width, the model\'s left on the right', 'depth, front toward the bottom'], bottom: ['width, the model\'s right on the right', 'depth, front toward the bottom'],
     });
   });
 });
@@ -132,6 +133,33 @@ describe('references alone: the verdict', () => {
     const failed = refsVerdict({ ok: false, error: 'x' });
     assert.deepEqual([failed.checked, failed.pairs, failed.warnings, failed.notes, failed.consistency.checked], [false, {}, [], ['x'], false]);
     for (const r of [{ ok: false }, { ok: true }, null]) assert.deepEqual(refsVerdict(r).notes, ['fewer than two views with a clean background: not checked']);
+  });
+});
+
+describe('the references as parts.json measures them', () => {
+  // a 20 x 10 x 30 object (x, y, z); in every view the picture's bottom-left corner [0, 0] and top-right corner [1, 1]
+  const ext = { front: [200, 100], back: [200, 100], left: [300, 100], right: [300, 100], top: [200, 300], bottom: [200, 300] };
+  const result = (planUp = 'up') => ({ ok: true, views: Object.fromEntries(VIEWS.map((v) => {
+    const plan = v === 'top' || v === 'bottom', side = plan && (planUp === 'right' || planUp === 'left');
+    return [v, { refExtent: side ? [...ext[v]].reverse() : ext[v], planUp: plan ? planUp : null, outlines: [[[0, 0], [1, 1], [1, 0.5]]] }];
+  })) });
+  const parts = (planUp) => { const r = result(planUp), o = outlinesOf(r, refsVerdict(r), 30); return Object.fromEntries(Object.entries(o.views).map(([v, x]) => [v, { frame: x.frame, parts: x.parts[0] }])); };
+  it('each view names its two numbers, and its points are along from the back, across from the middle toward the model\'s left, up from the bottom', () => {
+    assert.deepEqual(parts('up'), {
+      front: { frame: ['across', 'up'], parts: [[-10, 0], [10, 10], [10, 5]] },          // the model's right is on the left of a front view
+      back: { frame: ['across', 'up'], parts: [[10, 0], [-10, 10], [-10, 5]] },
+      left: { frame: ['along', 'up'], parts: [[30, 0], [0, 10], [0, 5]] },              // the front toward the left
+      right: { frame: ['along', 'up'], parts: [[0, 0], [30, 10], [30, 5]] },
+      top: { frame: ['across', 'along'], parts: [[10, 0], [-10, 30], [-10, 15]] },      // from above, the front up: the model's right on the right
+      bottom: { frame: ['across', 'along'], parts: [[-10, 0], [10, 30], [10, 15]] },    // from below: the model's left on the right
+    });
+  });
+  it('a top and a bottom drawn with the front toward another side still give across and along', () => {
+    const at = (planUp) => { const p = parts(planUp); return [p.top.parts, p.bottom.parts]; };
+    assert.deepEqual(at('down'), [[[-10, 30], [10, 0], [10, 15]], [[10, 30], [-10, 0], [-10, 15]]]);
+    assert.deepEqual(at('right'), [[[-10, 0], [10, 30], [0, 30]], [[10, 0], [-10, 30], [0, 30]]]);
+    assert.deepEqual(at('left'), [[[10, 30], [-10, 0], [0, 0]], [[-10, 30], [10, 0], [0, 0]]]);
+    assert.deepEqual(parts('right').top.frame, ['across', 'along']);
   });
 });
 
@@ -304,11 +332,15 @@ describe('the scorer\'s wrapper', () => {
     writeFileSync(join(copy.root, 'models', 'bare.glb'), makeGlb());
     assert.throws(() => matcher.outlines('bare.glb', { points: 40 }), /no front, back, left, right, top or bottom reference/);
   });
-  it('match.mjs outline: --points is a whole number of 4 to 200', async () => {
+  it('match.mjs outline: --points is a whole number of 4 to 200, and --length and --points need a value', async () => {
     await setup();
     for (const p of ['3', '201', '4.5', 'x']) {
       const r = spawnSync(process.execPath, [join(REPO, 'bin', 'match.mjs'), 'outline', '--project', copy.root, 'ships/cruiser.glb', '--points', p], { encoding: 'utf8', shell: false });
       assert.equal(r.status, 2, p); assert.match(r.stderr, /--points: a whole number of 4 to 200/);
+    }
+    for (const flags of [['--length'], ['--points'], ['--length', '--points', '12']]) {                     // a flag with no value is not taken as 1
+      const r = spawnSync(process.execPath, [join(REPO, 'bin', 'match.mjs'), 'outline', '--project', copy.root, 'ships/cruiser.glb', ...flags], { encoding: 'utf8', shell: false });
+      assert.equal(r.status, 2, flags.join(' ')); assert.match(r.stderr, new RegExp(`${flags[0]} needs a value`));
     }
   });
   it('serves only the scorer\'s own pictures, by a key it made', async () => {

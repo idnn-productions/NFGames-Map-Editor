@@ -97,12 +97,14 @@ cloth): use Blender or Angelo there. The model is rebuilt from boxes, cylinders 
 model are gone. Colours come from `parts.json` as flat materials, unless the job says otherwise. Do the steps in this order.
 
 1. Run `node <editor>/bin/match.mjs outline --project <game> <model path>` (add `--length <metres>` when the length is known). It
-   prints and writes `<name>.outlines.json` beside the model: each view's outlines in metres. Read it and open the references.
+   prints and writes `<name>.outlines.json` beside the model. Each view's `parts` are its outlines already in `parts.json`'s
+   terms, and its `frame` names the two numbers of each point. Read the sizes from `parts`; never convert `outlines` by hand.
+   Open the references too.
 2. Before any geometry, write `<name>.parts.json` beside the model:
    `{ "units": "m", "length": n, "parts": [{ "name", "along": [from, to], "up": [from, to], "across": [from, to], "shape": "box" | "cylinder" | "outline:<view>", "colour", "attachesTo" }] }`.
-   `along` is measured from the back end, `up` from the lowest point, `across` from the middle. Every number comes from the
-   outlines, never from looking. With no loop target, set `needs-input` and show the list of parts before you build. With a loop
-   target, go on.
+   `along` is metres from the back end toward the front, `across` metres from the middle (positive toward the model's left), and
+   `up` metres from the lowest point. Every number comes from the outlines, never from looking. With no loop target, set
+   `needs-input` and show the list of parts before you build. With a loop target, go on.
 3. Write `<name>.build.py`: one function per part in `parts.json`. A part with `outline:<view>` extrudes that outline. Nothing is
    placed by a number that is not in `parts.json`. Run it with `blender -b --python <name>.build.py` and export the GLB over the
    model file (to a temporary name first, then rename).

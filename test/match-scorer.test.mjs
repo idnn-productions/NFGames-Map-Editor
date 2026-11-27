@@ -8,7 +8,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
-import { SCORER, VIEWS, createMatcher } from '../src/match.mjs';
+import { SCORER, VIEWS, createMatcher, outlinesOf, refsVerdict } from '../src/match.mjs';
 import { findBlender } from '../src/blender.mjs';
 import { boxesGlb, linear, manyBoxesGlb, sphereGlb, turnedBoxes, writeRefs } from './match-fixtures.mjs';
 import { REPO } from './helpers.mjs';
@@ -185,6 +185,29 @@ describe('the scorer in Blender', { skip: findBlender('') ? false : 'Blender is 
     assert.equal(r.views.front.outlines.length, 2); assert.ok(shoelace(big) > shoelace(small));
     assert.ok(big.every(([x]) => x <= 0.51) && small.every(([x]) => x >= 0.74 && x <= 0.89), `${JSON.stringify(r.views.front.outlines)}`);
     assert.deepEqual(r.views.left.outlines, []); assert.equal(r.views.left.background, 'unclean');
+  });
+  it('references alone, as parts: no view is mirrored (a tower at the back on the model\'s left, a nose at the front, a box out on its left)', async () => {
+    // x -1 to 1.2 (the middle at 0.1, so across is x - 0.1), up 0 to 2, depth -1.5 to 2.5 (along is z + 1.5): the depth, 4, is the longest
+    const boxes = [...SHAPE, { min: [1, 0.2, 0], max: [1.2, 0.5, 0.6] }], tol = 0.08;
+    const r = await refsOnly(writeRefs(join(dir, 'refs11'), { boxes }, VIEWS, { colour: RED }), { outlines: 40 }), o = outlinesOf(r, refsVerdict(r), 4);
+    for (const v of VIEWS) {
+      const { frame, parts } = o.views[v], pts = parts[0], at = (k) => (p) => p[frame.indexOf(k)], across = at('across'), along = at('along'), up = at('up');
+      const has = (k) => frame.includes(k), say = `${v} ${JSON.stringify(frame)} ${JSON.stringify(pts)}`;
+      assert.equal(parts.length, 1, say);
+      if (has('up')) {                                                                   // front, back, left, right: the tower's top
+        const top = pts.filter((p) => up(p) > 2 - tol); assert.equal(top.length, 2, say);
+        for (const p of top) assert.ok(has('across') ? across(p) > 0 : along(p) <= 1 + tol, say);
+      }
+      if (has('along')) {                                                                // left, right, top, bottom: the nose (0.2 to 0.6 up; x -0.4 to 0.4)
+        const nose = pts.filter((p) => (has('up') ? up(p) > 0.1 && up(p) < 0.7 : across(p) > -0.8 && across(p) < 0.6)); assert.ok(nose.length >= 2, say);
+        for (const p of nose) assert.ok(along(p) >= 3 - tol, say);
+      }
+      if (has('across')) {                                                               // front, back, top, bottom: the box on the left (0.2 to 0.5 up; z 0 to 0.6)
+        const side = pts.filter((p) => (has('up') ? up(p) > 0.1 && up(p) < 0.6 : along(p) > 1.4 && along(p) < 2.2)); assert.equal(side.length, 4, say);
+        for (const p of side) assert.ok(across(p) > 0.9 - tol, say);
+        assert.ok(side.some((p) => across(p) > 1.1 - tol), say);
+      }
+    }
   });
   it('match.mjs outline: the references in metres, written beside the model; the length from the model\'s score when not given', async () => {
     const root = join(dir, `p${++n}`); mkdirSync(join(root, 'models'), { recursive: true });
