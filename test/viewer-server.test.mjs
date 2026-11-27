@@ -48,7 +48,7 @@ describe('the model viewer over HTTP', () => {
   });
   it('says three.js is not installed, and serves none of it', async () => {
     const v = await (await ask('/api/viewer')).json();
-    assert.equal(v.three.installed, false); assert.equal(v.models, '.'); assert.equal(typeof v.root, 'string'); assert.equal(v.workflows[0].id, 'auto');   // the viewer browses the whole project
+    assert.equal(v.three.installed, false); assert.equal(v.models, '.'); assert.equal(typeof v.root, 'string'); assert.equal(v.modelsFolder, 'models'); assert.equal(v.workflows[0].id, 'auto');   // the viewer browses the whole project
     assert.equal((await ask(`${v.three.base}build/three.module.js`)).status, 404);
   });
   it('installs only from this page, and nothing when the download does not match', async () => {

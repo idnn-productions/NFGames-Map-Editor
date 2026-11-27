@@ -76,8 +76,8 @@ If 8793 is already in use (another editor, say), pick another port:
 npm start -- --port 8794
 ```
 
-The model viewer is **Model viewer** in the bar (or **http://127.0.0.1:8793/viewer**). The sample has no models: set `models` in a
-project's config (see [Model review](#model-review)) to point it at a folder of `.glb` files.
+The model viewer is **Model viewer** in the bar (or **http://127.0.0.1:8793/viewer**). It lists every `.glb` in the project, wherever it is kept
+(see [What the viewer lists](#what-the-viewer-lists)). The sample has no models.
 
 Everything the example writes goes into `examples/sample/maps/plaza/` and `examples/sample/out/`.
 `git checkout examples/sample` puts it back.
@@ -149,7 +149,8 @@ sets the first.
 shows folder names and two markers, never file contents: **project** (the folder has a `map-editor.config.mjs`, a
 `maps/` or a `data/maps/`) and **N models** (`.glb` files directly in it). Recent projects are listed at the top
 (`~/.nfgames-editor/recent.json`). Any folder opens; one with no config uses the defaults: maps from `maps/` (or
-`data/maps/`), models from `models/` if it has one, else from the folder itself.
+`data/maps/`), and for the map's palette the models of `models/` if it has one, else of the folder itself. The model viewer lists
+every `.glb` in the folder either way.
 
 **Trusting a config.** A `map-editor.config.mjs` is code the editor runs. The first time you open a folder with one, the
 dialog names the file and asks before running it (**Run its config and open**). The answer is kept in
@@ -217,7 +218,9 @@ onto these options.
 | `actions` | | the Apply buttons (see [Apply actions](#apply-actions)) |
 | `help` | | `[[what, how], ...]`: the "Which edit needs what" table under Apply |
 | `hints` | | short texts the page shows: `afterSave: { plan, plants, both }` after a save that changed those files, `ring`, `person`, `thing`, `plant`, `round` in the matching Selected panels |
-| `models` | `models/`, else the project's folder | the folder whose `.glb` files the [model viewer](#model-review) lists and the palette offers (subfolders included, `node_modules` and hidden folders skipped). Must be inside the project. `false` for none |
+| `models` | `models/`, else the project's folder | the folder whose `.glb` files the palette offers as kinds of piece, and where New model writes (subfolders included). Must be inside the project. `false` for none. The [model viewer](#what-the-viewer-lists) lists the whole project, not only this folder |
+| `assets` | the whole project | what the [model viewer](#what-the-viewer-lists) lists. `{ skip: ['art/raw'], levels: ['web/public/khairos.glb'] }`: folders to leave out, and `.glb` files that are levels. `false`: only the `models` folder, as before |
+| `materials` | found in the project | material sets a game keeps outside its `.glb` files (see [A project's own materials](#a-projects-own-materials)). A folder, `{ dirs: [...], plain: 'plain.json' }`, or `false` for none |
 | `modelKinds` | `true` | `false`: the models folder's files are not offered as kinds of piece |
 | `reviews` | `.review` | the folder review jobs are written to. Must be inside the project |
 | `blender` | found on the PATH, or where Blender is usually installed | the Blender program, for [matching a model to its references](#matching-a-model-to-its-references). Optional: without it the Match panel says so |
@@ -542,10 +545,39 @@ need fixing, write a note on each (drop or paste up to four reference images ont
 and press **Send to Claude**. The job lands in an inbox folder; a Claude Code session watching it fixes the model
 and reports back, and the job list on the page shows its state.
 
+### What the viewer lists
+
+Every `.glb` in the project, to any depth, grouped by folder. Left out: folders whose name starts with a dot,
+`node_modules`, `dist`, `build`, `out`, Unity's `Library` and `Temp`, and links, so a build's or a cache's copy of a
+model is not listed a second time. `assets.skip` in the config leaves more folders out.
+
+**Levels** come first, in a group of their own. A level is a `.glb` with a `.json` of the same name beside it
+(`town.glb` and `town.json`: what a game reads with it), or one `assets.levels` names. It opens in the viewer like
+any model. A level that is not a `.glb` is not listed.
+
+A model's path, in the list, in a link and in a review job, is counted from the project's folder
+(`art/town/models/barrel.glb`). A path counted from the `models` folder, as it was before the viewer listed the
+whole project, still opens.
+
+### A project's own materials
+
+Some games keep their materials outside the model: a mesh's material is only a name, and the engine binds scanned
+texture sets to it. The viewer does the same, so such a model is not shown grey or in its raw mask colour.
+
+- A folder named `materials` holding one folder per set (`albedo`, `normal` and `orm` or `ormh` textures, as `.ktx2`,
+  `.png`, `.jpg` or `.webp`) is found by itself, as is a `plain.json` of flat colours. `materials` in the config names
+  them instead, or turns this off.
+- A material named `<set>` gets that set. `<set a>|<set b>` blends the two by the mesh's red vertex colour;
+  `|<amount>` and `|#<tint>` may follow.
+- A set's entry in the folder's `materials.json` may give `tile`: the metres one repeat of the texture covers.
+- **Shading** in the viewer's bar: **Textured** (the model's own maps and the project's materials), **Clay** (one
+  neutral grey, to judge the shape) and **Vertex mask** (the raw vertex colours).
+- **Colliders** shows or hides meshes named `…-colonly`, when the model has any.
+
 ```js
 // map-editor.config.mjs
 export default {
-  models: 'art/models',          // every .glb under here, subfolders included
+  models: 'art/models',          // what the palette offers and where New model writes (the viewer lists the whole project)
   reviews: '.review',            // where jobs go (the default)
   reviewWorkflows: ['auto', { id: 'ship-build', label: 'Ship build scripts', instructionsFile: 'art/ships/BUILD.md' }],
 };

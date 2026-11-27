@@ -48,6 +48,13 @@ reference images: `docs/superpowers/specs/2026-11-23-model-references-design.md`
 
 ## Viewer
 
+- [x] Every `.glb` in the project is listed, not only the `models` folder; levels (a `.glb` with its `.json`) first.
+- [x] A project's own materials on its models, clay and vertex-mask shading, colliders shown or hidden.
+- [ ] A level opened as the game shows it: its sky (`.hdr`), its spawn point and its walk grid.
+- [ ] Levels that are not a `.glb` (Thoon Run's cave in `public/assets/level2/` is in the game's own format).
+- [ ] The viewer's repeat sizes for Perseus's material sets are a table in the page (`MAT_TILE`); they belong in the
+      project's `materials.json` as `tile`, which the viewer already reads first.
+- [ ] A scripted browser check of the viewer's list (Levels, the filter, an old link); it was tried by hand on Thoon Run.
 - [x] A model's reference images beside it in the viewer (`<name>.refs/`), and named in its review jobs.
 - [ ] References: add or remove them from the viewer (they are copied in by hand today), and link a model back to the
       draft it came from.

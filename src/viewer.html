@@ -533,11 +533,19 @@ async function listModels() {
 }
 // Folders open and close; which are closed is kept per project. A filter shows every match with its folders open.
 let folders = nfTree.store('viewer');
+// Where a model sits in the list. A level (a town, a cave: a .glb the game reads with a .json of its name) is listed
+// once, under Levels at the top, by its name; a model directly in the project's folder goes under that folder's name.
+const LEVELS = 'Levels';
+function shownPaths() {
+  const name = (m) => m.path.split('/').pop().replace(/\.glb$/i, ''), where = (m) => m.path.split('/').slice(0, -1).join(' › ') || info.root;
+  const levels = models.filter((m) => m.level), twice = new Set(levels.map(name).filter((n, i, all) => all.indexOf(n) !== i));
+  return new Map(models.map((m) => [m.path, m.level ? `${LEVELS}/${name(m)}${twice.has(name(m)) ? ` (${where(m)})` : ''}` : m.path.includes('/') ? m.path : `${info.root || info.models}/${m.path}`]));
+}
 function drawModelList() {
-  const box = $('models'), root = `${info.models}/`;
-  // models directly in the models folder go under a folder named after it, as the others go under theirs
-  const nodes = nfTree.build(models.map((m) => ({ ...m, path: m.path.includes('/') ? m.path : `${root}${m.path}`, model: m })), { filter: $('filter').value, closed: folders.closed });
-  if (!nodes.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : `no .glb files in ${root}`; return; }
+  const box = $('models'), shown = shownPaths();
+  const items = models.map((m) => ({ ...m, path: shown.get(m.path), search: m.path, model: m })).sort((a, b) => !!b.model.level - !!a.model.level);   // levels first, the rest as listed
+  const nodes = nfTree.build(items, { filter: $('filter').value, closed: folders.closed });
+  if (!nodes.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : info.models === '.' ? 'no .glb files in this project' : `no .glb files in ${info.models}/`; return; }
   box.className = '';
   nfTree.render(box, nodes, { onToggle: (path, open) => folders.toggle(path, open),
     row: ({ model: m }, n) => el('button', { className: `model${m.path === modelPath ? ' current' : ''}`, textContent: n.label, title: `${m.path} · ${(m.size / MB).toFixed(1)} MB`, onclick: () => openModel(m) }) });
@@ -568,7 +576,7 @@ async function openModel(m, { keepCamera = false } = {}) {
   const initialMode = preferredShading || (maskOnlyMeshes > 0 ? 'clay' : 'textured');
   setShading(initialMode);
   placeGrid(visibleBounds(model));
-  modelPath = m.path; folders.reveal(m.path.includes('/') ? m.path : `${info.models}/${m.path}`); drawModelList();
+  modelPath = m.path; folders.reveal(shownPaths().get(m.path)); drawModelList();
   history.replaceState(null, '', `/viewer?model=${encodeURIComponent(m.path)}`);
   if (!keepCamera) frame();
   $('overlayBody').replaceChildren();
@@ -895,8 +903,11 @@ document.title = `${info.title ? `${info.title}: ` : ''}model review`;
 for (const w of info.workflows) $('workflow').append(el('option', { value: w.id, textContent: w.enabled ? w.label : `${w.label} (not set up yet)`, disabled: !w.enabled, title: w.description }));
 if (info.three.installed) await startThree(); else showInstall();
 await listModels();
-const want = new URLSearchParams(location.search).get('model'), first = want && models.find((x) => x.path === want);
-if (want && !first) say(`${want} is not in this project's models (${info.models || 'none'}/): pick one on the left.`, 'bad');
+// a link from before names a model from the models folder (where New model writes, and what the palette offers): that
+// one opens; failing that, the one model whose path ends with it
+const want = new URLSearchParams(location.search).get('model'), ends = want ? models.filter((x) => x.path.endsWith(`/${want}`)) : [];
+const first = want && (models.find((x) => x.path === want) || models.find((x) => x.path === `${info.modelsFolder}/${want}`) || (ends.length === 1 ? ends[0] : null));
+if (want && !first) say(`no such model: ${want}${ends.length > 1 ? ` (${ends.length} models end with it)` : ''}. Pick one on the left.`, 'bad');
 if (first && T) await openModel(first);
 pollJobs();
 </script>
