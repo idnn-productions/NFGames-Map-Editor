@@ -18,6 +18,7 @@ import { view3d } from './view3d.mjs';
 import { checkFit, checkPlants } from './check.mjs';
 import { createJobs } from './jobs.mjs';
 import { listModels, listRefs, resolveModel, resolveRef } from './models.mjs';
+import { readMaterialLibrary, resolveMaterialFile } from './materials.mjs';
 import { createReview, listReviews, publicWorkflows, LIMITS } from './reviews.mjs';
 import { LOOP, createMatcher } from './match.mjs';
 import { installThree, vendorBase, vendorFile, vendorState } from './vendor.mjs';
@@ -182,6 +183,14 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
         if (!file) return send(404, { error: 'no such model' });
         res.writeHead(200, { 'Content-Type': 'model/gltf-binary', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
         return createReadStream(file).pipe(res);
+      }
+      // external PBR material sets (for engines that bind scanned textures by material name)
+      if (req.method === 'GET' && path === '/api/materials') return send(200, readMaterialLibrary(project.materials));
+      if (req.method === 'GET' && path === '/api/material/file') {
+        const hit = resolveMaterialFile(project.materials, url.searchParams.get('set'), url.searchParams.get('file'));
+        if (!hit) return send(404, { error: 'no such material texture' });
+        res.writeHead(200, { 'Content-Type': hit.type, 'Content-Length': hit.size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
+        return createReadStream(hit.file).pipe(res);
       }
       // a model's reference images: only image files of the .refs folder beside it, named plainly (models.mjs)
       if (req.method === 'GET' && path === '/api/model/refs') return send(200, { refs: listRefs(project.modelsDir, url.searchParams.get('path')) });

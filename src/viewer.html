@@ -86,7 +86,13 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
     <button id="pinMode" title="Pin mode (P): click the model to drop a pin; drag a pin to move it">📍 Pin</button>
     <button id="resetView" title="Frame the whole model">Reset view</button>
     <select id="lighting" title="Lighting"><option value="studio">Studio</option><option value="space">Dark space</option></select>
+    <select id="shading" title="Shading: Textured (maps and project materials), Clay (neutral grey), or Vertex mask (raw COLOR_0)">
+      <option value="textured">Textured</option>
+      <option value="clay">Clay</option>
+      <option value="mask">Vertex mask</option>
+    </select>
     <button id="wire" title="Wireframe">Wire</button>
+    <button id="colliders" title="Show collision meshes (*-colonly)" hidden>Colliders</button>
     <button id="gridBtn" title="The floor grid (the same switch as the map's grid)">Grid</button>
   </div>
   <div id="modelRefs" hidden><h2 id="refsHead" title="The images this model was made from. Click to fold">References</h2><div class="strip" id="refStrip"></div></div>
@@ -154,8 +160,10 @@ const round = (v) => Math.round(v * 1e4) / 1e4;
 const MB = 1024 * 1024;
 
 // state
-let info, T, scene, camera, renderer, controls, loader, envTexture, key, ray, ndc;
-let model = null, modelPath = null, models = [], pinMode = false, wire = false, saveTimer = null, pollTimer = null;
+let info, T, scene, camera, renderer, controls, loader, ktx2Loader, texLoader, envTexture, key, ray, ndc;
+let model = null, modelPath = null, models = [], pinMode = false, wire = false, shading = 'textured', preferredShading = null, showColliders = false, saveTimer = null, pollTimer = null, loadToken = 0;
+let matLib = { sets: {}, plain: {} }, clayMat = null, clayMatDouble = null;
+const texCache = new Map();                            // "set/file:srgb" → Promise<THREE.Texture | null>
 let draft = { note: '', workflow: 'auto', pins: [] }; // a pin: { position, normal, mesh, material, uv, camera, screenshot, note, refs: [data URL] }
 const markers = [];                                    // a sprite per draft pin (in order), then the sent ones
 const sent = new Map();                                // job id → { model, positions }: greyed pins until the job finishes
@@ -201,9 +209,13 @@ async function startThree() {
   key = new T.DirectionalLight(0xffffff, 1.5); key.position.set(5, 8, 5); scene.add(key);
   setLighting('studio');
   placeGrid(); nfGrid.onChange(showGrid); showGrid(nfGrid.get());
+  ktx2Loader = new KTX2Loader().setTranscoderPath(`${base}examples/jsm/libs/basis/`).detectSupport(renderer);
+  texLoader = new T.TextureLoader();
+  clayMat = new T.MeshStandardMaterial({ color: 0xb8b2a8, roughness: 0.85, metalness: 0.0, vertexColors: false });
+  clayMatDouble = new T.MeshStandardMaterial({ color: 0xb8b2a8, roughness: 0.85, metalness: 0.0, vertexColors: false, side: T.DoubleSide });
   loader = new GLTFLoader()
     .setDRACOLoader(new DRACOLoader().setDecoderPath(`${base}examples/jsm/libs/draco/gltf/`))
-    .setKTX2Loader(new KTX2Loader().setTranscoderPath(`${base}examples/jsm/libs/basis/`).detectSupport(renderer))
+    .setKTX2Loader(ktx2Loader)
     .setMeshoptDecoder(MeshoptDecoder);
   ray = new T.Raycaster(); ndc = new T.Vector2();
   new ResizeObserver(resize).observe($('main')); resize();
@@ -231,14 +243,263 @@ function placeGrid(box = null) {
   grid.visible = nfGrid.get(); scene.add(grid);
 }
 function showGrid(on) { if (grid) grid.visible = on; $('gridBtn').classList.toggle('on', on); }
-function setWire(on) { wire = on; $('wire').classList.toggle('on', on); model?.traverse((o) => { for (const m of [].concat(o.material || [])) m.wireframe = on; }); }
+function isCollider(obj) { for (let p = obj; p; p = p.parent) if (p.name && p.name.split('.')[0].endsWith('-colonly')) return true; return false; }
+function visibleBounds(root) {
+  const box = new T.Box3();
+  root.updateMatrixWorld(true);
+  root.traverse((o) => { if (o.isMesh && o.visible) box.expandByObject(o); });
+  return box.isEmpty() ? new T.Box3().setFromObject(root) : box;
+}
+function setColliders(on) {
+  showColliders = on; $('colliders').classList.toggle('on', on);
+  model?.traverse((o) => { if (o.isMesh && o.userData.collider) o.visible = on; });
+}
+function applyShading() {
+  if (clayMat) clayMat.wireframe = wire;
+  if (clayMatDouble) clayMatDouble.wireframe = wire;
+  model?.traverse((o) => {
+    if (!o.isMesh || !o.userData.origMaterial) return;
+    const orig = o.userData.origMaterial, resolved = o.userData.resolvedMaterial;
+    let next;
+    if (shading === 'clay') {
+      next = Array.isArray(orig) ? orig.map((m) => (m?.side === T.DoubleSide ? clayMatDouble : clayMat)) : (orig?.side === T.DoubleSide ? clayMatDouble : clayMat);
+    } else if (shading === 'mask') {
+      next = orig;
+    } else {
+      next = resolved || orig;
+    }
+    o.material = next;
+    for (const m of [].concat(next || [])) if (m) m.wireframe = wire;
+  });
+}
+function setShading(mode, { byUser = false } = {}) {
+  shading = mode;
+  if (byUser) preferredShading = mode;
+  $('shading').value = mode;
+  applyShading();
+}
+function setWire(on) { wire = on; $('wire').classList.toggle('on', on); applyShading(); }
 function setPinMode(on) { pinMode = on; $('pinMode').classList.toggle('on', on); $('main').classList.toggle('pinning', on); }
-function dispose(root) { root.traverse((o) => { o.geometry?.dispose(); for (const m of [].concat(o.material || [])) { for (const v of Object.values(m)) if (v?.isTexture) v.dispose(); m.dispose(); } }); }
+function dispose(root) {
+  const seenOrig = new Set(), seenResolved = new Set();
+  root.traverse((o) => {
+    o.geometry?.dispose();
+    for (const m of [].concat(o.userData?.origMaterial || o.material || [])) {
+      if (!m || m === clayMat || m === clayMatDouble || seenOrig.has(m)) continue;
+      seenOrig.add(m);
+      for (const v of Object.values(m)) if (v?.isTexture && !v.userData?.shared) v.dispose();
+      m.dispose();
+    }
+    for (const m of [].concat(o.userData?.resolvedMaterial || [])) {
+      if (!m || seenOrig.has(m) || seenResolved.has(m)) continue;
+      seenResolved.add(m);
+      m.dispose();
+    }
+  });
+}
 function frame() {
-  const box = new T.Box3().setFromObject(model), size = box.getSize(new T.Vector3()), centre = box.getCenter(new T.Vector3()), r = Math.max(size.x, size.y, size.z) || 1;
+  const box = visibleBounds(model), size = box.getSize(new T.Vector3()), centre = box.getCenter(new T.Vector3()), r = Math.max(size.x, size.y, size.z) || 1;
   controls.target.copy(centre);
   camera.position.copy(centre).add(new T.Vector3(1, 0.6, 1).normalize().multiplyScalar(r * 1.6));
   camera.near = r / 1000; camera.far = r * 1000; camera.updateProjectionMatrix(); controls.update();
+}
+
+// ---- external PBR material resolver (for projects like Perseus that bind scanned sets by material name + COLOR_0 mask)
+const MAT_TILE = { 'wall-brick': 1.6, 'zellige-tile': 1.2, 'wall-stone': 2.4, 'step-stone': 2.4, 'broken-plaster': 2.6, 'sandstone-rock': 5, 'hangar-panel': 3, 'hangar-sheet': 2.4, 'ship-hull': 3, 'canvas-plain': 1.2, 'cliff-bedded': 4.6, 'cliff-blocky': 5.6, 'cliff-pale': 8, 'rock-weathered': 2.4, 'clay-brick': 2, 'inlaid-stone': 2.2, 'awning-canvas': 0.55, 'concrete-floor': 3 };
+const tileScaleOf = (set) => 2.0 / (MAT_TILE[set] || 2.0);
+function loadMaterialTexture(set, file, srgb) {
+  const key = `${set}/${file}:${srgb ? 1 : 0}`;
+  if (!texCache.has(key)) {
+    const url = `/api/material/file?set=${encodeURIComponent(set)}&file=${encodeURIComponent(file)}`;
+    const p = (/\.ktx2$/i.test(file) ? ktx2Loader.loadAsync(url) : texLoader.loadAsync(url)).then((t) => {
+      const s = tileScaleOf(set);
+      t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(s, s);
+      t.colorSpace = srgb ? T.SRGBColorSpace : T.NoColorSpace;
+      t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      t.userData.shared = true;
+      t.needsUpdate = true;
+      return t;
+    }).catch(() => null);
+    texCache.set(key, p);
+  }
+  return texCache.get(key);
+}
+function meshHasMaskColor(mesh) {
+  const c = mesh.geometry?.attributes?.color;
+  if (!c || c.count === 0) return false;
+  let maxR = 0, maxG = 0, maxB = 0;
+  const step = Math.max(1, Math.floor(c.count / 2000));
+  for (let i = 0; i < c.count; i += step) {
+    const r = c.getX(i), g = c.getY(i), b = c.getZ(i);
+    if (r > maxR) maxR = r; if (g > maxG) maxG = g; if (b > maxB) maxB = b;
+  }
+  const mats = [].concat(mesh.userData?.origMaterial || mesh.material || []);
+  return maxG < 0.01 && maxB < 0.01 && (maxR > 0.01 || mats.some((m) => m?.name?.includes('|')));
+}
+function ensureBoxUVs(mesh) {
+  const g = mesh.geometry;
+  if (!g?.attributes?.position) return;
+  const uv = g.attributes.uv;
+  let needs = !uv || uv.count !== g.attributes.position.count;
+  if (!needs) {
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    const step = Math.max(1, Math.floor(uv.count / 2000));
+    for (let i = 0; i < uv.count; i += step) {
+      const u = uv.getX(i), v = uv.getY(i);
+      if (u < minU) minU = u; if (u > maxU) maxU = u; if (v < minV) minV = v; if (v > maxV) maxV = v;
+    }
+    const du = maxU - minU, dv = maxV - minV;
+    if (du < 1e-4 && dv < 1e-4) needs = true;
+    else if (minU >= -0.01 && maxU <= 1.01 && minV >= -0.01 && maxV <= 1.01 && du <= 1.01 && dv <= 1.01) {
+      if (!g.boundingBox) g.computeBoundingBox();
+      const s = g.boundingBox.getSize(new T.Vector3());
+      if (Math.max(s.x, s.y, s.z) > 1.5) needs = true;
+    }
+  }
+  if (!needs) return;
+  if (!g.attributes.normal) g.computeVertexNormals();
+  const pos = g.attributes.position, nrm = g.attributes.normal, out = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const nx = nrm.getX(i), ny = nrm.getY(i), nz = nrm.getZ(i);
+    const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+    let u, v;
+    if (ax >= ay && ax >= az) { u = -z * Math.sign(nx || 1); v = y; }
+    else if (ay >= az) { u = x; v = -z; }
+    else { u = x * Math.sign(nz || 1); v = y; }
+    out[i * 2] = u * 0.5; out[i * 2 + 1] = v * 0.5;
+  }
+  g.setAttribute('uv', new T.BufferAttribute(out, 2));
+}
+async function resolveMaterial(orig, hasColorAttr, cache) {
+  if (!orig || orig.map) return { mat: orig, resolved: false };
+  const name = orig.name || '';
+  if (!name) return { mat: orig, resolved: false };
+  const key = `${name}:${hasColorAttr ? 1 : 0}:${orig.side}`;
+  if (cache.has(key)) return cache.get(key);
+  const p = (async () => {
+    const plain = matLib.plain && matLib.plain[name];
+    if (plain) {
+      const c = new T.Color(plain.colour);
+      const m = new T.MeshStandardMaterial({ name, color: c, roughness: plain.roughness ?? 0.6, metalness: plain.metal ?? 0, vertexColors: false, side: orig.side });
+      if (plain.glow || plain.sky) { m.emissive = c.clone(); m.emissiveIntensity = Math.min(2.5, (plain.glow || plain.sky) * 0.35); }
+      return { mat: m, resolved: true, scanned: false };
+    }
+    const parts = name.split('|'), setNameA = parts[0], setA = matLib.sets && matLib.sets[setNameA];
+    if (!setA) return { mat: orig, resolved: false, scanned: false };
+    const setNameB = parts[1], setB = setNameB && matLib.sets[setNameB] ? matLib.sets[setNameB] : null;
+    const amount = parseFloat(parts[2]) || 0;
+    const tint = parts[3] && /^#[0-9a-fA-F]{3,8}$/.test(parts[3]) ? new T.Color(parts[3]) : null;
+    const wantB = !!(setB && (hasColorAttr || amount > 0));
+    const [albA, nrmA, ormA, albB, nrmB, ormB] = await Promise.all([
+      loadMaterialTexture(setNameA, setA.albedo, true),
+      setA.normal ? loadMaterialTexture(setNameA, setA.normal, false) : null,
+      setA.orm ? loadMaterialTexture(setNameA, setA.orm, false) : null,
+      wantB ? loadMaterialTexture(setNameB, setB.albedo, true) : null,
+      wantB && setB.normal ? loadMaterialTexture(setNameB, setB.normal, false) : null,
+      wantB && setB.orm ? loadMaterialTexture(setNameB, setB.orm, false) : null,
+    ]);
+    if (!albA) return { mat: orig, resolved: false, scanned: false };
+    const m = new T.MeshStandardMaterial({
+      name, map: albA, color: wantB ? 0xffffff : (tint || 0xffffff),
+      normalMap: nrmA || null, roughnessMap: ormA || null, metalnessMap: ormA || null,
+      roughness: ormA ? 1 : (setA.roughness ?? 0.8), metalness: ormA ? 1 : (setA.metal ?? 0),
+      vertexColors: !!(wantB && albB && hasColorAttr),
+      side: orig.side === T.DoubleSide || setNameA.includes('canvas') ? T.DoubleSide : orig.side,
+    });
+    if (wantB && albB) {
+      const hasHeight = !!(setA.hasHeight && setB.hasHeight && ormA && ormB);
+      const hasOrmB = !!(ormA && ormB), hasNrmB = !!(nrmA && nrmB);
+      const uvRatioB = tileScaleOf(setNameB) / tileScaleOf(setNameA);
+      const tintA = tint || new T.Color(0xffffff);
+      m.customProgramCacheKey = () => `nf-blend:${hasHeight ? 1 : 0}:${hasOrmB ? 1 : 0}:${hasNrmB ? 1 : 0}:${hasColorAttr ? 1 : 0}`;
+      m.onBeforeCompile = (shader) => {
+        shader.uniforms.uMapB = { value: albB };
+        shader.uniforms.uOrmB = { value: ormB };
+        shader.uniforms.uNrmB = { value: nrmB };
+        shader.uniforms.uBlendAmount = { value: amount };
+        shader.uniforms.uUvRatioB = { value: uvRatioB };
+        shader.uniforms.uTintA = { value: tintA };
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <map_pars_fragment>', `#include <map_pars_fragment>
+            uniform sampler2D uMapB; uniform sampler2D uOrmB; uniform sampler2D uNrmB;
+            uniform float uBlendAmount; uniform float uUvRatioB; uniform vec3 uTintA;`)
+          .replace('#include <map_fragment>', `
+            float nfBlend = 0.0;
+            vec2 nfUvB = vec2(0.0);
+            #ifdef USE_MAP
+              vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+              sampledDiffuseColor.rgb *= uTintA;
+              nfUvB = vMapUv * uUvRatioB;
+              #if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA )
+                float nfMask = clamp( vColor.r + uBlendAmount, 0.0, 1.0 );
+              #else
+                float nfMask = clamp( uBlendAmount, 0.0, 1.0 );
+              #endif
+              ${hasHeight ? `
+                float nfHA = texture2D( roughnessMap, vMapUv ).a;
+                float nfHB = texture2D( uOrmB, nfUvB ).a;
+                float nfTA = nfHA + ( 1.0 - nfMask );
+                float nfTB = nfHB + nfMask;
+                float nfTop = max( nfTA, nfTB ) - 0.12;
+                float nfWA = max( nfTA - nfTop, 0.0 );
+                float nfWB = max( nfTB - nfTop, 0.0 );
+                nfBlend = nfWB / max( nfWA + nfWB, 1e-5 );
+              ` : `nfBlend = nfMask;`}
+              vec4 nfAlbB = texture2D( uMapB, nfUvB );
+              sampledDiffuseColor.rgb = mix( sampledDiffuseColor.rgb, nfAlbB.rgb, nfBlend );
+              diffuseColor *= sampledDiffuseColor;
+            #endif`)
+          .replace('#include <color_fragment>', '/* COLOR_0 drives nfBlend */');
+        if (hasOrmB) {
+          shader.fragmentShader = shader.fragmentShader
+            .replace('#include <roughnessmap_fragment>', `
+              float roughnessFactor = roughness;
+              #ifdef USE_ROUGHNESSMAP
+                vec4 texelRoughness = mix( texture2D( roughnessMap, vRoughnessMapUv ), texture2D( uOrmB, nfUvB ), nfBlend );
+                roughnessFactor *= texelRoughness.g;
+              #endif`)
+            .replace('#include <metalnessmap_fragment>', `
+              float metalnessFactor = metalness;
+              #ifdef USE_METALNESSMAP
+                vec4 texelMetalness = mix( texture2D( metalnessMap, vMetalnessMapUv ), texture2D( uOrmB, nfUvB ), nfBlend );
+                metalnessFactor *= texelMetalness.b;
+              #endif`);
+        }
+        if (hasNrmB) {
+          shader.fragmentShader = shader.fragmentShader.replace(
+            'vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;',
+            'vec3 mapN = mix( texture2D( normalMap, vNormalMapUv ).xyz, texture2D( uNrmB, nfUvB ).xyz, nfBlend ) * 2.0 - 1.0;'
+          );
+        }
+      };
+    }
+    return { mat: m, resolved: true, scanned: true };
+  })();
+  cache.set(key, p);
+  return p;
+}
+async function resolveModelMaterials(root, token) {
+  const hasLib = Object.keys(matLib.sets || {}).length > 0 || Object.keys(matLib.plain || {}).length > 0;
+  if (!hasLib) return { resolved: 0, unresolvedMask: 0 };
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh && !o.userData.collider) meshes.push(o); });
+  const cache = new Map();
+  let resolved = 0, unresolvedMask = 0;
+  await Promise.all(meshes.map(async (mesh) => {
+    const orig = mesh.userData.origMaterial, isArr = Array.isArray(orig), list = isArr ? orig : [orig];
+    const hasColor = !!mesh.geometry?.attributes?.color, mask = meshHasMaskColor(mesh);
+    const results = await Promise.all(list.map((m) => resolveMaterial(m, hasColor, cache)));
+    if (token !== loadToken) return;
+    if (results.some((r) => r.scanned)) ensureBoxUVs(mesh);
+    if (results.some((r) => r.resolved)) {
+      resolved += results.filter((r) => r.resolved).length;
+      mesh.userData.resolvedMaterial = isArr ? results.map((r) => r.mat) : results[0].mat;
+    } else if (mask && list.every((m) => !m?.map)) {
+      unresolvedMask++;
+    }
+  }));
+  return { resolved, unresolvedMask };
 }
 
 // ---- drafts of new models (the New model plugin, when it is on; only in the workbench, where its screen opens as a tab)
@@ -282,23 +543,50 @@ function drawModelList() {
 async function openModel(m, { keepCamera = false } = {}) {
   if (!T) return;
   if (m.size > 200 * MB && !confirm(`${m.path} is ${(m.size / MB).toFixed(0)} MB. Load it?`)) return;
+  const token = ++loadToken;
   say(`loading ${m.path}…`);
   let gltf;
-  try { gltf = await loader.loadAsync(`/api/model?path=${encodeURIComponent(m.path)}`); } catch (e) { say(`could not load ${m.path}: ${e.message}`, 'bad'); return; }
+  try { gltf = await loader.loadAsync(`/api/model?path=${encodeURIComponent(m.path)}`); } catch (e) { if (token === loadToken) say(`could not load ${m.path}: ${e.message}`, 'bad'); return; }
+  if (token !== loadToken) { dispose(gltf.scene); return; }
   if (model) { scene.remove(model); dispose(model); }
   model = gltf.scene; scene.add(model); // the scene root stays at identity, so world coordinates are the model's own
-  if (wire) setWire(true);
-  placeGrid(new T.Box3().setFromObject(model));
+  let hasColliders = false, maskOnlyMeshes = 0, visibleMeshes = 0, tris = 0;
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    o.userData.origMaterial = o.material;
+    if (isCollider(o)) { o.userData.collider = true; o.visible = showColliders; hasColliders = true; }
+    else {
+      visibleMeshes++;
+      if (meshHasMaskColor(o) && [].concat(o.material || []).every((mat) => !mat?.map)) maskOnlyMeshes++;
+      tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+    }
+  });
+  $('colliders').hidden = !hasColliders; $('colliders').classList.toggle('on', showColliders);
+  // start in Clay right away if the model has raw mask-only COLOR_0 so it never flashes red while textures load
+  const initialMode = preferredShading || (maskOnlyMeshes > 0 ? 'clay' : 'textured');
+  setShading(initialMode);
+  placeGrid(visibleBounds(model));
   modelPath = m.path; folders.reveal(m.path.includes('/') ? m.path : `${info.models}/${m.path}`); drawModelList();
   history.replaceState(null, '', `/viewer?model=${encodeURIComponent(m.path)}`);
   if (!keepCamera) frame();
   $('overlayBody').replaceChildren();
   draft = (await loadDraft(modelPath)) || { note: '', workflow: $('workflow').value, pins: [] };
+  if (token !== loadToken) return;
   $('note').value = draft.note || '';
   if (draft.workflow && [...$('workflow').options].some((o) => o.value === draft.workflow && !o.disabled)) $('workflow').value = draft.workflow;
   rebuildMarkers(); drawPins(); updateSend(); loadRefs(m.path); loadMatch(m.path);
-  let tris = 0; model.traverse((o) => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
-  say(`${m.path} · ${Math.round(tris).toLocaleString()} triangles`);
+  const baseStatus = `${m.path} · ${Math.round(tris).toLocaleString()} triangles`;
+  say(maskOnlyMeshes > 0 && !preferredShading ? `${baseStatus} · loading project materials…` : baseStatus);
+  const { resolved } = await resolveModelMaterials(model, token);
+  if (token !== loadToken) return;
+  if (resolved > 0) {
+    setShading(preferredShading || 'textured');
+    say(`${baseStatus} · ${resolved} project material${resolved === 1 ? '' : 's'}`);
+  } else if (maskOnlyMeshes > 0 && !preferredShading) {
+    say(`${baseStatus} · clay (vertex mask)`);
+  } else {
+    say(baseStatus);
+  }
 }
 
 // ---- the model's own reference images: the files of <name>.refs/ beside the .glb (see the README, "Reference images")
@@ -377,7 +665,7 @@ function hitModel(e) { aim(e); return ray.intersectObject(model, true).find((h) 
 function hitMarker(e) { aim(e); const h = ray.intersectObjects(markers.filter((m) => !m.userData.sent), false)[0]; return h ? markers.indexOf(h.object) : -1; }
 function describeHit(h) {
   const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new T.Vector3(0, 1, 0);
-  const mats = [].concat(h.object.material), mat = mats[h.face?.materialIndex ?? 0] || mats[0];
+  const mats = [].concat(h.object.userData?.origMaterial || h.object.material), mat = mats[h.face?.materialIndex ?? 0] || mats[0];
   return { position: h.point.toArray().map(round), normal: n.toArray().map(round), mesh: h.object.name || null, material: mat?.name || null, uv: h.uv ? [round(h.uv.x), round(h.uv.y)] : null };
 }
 const camState = () => ({ position: camera.position.toArray().map(round), target: controls.target.toArray().map(round), fov: camera.fov });
@@ -423,7 +711,9 @@ function wireView() {
   addEventListener('keydown', (e) => { if (e.target.closest('textarea, input, select')) return; if (e.key === 'p' || e.key === 'P') setPinMode(!pinMode); if (e.key === 'Escape') setPinMode(false); });
   $('resetView').onclick = () => model && frame();
   $('lighting').onchange = (e) => setLighting(e.target.value);
+  $('shading').onchange = (e) => setShading(e.target.value, { byUser: true });
   $('wire').onclick = () => setWire(!wire);
+  $('colliders').onclick = () => setColliders(!showColliders);
   $('gridBtn').onclick = () => nfGrid.toggle();
 }
 async function shrink(file) { // at most 2048 px on the long side; PNG when it has transparency, else JPEG
@@ -597,6 +887,7 @@ $('send').onclick = send;
 $('zoom').onclick = () => { $('zoom').style.display = 'none'; };
 wireRefs();
 info = await api('/api/viewer');
+try { matLib = await api('/api/materials'); } catch { matLib = { sets: {}, plain: {} }; }
 setLoopControls(info.match.last); Object.assign($('mTarget'), { min: info.match.limits.target.min, max: info.match.limits.target.max, step: info.match.limits.target.step }); $('mTarget').value = info.match.last.target;
 document.title = `${info.title ? `${info.title}: ` : ''}model review`;
 for (const w of info.workflows) $('workflow').append(el('option', { value: w.id, textContent: w.enabled ? w.label : `${w.label} (not set up yet)`, disabled: !w.enabled, title: w.description }));

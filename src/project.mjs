@@ -11,6 +11,7 @@ import { normaliseWorkflows } from './reviews.mjs';
 import { normaliseMatch } from './match.mjs';
 import { createModelKinds } from './modelkinds.mjs';
 import { listModels, resolveModel } from './models.mjs';
+import { resolveMaterialsConfig } from './materials.mjs';
 
 export const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const BUILT_IN_SCHEMAS = { layout: join(EDITOR_ROOT, 'schemas', 'map.schema.json'), plants: join(EDITOR_ROOT, 'schemas', 'map-plants.schema.json') };
@@ -101,6 +102,7 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
     }
     return null;
   }
+  const materials = resolveMaterialsConfig(root, options.materials, inside);
   const reviewsDir = inside(options.reviews || '.review', '"reviews"');
   const reviewWorkflows = normaliseWorkflows(options.reviewWorkflows, root);
   normaliseMatch(options.match);                                   // a mistake in the match settings is found at start
@@ -186,7 +188,7 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
 
   return {
     root, configFile, mapsDir, schemaFile, plantsSchemaFile, ctx, options,
-    modelsDir, assetsDir, assets, resolveAsset, reviewsDir, reviewWorkflows, modelProblems: () => modelKinds().problems,
+    modelsDir, assetsDir, assets, resolveAsset, materials, reviewsDir, reviewWorkflows, modelProblems: () => modelKinds().problems,
     port: options.port || DEFAULT_PORT, defaultMap: options.defaultMap || null,
     mapDir, planFile, plantsFile, readPlan, readPlants, listMaps, knownMap, rel,
     planErrors, plantsErrors, kinds, presets, presetOf, actions, overlays, plants: plantsCfg, reserved,
