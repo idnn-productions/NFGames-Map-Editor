@@ -390,6 +390,16 @@ for (let i = 1; i <= n; i++) fs.writeFileSync(path.join(dir, 'image-' + i + '.pn
       if (!/workflows folder/i.test(await wb.locator('.mm-needs').textContent())) fail('New model: step 3 names the workflows folder as missing');
       await wb.locator('.mm [data-key="length"]').fill('0.4');
       if (!(await wb.locator('.mm-go').isDisabled())) fail('New model: Generate model is off until everything it needs is there');
+      // the views check sits under the views: off when Blender is missing, else pressing it ends in an answer (a warning, a note or "agree") and never in a generated model
+      const compare = wb.locator('.mm-btn', { hasText: 'Check the views against each other' });
+      if ((await compare.count()) !== 1) fail('New model: step 3 has one button to check the views against each other');
+      const blenderMissing = await wb.locator('.mm-need.bad', { hasText: /Blender/ }).count();
+      if (blenderMissing !== (await compare.isDisabled() ? 1 : 0)) fail('New model: the views check is off exactly when Blender is missing');
+      if (!blenderMissing) {
+        await compare.click();
+        await wb.waitForFunction(() => !!document.querySelector('.mm-views-check, .mm-bad:not(.mm-need)') || /views agree/.test(document.querySelector('.mm')?.textContent || ''), null, { timeout: 60000 });
+        if (!(await wb.locator('.mm-go').isDisabled())) fail('New model: the views check does not turn Generate model on');
+      }
       const kept = join(root, '.nfgames', 'drafts', 'check-lantern');
       const views = existsSync(join(kept, 'views')) ? readdirSync(join(kept, 'views')).sort().join() : '';
       console.log(`new model: concept.png ${existsSync(join(kept, 'concept.png')) ? 'kept' : 'MISSING'}; views: ${views}`);
