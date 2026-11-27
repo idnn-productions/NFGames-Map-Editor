@@ -221,7 +221,7 @@ onto these options.
 | `modelKinds` | `true` | `false`: the models folder's files are not offered as kinds of piece |
 | `reviews` | `.review` | the folder review jobs are written to. Must be inside the project |
 | `blender` | found on the PATH, or where Blender is usually installed | the Blender program, for [matching a model to its references](#matching-a-model-to-its-references). Optional: without it the Match panel says so |
-| `match` | see below | `{ weights: { silhouette: 0.6, colour: 0.4 }, colourFalloff: 0.4, grid: 256, upFix: false, planUp: 'auto', tolerance: 0.05 }`: how a model is scored against its references (below) |
+| `match` | see below | `{ weights: { silhouette: 0.6, colour: 0.4 }, colourFalloff: 0.4, grid: 256, upFix: false, planUp: 'auto', tolerance: 0.05, limits: { size: 0.02, triangles: 1.25, pivot: 0.02, floating: true } }`: how a model is scored against its references, and how far a loop may change the model (below) |
 | `reviewWorkflows` | Auto, Blender, Angelo, ComfyUI | the viewer's Workflow list: `[{ id, label, description, enabled, instructions, instructionsFile }]`, or a default's id (`'auto'`). `instructions` is text; `instructionsFile` is a file in the project whose text is added. Both are copied into each job. `enabled: false` shows "(not set up yet)". Blender and ComfyUI are placeholders by default (see `todo.md`) |
 
 ### Hooks
@@ -671,6 +671,19 @@ reference is scored again and an unchanged one at once; the newest 24 results ar
 
 ### The match loop
 
+The score ignores scale and framing, so a loop could reach its target by changing the model's size, triangle count or origin. Each round
+is held to round 0 (the model as sent) by `match.limits` in the config, and a round that is off has `drift` and cannot reach the target:
+
+| `match.limits` | Default | A round drifts when |
+|---|---|---|
+| `size` | 0.02 | the longest side differs from round 0 by more than this fraction |
+| `triangles` | 1.25 | it has more than this many times round 0's triangles |
+| `pivot` | 0.02 | the origin's place in the bounding box moves by more than this, on any axis |
+| `floating` | `true` | it has more floating pieces than round 0 |
+
+A number must be above 0. `null` or `false` turns a limit off; keys that are left out keep their defaults. A job sent before the
+scorer reported a shape has no drift to check.
+
 **Improve to target** sends a job that rebuilds the model, re-measures and repeats until a target. Its fields:
 
 | Field (job and page) | Default | |
@@ -694,6 +707,7 @@ go on. `status.json` gains:
 | Field | |
 |---|---|
 | `rounds` | `[{ round, scores: { <view>: { silhouette, colour, combined } }, mean, means, orientation, flagged, changed: [files], note, at, key, seconds?, cost?, unchanged?, overlays }]`. Round 0 is the model as sent; `unchanged: true` when the model file was the one scored last round |
+| `rounds[].shape`, `rounds[].drift` | `shape` is what the scorer found (`triangles`, `pieces`, `floating`, `longest` in metres, `origin`). `drift` is a list of sentences, only when the round is off from round 0; `match.mjs round` prints it (empty when none) with `shape`. While it is there the round is never `target-reached` and never `plateau`; when the rounds run out the `stopDetail` ends with what drifted |
 | `stopReason` | `target-reached`, `out-of-rounds`, `plateau`, or `held-back`: the references disagree with each other and the views without them average at or above the target; they are named in `stopDetail` |
 | `stopDetail` | one sentence: the numbers behind the reason |
 

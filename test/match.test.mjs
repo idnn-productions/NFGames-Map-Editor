@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
-import { SCORER, consistency, createMatcher, decide, normaliseLoop, normaliseMatch, scoredViews, blenderMissing, DEFAULTS } from '../src/match.mjs';
+import { SCORER, consistency, createMatcher, decide, drift, normaliseLoop, normaliseMatch, scoredViews, blenderMissing, DEFAULTS } from '../src/match.mjs';
 import { createReview, listReviews } from '../src/reviews.mjs';
 import { finishLoop, openJob, recordRound, setStatus, startLoop } from '../src/matchloop.mjs';
 import { sampleCopy, makeGlb, PNG_1PX, dataBytes } from './helpers.mjs';
@@ -18,6 +18,14 @@ describe('match settings', () => {
     assert.deepEqual(normaliseMatch({ weights: { colour: 0.2 }, upFix: true, planUp: 'right' }).weights, { silhouette: 0.6, colour: 0.2 });
     for (const [bad, why] of [[{ weights: { silhouette: -1 } }, /match\.weights/], [{ weights: { silhouette: 0, colour: 0 } }, /cannot both be 0/], [{ planUp: 'sideways' }, /match\.planUp/], [{ upFix: 'yes' }, /match\.upFix/], [{ grid: 8 }, /match\.grid/], [{ tolerance: 0 }, /match\.tolerance/], [[], /must be an object/]])
       assert.throws(() => normaliseMatch(bad), why);
+  });
+  it('the config\'s match.limits: defaults, some keys, off with null or false, mistakes named', () => {
+    assert.deepEqual(DEFAULTS.limits, { size: 0.02, triangles: 1.25, pivot: 0.02, floating: true });
+    assert.deepEqual(normaliseMatch({ limits: { size: 0.1, triangles: null, pivot: false, floating: null } }).limits, { size: 0.1, triangles: null, pivot: null, floating: null });
+    assert.deepEqual(normaliseMatch({ limits: { size: 0.1 } }).limits, { ...DEFAULTS.limits, size: 0.1 });
+    assert.equal(normaliseMatch({ limits: { floating: false } }).limits.floating, null);
+    for (const b of [{ size: 0 }, { triangles: 'x' }, { pivot: -1 }, { floating: 1 }, { floating: 'yes' }, [], 'x']) assert.throws(() => normaliseMatch({ limits: b }), /match\.limits/);
+    assert.equal(DEFAULTS.limits.size, 0.02, 'the defaults are not changed');
   });
   it('the slider: 0.50 to 0.99 in steps of 0.01, kept to two decimals; rounds, plateau and the score are checked', () => {
     assert.deepEqual(normaliseLoop({}), { target: 0.9, maxRounds: 5, plateau: 0.01, score: 'combined' });
@@ -73,6 +81,38 @@ describe('when a loop stops', () => {
     assert.equal(decide(loop, rounds(0.6, 0.7, 0.65)).reason, 'plateau');                                    // worse is under the threshold too
     assert.equal(decide({ ...loop, maxRounds: 1 }, rounds(0.6, 0.7)).reason, 'out-of-rounds');
   });
+  it('drift: size, triangles, the origin and floating pieces are held to round 0, each by its own limit', () => {
+    const base = { triangles: 60000, pieces: 1, floating: 0, longest: 40, origin: [0.5, 0.5, 0.5] }, L = DEFAULTS.limits;
+    assert.deepEqual(drift(base, { ...base, longest: 40.5, triangles: 70000 }, L), []);
+    assert.match(drift(base, { ...base, longest: 42 }, L)[0], /longest side is 42 m, was 40 m.*match\.limits\.size/);
+    assert.match(drift(base, { ...base, triangles: 90000 }, L)[0], /90000 triangles, was 60000/);
+    assert.match(drift(base, { ...base, origin: [0.5, 0, 0.5] }, L)[0], /origin moved/);
+    assert.match(drift(base, { ...base, floating: 2 }, L)[0], /2 floating pieces, was 0/);
+    assert.deepEqual(drift(base, { ...base, longest: 80 }, { ...L, size: null }), []);       // turned off
+    assert.deepEqual(drift(undefined, base, L), []); assert.deepEqual(drift(base, undefined, L), []);   // a job from before
+    assert.deepEqual(drift({ ...base, floating: null }, { ...base, floating: 3 }, L), []);    // not counted then
+  });
+  it('drift: the texts, the first axis that moved, and the limits that are off', () => {
+    const base = { triangles: 60000, pieces: 1, floating: 0, longest: 40, origin: [0.5, 0.5, 0.5] }, L = DEFAULTS.limits;
+    assert.deepEqual(drift(base, { ...base, longest: 42 }, L), ['the longest side is 42 m, was 40 m (more than 2% off; match.limits.size)']);
+    assert.deepEqual(drift(base, { ...base, triangles: 90000 }, L), ['90000 triangles, was 60000 (more than 1.25 times; match.limits.triangles)']);
+    assert.deepEqual(drift(base, { ...base, origin: [0.5, 0.5, 0.1234] }, L), ['the origin moved in the bounding box (depth: 0.5 to 0.12; match.limits.pivot)']);
+    assert.match(drift(base, { ...base, origin: [0.9, 0, 0.5] }, L)[0], /\(x: 0\.5 to 0\.9;/);
+    assert.deepEqual(drift(base, { ...base, floating: 2 }, L), ['2 floating pieces, was 0 (match.limits.floating)']);
+    assert.deepEqual(drift(base, { ...base, floating: 2 }, { ...L, floating: false }), []);
+    assert.deepEqual(drift(base, { ...base, triangles: 90000 }, { ...L, triangles: false }), []);
+    assert.deepEqual(drift(base, { ...base, origin: [0, 0, 0] }, { ...L, pivot: null }), []);
+    assert.equal(drift(base, { ...base, longest: 42, triangles: 90000, floating: 1 }, L).length, 3);
+  });
+  it('a round that drifted cannot reach the target, and is named when the rounds run out', () => {
+    const loop = normaliseLoop({ target: 0.9, maxRounds: 2, plateau: 0.01 });
+    const r = (round, mean, drift) => ({ round, mean, ...(drift ? { drift } : {}) });
+    assert.deepEqual(decide(loop, [r(0, 0.7), r(1, 0.95, ['x'])]), { stop: false });
+    assert.deepEqual(decide(loop, [r(0, 0.7), r(1, 0.701, ['x'])]), { stop: false });        // no plateau while it drifts
+    const end = decide(loop, [r(0, 0.7), r(1, 0.95, ['x']), r(2, 0.95, ['42 m'])]);
+    assert.equal(end.reason, 'out-of-rounds'); assert.match(end.detail, /drifted from what was sent: 42 m/);
+    assert.match(decide(loop, [r(0, 0.7), r(1, 0.8), r(2, 0.95, ['a', 'b'])]).detail, /drifted from what was sent: a; b$/);
+  });
   it('held back: the references that disagree are what stands between the model and the target', () => {
     const scores = { front: { combined: 0.5 }, left: { combined: 0.95 }, top: { combined: 0.93 } };
     const held = decide(loop, rounds(0.6, 0.7, 0.8, 0.79), { flagged: ['front'] }, scores);
@@ -85,19 +125,19 @@ describe('when a loop stops', () => {
 });
 
 // a Blender that is not one: the child process the wrapper starts, and the result it would write
-function fakeSpawn({ views = ['front', 'left', 'top'], means = [0.7], fail = false, hold = false } = {}) {
+function fakeSpawn({ views = ['front', 'left', 'top'], means = [0.7], fail = false, hold = false, shapes = [] } = {}) {
   const calls = [], held = [];
   let n = 0;
   const impl = (file, args, options) => {
     const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill() {} });
     calls.push({ file, args, options, settings: JSON.parse(readFileSync(args[args.length - 1], 'utf8')) });
-    const mean = means[Math.min(n++, means.length - 1)], settings = calls[calls.length - 1].settings;
+    const shape = shapes[Math.min(n, shapes.length - 1)], mean = means[Math.min(n++, means.length - 1)], settings = calls[calls.length - 1].settings;
     const end = () => {
       if (!fail) {
         const per = typeof mean === 'object' ? mean : Object.fromEntries(views.map((v) => [v, mean]));
         const out = {}; for (const v of Object.keys(settings.refs)) { out[v] = { silhouette: per[v], colour: per[v] - 0.1, combined: per[v] - 0.04, background: 'flat', refExtent: SOUND[v], modelExtent: [10, 10], planUp: null, overlay: `overlay-${v}.png`, render: `render-${v}.png` }; writeFileSync(join(settings.outDir, `overlay-${v}.png`), dataBytes(PNG_1PX)); }
         const vals = Object.values(out), avg = (k) => vals.reduce((s, x) => s + x[k], 0) / vals.length;
-        writeFileSync(settings.result, JSON.stringify({ ok: true, blender: '5.3.0', views: out, size: [1, 1, 1], mean: { silhouette: avg('silhouette'), colour: avg('colour'), combined: avg('combined') }, orientation: { up: '+Y', turn: 0, tried: [] }, warnings: [] }));
+        writeFileSync(settings.result, JSON.stringify({ ok: true, blender: '5.3.0', views: out, size: [1, 1, 1], mean: { silhouette: avg('silhouette'), colour: avg('colour'), combined: avg('combined') }, orientation: { up: '+Y', turn: 0, tried: [] }, warnings: [], ...(shape ? { shape } : {}) }));
       }
       child.emit('close', fail ? 1 : 0);
     };
@@ -202,12 +242,12 @@ describe('match jobs and their rounds', () => {
   /** A round as the session would run it: the model re-exported, then the editor's scorer. */
   let exported = 0;
   const round = (id, extra = {}) => { model(++exported); return recordRound(project, id, matcher, extra); };
-  const setup = async (means, views) => {
+  const setup = async (means, views, shapes) => {
     copy = sampleCopy(); mkdirSync(join(copy.root, 'models', 'ships', 'cruiser.refs'), { recursive: true });
     for (const n of ['front', 'left', 'top']) writeFileSync(join(copy.root, 'models', 'ships', 'cruiser.refs', `${n}.png`), dataBytes(PNG_1PX));
     exported = 0; model(0);
     project = await loadProject({ root: copy.root, config: { models: 'models', blender: process.execPath } });
-    fake = fakeSpawn({ means, views }); matcher = createMatcher(project, { spawnImpl: fake.impl });
+    fake = fakeSpawn({ means, views, shapes }); matcher = createMatcher(project, { spawnImpl: fake.impl });
     await matcher.start(MODEL).done;                                                                          // "Measure" on the page
   };
   after(() => copy && copy.done());
@@ -270,6 +310,23 @@ describe('match jobs and their rounds', () => {
     const b = send({ match: { target: 0.9, maxRounds: 5, plateau: 0.01 } }); startLoop(project, b.id);
     assert.equal((await round(b.id)).decision.stop, false); const flat = await round(b.id);
     assert.equal(flat.decision.reason, 'plateau'); assert.equal(listReviews(project)[0].stopReason, 'plateau');
+  });
+  it('a job from before the shape has no drift and reaches its target', async () => {
+    await setup([0.62, 0.95]);
+    const { id } = send(); assert.equal(openJob(project, id).job.match.baseline.shape, undefined); startLoop(project, id);
+    const r = await round(id); assert.equal(r.round.drift, undefined); assert.equal('drift' in r.round, false); assert.equal(r.decision.reason, 'target-reached');
+  });
+  it('a round whose model drifted from round 0 cannot reach the target, and the end is out-of-rounds', async () => {
+    const shape = { triangles: 1000, pieces: 1, floating: 0, longest: 10, origin: [0.5, 0, 0.5] };
+    await setup([0.62, 0.95, 0.95], undefined, [shape, { ...shape, longest: 20 }, { ...shape, longest: 20 }]);
+    const { id } = send({ match: { target: 0.9, maxRounds: 4, plateau: 0.01, score: 'combined' } });
+    assert.deepEqual(openJob(project, id).job.match.baseline.shape, shape); startLoop(project, id);
+    assert.deepEqual(openJob(project, id).status.rounds[0].shape, shape);
+    const r = await round(id);
+    assert.equal(r.decision.stop, false); assert.equal(r.round.drift.length, 1); assert.match(r.round.drift[0], /longest side is 20 m, was 10 m/);
+    assert.deepEqual(openJob(project, id).status.rounds[1].shape, { ...shape, longest: 20 });
+    const fin = finishLoop(project, id, { summary: 'gave up' });
+    assert.equal(fin.stopReason, 'out-of-rounds'); assert.match(fin.stopDetail, /drifted from what was sent: the longest side is 20 m, was 10 m/);
   });
   it('held back by references that disagree: they are named', async () => {
     const odd = { front: 0.45, left: 0.95, top: 0.95 };                                                       // the front is the one view that cannot score: its reference is off

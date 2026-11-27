@@ -10,6 +10,7 @@ reference images: `docs/superpowers/specs/2026-11-23-model-references-design.md`
 - [x] **Angelo workflow**, through Angelo's MCP server, with the Angelo 0.1.0 problems in the skill.
 - [x] **Reference match** and the **match loop** (`src/match.mjs`, `src/match/score.py`, `bin/match.mjs`). Open:
       - the loop's first round is still a session's work: nothing starts a Claude Code session for a job;
+      - the limits of `match.limits` are one number for the whole model: a model that is meant to grow (a rebuild at a new size) has to turn the limit off in the config;
       - a lighting match for the colour score (reference art is shaded, the render is flat);
       - the model is scored on one material pass: models with several UV sets, vertex colours or alpha blending are only
         as good as Workbench's texture display;

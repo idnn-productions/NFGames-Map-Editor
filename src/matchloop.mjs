@@ -3,7 +3,7 @@
 // model as it is now, records the round and says whether to go on (match.mjs `decide`).
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { VIEWS, decide } from './match.mjs';
+import { VIEWS, decide, drift } from './match.mjs';
 
 const bad = (text, code = 400) => { throw Object.assign(new Error(text), { code }); };
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -32,6 +32,7 @@ export function roundOf(round, result, loop, extra = {}) {
   const scores = {};
   for (const v of VIEWS) if (result.views[v]) scores[v] = { silhouette: result.views[v].silhouette, colour: result.views[v].colour, combined: result.views[v].combined };
   return {
+    ...(result.shape ? { shape: result.shape } : {}),
     round, scores, mean: result.mean[loop.score], means: result.mean, orientation: { up: result.orientation.up, turn: result.orientation.turn },
     flagged: (result.consistency && result.consistency.flagged) || [], changed: [], note: '', at: now(), key: result.key, ...extra,
   };
@@ -67,6 +68,8 @@ export async function recordRound(project, id, matcher, { changed = [], note = '
   if (Number.isFinite(seconds)) extra.seconds = seconds;
   if (Number.isFinite(cost)) extra.cost = cost;
   const round = roundOf(n, result, loop, extra);
+  const off = drift(status.rounds[0].shape, result.shape, matcher.config.limits);
+  if (off.length) round.drift = off;
   if (last && last.key === result.key) round.unchanged = true;       // the model file is the one scored last round: nothing was re-exported
   const rounds = [...status.rounds, round];
   const decision = decide(loop, rounds, result.consistency, round.scores);
@@ -85,8 +88,9 @@ export function finishLoop(project, id, { state = 'done', summary = '', changed 
   const next = { ...status, state, summary: String(summary).slice(0, 4000), updatedAt: now(), changedFiles: [...new Set([...(status.changedFiles || []), ...changed])] };
   if (job.match && state === 'done' && !next.stopReason && rounds.length) {
     const last = rounds[rounds.length - 1];
-    next.stopReason = last.mean >= job.match.target - 1e-9 ? 'target-reached' : 'out-of-rounds';
-    next.stopDetail = next.stopReason === 'target-reached' ? `the mean ${last.mean.toFixed(2)} reached the target ${job.match.target.toFixed(2)}` : `stopped by the session at the mean ${last.mean.toFixed(2)}, below the target ${job.match.target.toFixed(2)}`;
+    const off = last.drift && last.drift.length ? last.drift : null;
+    next.stopReason = last.mean >= job.match.target - 1e-9 && !off ? 'target-reached' : 'out-of-rounds';
+    next.stopDetail = off ? `stopped by the session at the mean ${last.mean.toFixed(2)}. The model drifted from what was sent: ${off.join('; ')}` : next.stopReason === 'target-reached' ? `the mean ${last.mean.toFixed(2)} reached the target ${job.match.target.toFixed(2)}` : `stopped by the session at the mean ${last.mean.toFixed(2)}, below the target ${job.match.target.toFixed(2)}`;
   }
   writeStatus(dir, next);
   return next;

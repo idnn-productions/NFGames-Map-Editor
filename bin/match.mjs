@@ -35,7 +35,7 @@ try {
   else if (command === 'round') {
     const num = (v) => (v === undefined ? undefined : Number(v));
     const { round, decision, result } = await recordRound(project, target, matcher, { changed: flags.changed || [], note: one('note') || '', seconds: num(one('seconds')), cost: num(one('cost')), onProgress: progress });
-    out({ round: round.round, mean: round.mean, means: round.means, scores: round.scores, unchanged: !!round.unchanged, flagged: round.flagged, orientation: round.orientation, decision, overlays: round.overlays, consistency: result.consistency.warnings });
+    out({ round: round.round, mean: round.mean, means: round.means, scores: round.scores, unchanged: !!round.unchanged, flagged: round.flagged, orientation: round.orientation, decision, overlays: round.overlays, drift: round.drift || [], shape: round.shape, consistency: result.consistency.warnings });
   } else if (command === 'status') out(setStatus(project, target, { state: one('state'), question: one('question') || '', summary: one('summary') }));
   else out(finishLoop(project, target, { state: one('state') || 'done', summary: one('summary') || '', changed: flags.changed || [] }));
 } catch (e) { die(e.message); }

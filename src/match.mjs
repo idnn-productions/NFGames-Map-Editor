@@ -21,18 +21,18 @@ export const VIEWS = ['front', 'back', 'left', 'right', 'top', 'bottom'];
 export const SCORES = ['combined', 'silhouette'];
 /** The loop's limits, as the page's slider and fields show them. */
 export const LOOP = { target: { min: 0.5, max: 0.99, step: 0.01, default: 0.9 }, maxRounds: { min: 1, max: 20, default: 5 }, plateau: { min: 0, max: 0.2, default: 0.01 }, score: 'combined' };
-export const DEFAULTS = { weights: { silhouette: 0.6, colour: 0.4 }, colourFalloff: 0.4, grid: 256, upFix: false, planUp: 'auto', tolerance: 0.05 };
+export const DEFAULTS = { weights: { silhouette: 0.6, colour: 0.4 }, colourFalloff: 0.4, grid: 256, upFix: false, planUp: 'auto', tolerance: 0.05, limits: { size: 0.02, triangles: 1.25, pivot: 0.02, floating: true } };
 const TIMEOUT = 15 * 60 * 1000, KEEP = 24;
 
 const fail = (text) => { throw new Error(`map editor config: ${text}`); };
 const bad = (text, code = 400) => { throw Object.assign(new Error(text), { code }); };
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 
-/** The config's `match` (all optional): { weights: { silhouette, colour }, colourFalloff, grid, upFix, planUp, tolerance }. */
+/** The config's `match` (all optional): { weights: { silhouette, colour }, colourFalloff, grid, upFix, planUp, tolerance, limits: { size, triangles, pivot, floating } }. */
 export function normaliseMatch(options) {
-  if (options === undefined || options === null) return { ...DEFAULTS, weights: { ...DEFAULTS.weights } };
+  if (options === undefined || options === null) return { ...DEFAULTS, weights: { ...DEFAULTS.weights }, limits: { ...DEFAULTS.limits } };
   if (typeof options !== 'object' || Array.isArray(options)) fail('"match" must be an object');
-  const out = { ...DEFAULTS, weights: { ...DEFAULTS.weights } };
+  const out = { ...DEFAULTS, weights: { ...DEFAULTS.weights }, limits: { ...DEFAULTS.limits } };
   if (options.weights !== undefined) {
     const w = options.weights;
     if (!w || typeof w !== 'object' || !['silhouette', 'colour'].every((k) => w[k] === undefined || (num(w[k]) && w[k] >= 0))) fail('match.weights: { silhouette, colour }, each a number of 0 or more');
@@ -44,6 +44,16 @@ export function normaliseMatch(options) {
   if (options.upFix !== undefined) { if (typeof options.upFix !== 'boolean') fail('match.upFix: true or false'); out.upFix = options.upFix; }
   if (options.planUp !== undefined) { if (!['auto', 'up', 'right', 'down', 'left'].includes(options.planUp)) fail('match.planUp: "auto", "up", "right", "down" or "left"'); out.planUp = options.planUp; }
   if (options.tolerance !== undefined) { if (!num(options.tolerance) || options.tolerance <= 0 || options.tolerance > 1) fail('match.tolerance: a number above 0 and at most 1'); out.tolerance = options.tolerance; }
+  if (options.limits !== undefined) {
+    const l = options.limits;
+    if (!l || typeof l !== 'object' || Array.isArray(l)) fail('match.limits: { size, triangles, pivot, floating }');
+    for (const k of ['size', 'triangles', 'pivot']) {
+      if (l[k] === undefined) continue;
+      if (l[k] !== null && l[k] !== false && !(num(l[k]) && l[k] > 0)) fail(`match.limits.${k}: a number above 0, or null or false to turn it off`);
+      out.limits[k] = l[k] || null;
+    }
+    if (l.floating !== undefined) { if (l.floating !== null && typeof l.floating !== 'boolean') fail('match.limits.floating: true, or false or null to turn it off'); out.limits.floating = l.floating || null; }
+  }
   return out;
 }
 
@@ -116,6 +126,24 @@ export function consistency(views, tolerance = DEFAULTS.tolerance) {
   return { checked: true, flagged, views: out, warnings, ambiguous: tied.length > 1 };
 }
 
+// ---- what must stay as it was sent
+// The score ignores scale and framing, so a model could reach the target by being made bigger, heavier, moved off its origin
+// or broken into floating pieces. Each of those is held to round 0's shape (the scorer's `shape`), by its own limit.
+const AXIS = ['x', 'up', 'depth'], two = (x) => Math.round(x * 100) / 100;
+/** The ways `shape` differs from the shape `base` had, past `limits`: a list of texts, empty when neither shape is known or nothing moved. */
+export function drift(base, shape, limits) {
+  const out = [];
+  if (!base || !shape || !limits) return out;
+  if (limits.size && base.longest > 0 && Math.abs(shape.longest - base.longest) / base.longest > limits.size) out.push(`the longest side is ${shape.longest} m, was ${base.longest} m (more than ${two(limits.size * 100)}% off; match.limits.size)`);
+  if (limits.triangles && shape.triangles > base.triangles * limits.triangles) out.push(`${shape.triangles} triangles, was ${base.triangles} (more than ${limits.triangles} times; match.limits.triangles)`);
+  if (limits.pivot && Array.isArray(base.origin) && Array.isArray(shape.origin)) {
+    const a = AXIS.findIndex((_, i) => Math.abs(shape.origin[i] - base.origin[i]) > limits.pivot);
+    if (a >= 0) out.push(`the origin moved in the bounding box (${AXIS[a]}: ${two(base.origin[a])} to ${two(shape.origin[a])}; match.limits.pivot)`);
+  }
+  if (limits.floating && base.floating !== null && base.floating !== undefined && shape.floating !== null && shape.floating !== undefined && shape.floating > base.floating) out.push(`${shape.floating} floating pieces, was ${base.floating} (match.limits.floating)`);
+  return out;
+}
+
 // ---- when a loop stops
 /** The value a round counts for: the job's chosen score. */
 export const valueOf = (means, score) => (means ? means[score] ?? means.combined : undefined);
@@ -123,14 +151,15 @@ export const valueOf = (means, score) => (means ? means[score] ?? means.combined
 /**
  * Whether a loop goes on after its latest round. `rounds` is status.json's list (round 0 is the model as sent);
  * `consistent` is the reference check's result for the model. Returns { stop: false } or { stop: true, reason, detail }
- * where reason is "target-reached", "out-of-rounds", "plateau" or "held-back" (references that disagree with each other
+ * where reason is "target-reached", "out-of-rounds", "plateau" or "held-back" (a round with `drift` can be neither the target nor a plateau; references that disagree with each other
  * are what stands between the model and the target: they are named).
  */
 export function decide(loop, rounds, consistent = null, scores = null) {
   const last = rounds[rounds.length - 1];
   if (!last) return { stop: false };
   const done = rounds.length - 1, was = rounds.length > 1 ? rounds[rounds.length - 2] : null;
-  const pct = (x) => x.toFixed(2);
+  const pct = (x) => x.toFixed(2), drifted = last.drift && last.drift.length ? last.drift : null;
+  if (drifted) return done >= loop.maxRounds ? { stop: true, reason: 'out-of-rounds', detail: `${done} round${done === 1 ? '' : 's'} used, the mean ${pct(last.mean)}, the target ${pct(loop.target)}. The model drifted from what was sent: ${drifted.join('; ')}` } : { stop: false };
   if (last.mean >= loop.target - 1e-9) return { stop: true, reason: 'target-reached', detail: `the mean ${pct(last.mean)} reached the target ${pct(loop.target)} after ${done} round${done === 1 ? '' : 's'}` };
   const reason = done >= loop.maxRounds ? 'out-of-rounds' : loop.plateau !== null && was && last.mean - was.mean < loop.plateau ? 'plateau' : null;
   if (!reason) return { stop: false };
@@ -167,7 +196,7 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
     let m = memo.get(rel);
     if (!m || m.stamp !== stamp) {
       const files = Object.fromEntries(views.map((v) => [v, refs.find((r) => r.name === named[v]).file]));
-      const key = createHash('sha256').update(JSON.stringify({ v: SCORER_VERSION, scorer: sha(SCORER), model: sha(file), refs: Object.fromEntries(views.map((v) => [v, sha(files[v])])), config })).digest('hex').slice(0, 32);
+      const key = createHash('sha256').update(JSON.stringify({ v: SCORER_VERSION, scorer: sha(SCORER), model: sha(file), refs: Object.fromEntries(views.map((v) => [v, sha(files[v])])), config: { ...config, limits: undefined } })).digest('hex').slice(0, 32);
       m = { stamp, key, files }; memo.set(rel, m);
     }
     return { file, refs, views, named, files: m.files, key: m.key, dir: join(root, m.key) };

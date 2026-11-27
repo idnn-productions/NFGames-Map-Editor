@@ -63,6 +63,7 @@ The user set a **target** for how well the model agrees with its reference image
 scores per view, the mean, the orientation the scorer found) and `consistency` (references that disagree with each other).
 The overlays are `match-0-overlay-<view>.png` in the job folder: the reference, the model's outline in yellow, red where only the
 reference has something, blue where only the model does. Open them and fix the biggest red and blue areas first.
+Open the overlays of the two lowest views only; open another when those are fixed.
 
 Use these commands (the job's instructions have them filled in), and no other way of writing `status.json` for a loop job:
 
@@ -75,6 +76,9 @@ Use these commands (the job's instructions have them filled in), and no other wa
 4. On stop, `<cli> finish --project <game> <job id> --summary "<what you did>"`. The reason (`target-reached`,
    `out-of-rounds`, `plateau`, `held-back`) is the editor's, not yours.
 5. Need the user (an approval, a file to save, a busy viewport)? `<cli> status --project <game> <job id> --state needs-input --question "<what to click>"`, and ask in the terminal too. Afterwards `--state working`.
+
+The loop holds the model's size, triangle count, origin and floating pieces to what was sent. `round` prints `drift`: while it is
+not empty the round cannot reach the target, so undo that first.
 
 A reference listed in `consistency.flagged` disagrees with the other references about the object's shape: the model cannot match
 it and the others at once. Follow the others; the loop will report it as the reason it was held back.

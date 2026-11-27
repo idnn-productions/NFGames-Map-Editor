@@ -35,6 +35,7 @@ The job's current scores are in job.json (match.baseline); the overlay of each v
     `Fix what is most wrong first (the lowest views, the largest red or blue areas). When the decision says stop, finish with
   ${run.replace('<command>', 'finish')} ${id} --summary "<what you did>"
 If a view's reference disagrees with the others (match.baseline.consistency), that caps what any model can score there: do not bend the model to it; the loop will say it was held back by those references.`,
+    `The loop holds the model's size, triangle count, origin and floating pieces to what was sent. \`round\` prints \`drift\`: while it is not empty the round cannot reach the target, so undo that first.`,
   ].join('\n\n');
 }
 
