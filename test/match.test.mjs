@@ -83,10 +83,15 @@ describe('references alone: the verdict', () => {
     assert.deepEqual(verdict({ 'left-right': { outline: 0.88, colour: 0.9 } }, { outline: 0.85, copy: 0.97 }).warnings, [], 'the limits decide');
   });
   it('the references\' sizes are checked too; with no pair and too few views nothing is', () => {
-    const off = refsVerdict({ views: { front: { refExtent: [600, 200] }, back: { refExtent: [200, 100] }, left: { refExtent: [300, 200] }, top: { refExtent: [400, 300], planUp: 'up' } }, pairs: {} }, 0.05);
+    const off = refsVerdict({ ok: true, views: { front: { refExtent: [600, 200] }, back: { refExtent: [200, 100] }, left: { refExtent: [300, 200] }, top: { refExtent: [400, 300], planUp: 'up' } }, pairs: {} }, 0.05);
     assert.equal(off.checked, true); assert.deepEqual(off.consistency.flagged, ['front']); assert.match(off.warnings[0], /^front reference: its shape is/);
-    const none = refsVerdict({ views: { front: { refExtent: [400, 200] } }, pairs: {} });
+    const none = refsVerdict({ ok: true, views: { front: { refExtent: [400, 200] } }, pairs: {} });
     assert.equal(none.checked, false); assert.deepEqual(none.warnings, []); assert.deepEqual(none.notes, ['fewer than two views with a clean background: not checked']);
+  });
+  it('a result that is not ok is not checked, and says why', () => {
+    const failed = refsVerdict({ ok: false, error: 'x' });
+    assert.deepEqual([failed.checked, failed.pairs, failed.warnings, failed.notes, failed.consistency.checked], [false, {}, [], ['x'], false]);
+    for (const r of [{ ok: false }, { ok: true }, null]) assert.deepEqual(refsVerdict(r).notes, ['fewer than two views with a clean background: not checked']);
   });
 });
 

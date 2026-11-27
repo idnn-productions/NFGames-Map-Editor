@@ -130,8 +130,9 @@ export function consistency(views, tolerance = DEFAULTS.tolerance) {
 // opposite side, so a pair whose outlines (the scorer's refsOnly `pairs`) disagree shows two different shapes; one that agrees
 // in outline and colour both is likely a mirrored copy, right only for a symmetric object.
 export const REFS_LIMITS = { outline: 0.9, copy: 0.97 };
-/** { checked, pairs, consistency, warnings: [text], notes: [text] } from a refsOnly result: its pairs, and consistency() of its views. */
+/** { checked, pairs, consistency, warnings: [text], notes: [text] } from a refsOnly result: its pairs, and consistency() of its views. A result that is not ok, or has no views, is not checked: its error is the note. */
 export function refsVerdict(result, tolerance = DEFAULTS.tolerance, limits = REFS_LIMITS) {
+  if (!result || !result.ok || !result.views) return { checked: false, pairs: {}, consistency: consistency(undefined, tolerance), warnings: [], notes: [(result && typeof result.error === 'string' && result.error) || 'fewer than two views with a clean background: not checked'] };
   const pairs = (result && result.pairs) || {}, c = consistency(result && result.views, tolerance);
   const warnings = [...c.warnings], notes = [];
   for (const [name, p] of Object.entries(pairs)) {

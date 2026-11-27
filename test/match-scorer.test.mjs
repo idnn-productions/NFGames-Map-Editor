@@ -134,4 +134,13 @@ describe('the scorer in Blender', { skip: findBlender('') ? false : 'Blender is 
     assert.equal(messy.warnings.length, 1); assert.equal(messy.warnings[0].view, 'left'); assert.equal(messy.warnings[0].kind, 'background');
     assert.match(messy.warnings[0].text, /^left: the image's edge is not one flat colour/);
   });
+  it('references alone: a top and a bottom both drawn with the front toward the right agree, told with planUp', async () => {
+    const r = await refsOnly(writeRefs(join(dir, 'refs5'), { boxes: SHAPE }, ['top', 'bottom'], { colour: RED, turn: 1 }), { planUp: 'right' });
+    assert.ok(r.pairs['top-bottom'].outline > 0.95, `top-bottom ${r.pairs['top-bottom'].outline}`); assert.equal(r.views.bottom.planUp, 'right');
+  });
+  it('references alone: a reference that is not an image ends with ok: false, naming the view', async () => {
+    const d = writeRefs(join(dir, 'refs6'), { boxes: SHAPE }, ['front'], { colour: RED }); writeFileSync(join(d, 'back.png'), 'not an image');
+    const r = await refsOnly(d);
+    assert.equal(r.ok, false); assert.match(r.error, /^back: the image could not be read/);
+  });
 });

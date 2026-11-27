@@ -7,7 +7,8 @@ grid, fill, upFix, planUp, quick }. It reads the model (a GLB: glTF's frame, Y u
 orthographic reference image per view (front, back, left, right, top, bottom), and writes <result> (JSON) and, per view,
 overlay-<view>.png (the model's outline over the reference) and render-<view>.png (a textured render) into outDir.
 With { refs, outDir, result, refsOnly: true, planUp } (no model) it reads only the references and scores each pair of
-opposite views against each other (left-right, front-back, top-bottom): see "the references alone" below.
+opposite views against each other (left-right, front-back, top-bottom): see "the references alone" below. There a reference
+that cannot be read ends the run with ok: false.
 
 Views (the model seen from ...; the image's up is the model's up, except top and bottom, where it is the model's front):
   front: the front (+Z), the model's left on the image's right        back: behind, the model's right on the image's right
@@ -142,7 +143,13 @@ def combined(iou, col):
 
 REFS = {}
 for v in VIEWS:
-    px, size_px = load_ref(cfg["refs"][v]); m, how, why = ref_mask(px)
+    if not cfg.get("refsOnly"): px, size_px = load_ref(cfg["refs"][v]); m, how, why = ref_mask(px)
+    else:   # a reference alone that cannot be read ends with ok: false (Blender loads a file it cannot decode as 0 x 0 pixels)
+        try:
+            px, size_px = load_ref(cfg["refs"][v])
+            if min(size_px) <= 0: raise ValueError("Blender cannot decode it (not an image, or empty)")
+            m, how, why = ref_mask(px)
+        except Exception as e: fail(f"{v}: the image could not be read: {e}")
     REFS[v] = {"px": px, "mask": m, "background": how, "why": why, "size": size_px}
 ref_warnings = [{"view": v, "kind": "background", "text": f"{v}: {REFS[v]['why']}"} for v in VIEWS if REFS[v]["why"]]
 
@@ -151,7 +158,9 @@ def ref_extent(R):
 
 # ---------------------------------------------------------------- the references alone (refsOnly): no model is read
 # An object's outline seen from one side is the mirror image of its outline from the opposite side: each pair is scored as
-# the first view's mask against the second's mirrored left to right. A pair needs both views, each with a clean background.
+# the first view's mask against the second's mirrored: left to right, except top and bottom drawn with the front toward
+# the image's side (planUp right or left), where the quarter-turn makes it top to bottom. A pair needs both views, each with a
+# clean background.
 PAIRS = (("left", "right"), ("front", "back"), ("top", "bottom"))
 if cfg.get("refsOnly"):
     pu = cfg.get("planUp"); pu = pu if pu in ("up", "right", "down", "left") else "up"
@@ -159,7 +168,8 @@ if cfg.get("refsOnly"):
     for a, b in PAIRS:
         if a not in REFS or b not in REFS or "unclean" in (REFS[a]["background"], REFS[b]["background"]): continue
         A, B = REFS[a], REFS[b]
-        pair = normalise_pair((A["mask"], A["px"][:, :, :3]), (B["mask"][:, ::-1], B["px"][:, ::-1, :3]))
+        flip = (slice(None, None, -1), slice(None)) if a in PLAN and pu in ("right", "left") else (slice(None), slice(None, None, -1))
+        pair = normalise_pair((A["mask"], A["px"][:, :, :3]), (B["mask"][flip], B["px"][flip][:, :, :3]))
         if pair is None: iou = col = 0.0
         else:
             (am, ar), (bm, br) = pair
