@@ -1,0 +1,26 @@
+{
+  "id": "nfgames.directed-meshes",
+  "name": "Directed Meshes",
+  "version": "1.0.0",
+  "engines": { "nfgames": "^1.1.0" },
+  "server": "server.mjs",
+  "web": "web/index.js",
+  "touches": {
+    "files": ["models", "models/**"]
+  },
+  "contributes": {
+    "tools": [
+      { "id": "library", "title": "Directed Meshes", "icon": "🧱" }
+    ],
+    "commands": [
+      { "id": "browse", "title": "Directed Meshes: Browse & import" },
+      { "id": "share", "title": "Directed Meshes: Share a model" }
+    ]
+  },
+  "activation": [
+    "onTool:library",
+    "onCommand:browse",
+    "onCommand:share",
+    "onRoute"
+  ]
+}

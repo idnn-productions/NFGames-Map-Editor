@@ -18,7 +18,7 @@ class FileAnswer { constructor(path, type) { this.path = path; this.type = type;
 const FILE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.json': 'application/json', '.txt': 'text/plain; charset=utf-8' };
 const writeJson = (f, v) => { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, `${JSON.stringify(v, null, 2)}\n`); };
 
-export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir, project, jobs, events, providers = new Map(), log = () => {} }) {
+export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir, project, jobs, events, providers = new Map(), services = null, port = 0, fetchImpl = fetch, log = () => {} }) {
   let plugins = [];
   const live = new Map(), failures = new Map();
   const disabledFile = join(stateDir, 'plugins-disabled.json'), settingsFile = join(stateDir, 'plugin-settings.json');
@@ -106,7 +106,32 @@ export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir
           if (!(p.manifest.contributes?.services || []).some((s) => s.id === service && (s.actions || []).some((a) => a.id === action))) throw new Error(`${p.id}: ${service}/${action} is not declared in plugin.json`);
           providers.set(k, fn); return own(() => { if (providers.get(k) === fn) providers.delete(k); });
         },
+        call: async (key, action, input = {}) => {
+          const svc = typeof services === 'function' ? services() : services;
+          if (!svc) throw new Error('services not available');
+          const res = await svc.call(key, action, input, { confirmed: true, by: p.id });
+          if (res && res.needsConfirm) throw Object.assign(new Error(res.reason || 'confirmation required'), { code: 409, needsConfirm: true });
+          return res ? res.result : undefined;
+        },
+        setSecret: (service, name, value) => {
+          const svc = typeof services === 'function' ? services() : services;
+          if (!svc) throw new Error('services not available');
+          return svc.connect(`${p.id}/${service}`, name, value);
+        },
+        clearSecret: (service) => {
+          const svc = typeof services === 'function' ? services() : services;
+          if (!svc) throw new Error('services not available');
+          return svc.disconnect(`${p.id}/${service}`);
+        },
+        isConnected: (service) => {
+          const svc = typeof services === 'function' ? services() : services;
+          if (!svc) return false;
+          const found = svc.list().find((s) => s.key === `${p.id}/${service}`);
+          return !!(found && found.connected);
+        },
       },
+      server: { port },
+      fetch: fetchImpl,
       hooks: { on: (name, fn) => { rec.hooks.set(name, [...(rec.hooks.get(name) || []), fn]); return own(() => rec.hooks.set(name, (rec.hooks.get(name) || []).filter((f) => f !== fn))); } },
       settings: {
         get: (k) => (k in mine() ? mine()[k] : defaults[k]),

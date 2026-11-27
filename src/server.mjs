@@ -97,9 +97,10 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
   const events = createEvents();
   const dirs = { builtinDir: join(EDITOR_ROOT, 'plugins'), userDir: join(stateDir, 'plugins'), packagesDir: join(stateDir, 'packages'), ...pluginDirs };
   const providers = new Map(), vault = createVault({ stateDir, ...(securityBin !== undefined ? { securityBin } : {}) }), spend = createSpend({ stateDir });
-  const makePlugins = () => createPluginManager({ ...dirs, stateDir, project, jobs, events, providers, log: (...a) => console.error('plugins:', ...a) });
+  let services;
+  const makePlugins = () => createPluginManager({ ...dirs, stateDir, project, jobs, events, providers, services: () => services, port, fetchImpl, log: (...a) => console.error('plugins:', ...a) });
   let plugins = makePlugins();
-  const services = createServices({ listPlugins: () => plugins.list(), activate: (id) => plugins.activate(id), providers, vault, spend, events });
+  services = createServices({ listPlugins: () => plugins.list(), activate: (id) => plugins.activate(id), providers, vault, spend, events });
   const requestLoop = () => createRequestLoop({ reviewsDir: project.reviewsDir, services, events, interval: requestInterval, agentConnected: () => agentStatus(project.reviewsDir).connected });
   let requests = requestLoop();
   const ready = plugins.fire('onStartup', 'onProject');
@@ -148,6 +149,20 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
         if (m) { let rest; try { rest = decodeURIComponent(m[2]); } catch { rest = ''; } const f = rest.includes('\0') ? null : plugins.asset(m[1], rest); return f ? send(200, readFileSync(f), TYPES[extname(f)] || 'application/octet-stream') : send(404, { error: 'not here' }); } }
       if (req.method === 'GET' && path === '/api/maps') return send(200, { maps: project.listMaps(), default: fallback() });
       if (req.method === 'GET' && path === '/api/job') { const job = jobs.current(), from = Math.max(0, Number(url.searchParams.get('from')) || 0); return send(200, job ? { ...job, log: job.log.slice(from), next: job.log.length } : { state: 'idle', log: '', next: 0 }); }
+      if (req.method === 'POST' && path === '/directed/callback') {
+        const parts = []; let size = 0;
+        for await (const part of req) { size += part.length; if (size > 16384) { req.resume(); return send(413, 'Payload too large', 'text/plain; charset=utf-8'); } parts.push(part); }
+        const raw = Buffer.concat(parts).toString('utf8');
+        const ct = String(req.headers['content-type'] || '');
+        const parsed = ct.includes('application/json') ? JSON.parse(raw || '{}') : Object.fromEntries(new URLSearchParams(raw));
+        const r = await plugins.route('nfgames.directed-connect', 'POST', 'callback', req, res, () => parsed);
+        const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        if (r.status === 200) {
+          const who = esc(r.body?.user?.display_name || r.body?.user?.login || 'Directed');
+          return send(200, `<!doctype html><meta charset="utf-8"><title>Connected to Directed</title><style>body{font:16px/1.5 system-ui,sans-serif;background:#0d1117;color:#eef2f7;display:grid;place-items:center;min-height:100vh;margin:0}main{max-width:28rem;padding:2rem;border:1px solid #2c3542;border-radius:10px;background:#141a23}a{color:#5b9dff}</style><main><h1>Connected as ${who}</h1><p>Your NFGames Map Editor is now linked to your Directed Games account. You can close this tab and return to the editor.</p><p><a href="/">Open NFGames Map Editor</a></p></main>`, 'text/html; charset=utf-8');
+        }
+        return send(r.status, `<!doctype html><meta charset="utf-8"><title>Connection failed</title><style>body{font:16px/1.5 system-ui,sans-serif;background:#0d1117;color:#eef2f7;display:grid;place-items:center;min-height:100vh;margin:0}main{max-width:28rem;padding:2rem;border:1px solid #2c3542;border-radius:10px;background:#141a23}</style><main><h1>Could not connect</h1><p>${esc(r.body?.error || 'Authorization failed.')}</p></main>`, 'text/html; charset=utf-8');
+      }
       if (!path.startsWith('/api/')) return send(404, { error: 'not here' });
       if (req.method !== 'GET' && req.method !== 'POST') return send(405, { error: 'GET or POST' });
       if (req.method === 'POST' && !writeAllowed(req.headers, port)) return send(403, { error: 'a write must come from this page, as JSON' });

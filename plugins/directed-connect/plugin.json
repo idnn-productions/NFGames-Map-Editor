@@ -1,0 +1,57 @@
+{
+  "id": "nfgames.directed-connect",
+  "name": "Directed Games Account",
+  "version": "1.0.0",
+  "engines": { "nfgames": "^1.1.0" },
+  "server": "server.mjs",
+  "web": "web/index.js",
+  "touches": {
+    "network": true
+  },
+  "contributes": {
+    "statusItems": [
+      { "id": "account", "title": "Directed Games Account" }
+    ],
+    "commands": [
+      { "id": "connect", "title": "Directed: Connect account" },
+      { "id": "disconnect", "title": "Directed: Disconnect account" }
+    ],
+    "settings": {
+      "siteUrl": {
+        "type": "string",
+        "default": "https://directedgames.com",
+        "title": "Directed Games URL"
+      }
+    },
+    "services": [
+      {
+        "id": "account",
+        "title": "Directed Games",
+        "summary": "Connect your Directed account to share and 1-click import curated 3D meshes",
+        "provider": "directedgames.com",
+        "needs": [
+          {
+            "kind": "key",
+            "name": "DIRECTED_TOKEN",
+            "help": "Connect from the status bar or paste the connection code from directedgames.com/account/connect/"
+          }
+        ],
+        "actions": [
+          { "id": "status", "title": "Check account connection", "cost": { "estimate": 0, "note": "free" } },
+          { "id": "listMeshes", "title": "List community meshes", "cost": { "estimate": 0, "note": "free" } },
+          { "id": "getMesh", "title": "Get mesh details", "cost": { "estimate": 0, "note": "free" } },
+          { "id": "uploadMesh", "title": "Share mesh to Directed", "cost": { "estimate": 0, "note": "free" } },
+          { "id": "downloadMesh", "title": "Download curated mesh", "cost": { "estimate": 0, "note": "free" } },
+          { "id": "downloadRef", "title": "Download mesh reference image", "cost": { "estimate": 0, "note": "free" } }
+        ]
+      }
+    ]
+  },
+  "activation": [
+    "onStartup",
+    "onRoute",
+    "onCommand:connect",
+    "onCommand:disconnect",
+    "onService:account"
+  ]
+}
