@@ -6,6 +6,8 @@ args.json is written by the editor (never by hand): { model, refs: {view: path},
 grid, fill, upFix, planUp, quick }. It reads the model (a GLB: glTF's frame, Y up, the front toward +Z) and one
 orthographic reference image per view (front, back, left, right, top, bottom), and writes <result> (JSON) and, per view,
 overlay-<view>.png (the model's outline over the reference) and render-<view>.png (a textured render) into outDir.
+With { refs, outDir, result, refsOnly: true, planUp } (no model) it reads only the references and scores each pair of
+opposite views against each other (left-right, front-back, top-bottom): see "the references alone" below.
 
 Views (the model seen from ...; the image's up is the model's up, except top and bottom, where it is the model's front):
   front: the front (+Z), the model's left on the image's right        back: behind, the model's right on the image's right
@@ -48,8 +50,128 @@ def finish(res):
 def fail(text):
     finish({"ok": False, "error": text})
 
-# ---------------------------------------------------------------- the model
 bpy.ops.wm.read_factory_settings(use_empty=True)
+
+# ---------------------------------------------------------------- the references
+def pixels(im, w, h):
+    a = np.empty(w * h * 4, np.float32); im.pixels.foreach_get(a)
+    return a.reshape(h, w, 4)[::-1]
+
+def load_ref(path):
+    im = bpy.data.images.load(path); w, h = im.size
+    px = pixels(im, w, h).copy(); bpy.data.images.remove(im)
+    step = max(1, max(w, h) // REF_MAX)
+    return px[::step, ::step], [w, h]
+
+def ref_mask(px):
+    """The object's silhouette in a reference, and how its background was found: 'alpha', 'flat', or 'unclean' with why."""
+    h, w = px.shape[:2]; rgb, a = px[:, :, :3], px[:, :, 3]
+    ring = np.zeros((h, w), bool); r = max(2, min(h, w) // 100); ring[:r] = ring[-r:] = True; ring[:, :r] = ring[:, -r:] = True
+    if (a[ring] < 0.1).mean() > 0.9 and (a > 0.5).any():
+        m = a > 0.5
+        return m, "alpha", None
+    bg = np.median(rgb[ring], 0); dist = np.abs(rgb - bg).max(2)
+    spread = float(np.percentile(dist[ring], 95))
+    tol = max(0.035, min(0.12, spread * 1.5)); bgl = dist < tol
+    reach = np.zeros_like(bgl); reach[:r] = bgl[:r]; reach[-r:] = bgl[-r:]; reach[:, :r] = bgl[:, :r]; reach[:, -r:] = bgl[:, -r:]
+    while True:
+        g = reach.copy(); g[1:] |= reach[:-1]; g[:-1] |= reach[1:]; g[:, 1:] |= reach[:, :-1]; g[:, :-1] |= reach[:, 1:]
+        g &= bgl
+        if (g == reach).all(): break
+        reach = g
+    m = ~reach; cover = float(m.mean()); why = None
+    if spread > 0.12: why = "the image's edge is not one flat colour (a gradient, a photo or a scene), so the background cannot be told from the object"
+    elif cover > 0.85: why = "the background fills almost none of the image, so the object's outline is not clear"
+    elif cover < 0.005: why = "no object was found: the image is one flat colour"
+    return m, ("unclean" if why else "flat"), why
+
+def box(a, r):
+    """A box blur of a 2D or 3D array, radius r (edges repeated)."""
+    k = 2 * r + 1; p = np.pad(a, [(r, r), (r, r)] + [(0, 0)] * (a.ndim - 2), mode='edge')
+    c = np.cumsum(p, 0); c = np.concatenate([np.zeros_like(c[:1]), c], 0); v = (c[k:] - c[:-k])
+    c = np.cumsum(v, 1); c = np.concatenate([np.zeros_like(c[:, :1]), c], 1); return (c[:, k:] - c[:, :-k]) / (k * k)
+
+def crop(mask, rgb):
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0: return None
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    return mask[y0:y1, x0:x1], rgb[y0:y1, x0:x1, :3]
+
+def fit(c, width):
+    """A crop scaled so it is `width` pixels wide (aspect kept) and centred on the canvas."""
+    m, rgb = c; h, w = m.shape; k = width / w; nh, nw = max(1, round(h * k)), max(1, round(w * k))
+    yi = np.minimum((np.arange(nh) / k).astype(int), h - 1); xi = np.minimum((np.arange(nw) / k).astype(int), w - 1)
+    cm = np.zeros((GRID, GRID), bool); cr = np.zeros((GRID, GRID, 3), np.float32)
+    oy, ox = (GRID - nh) // 2, (GRID - nw) // 2
+    ya, yb, xa, xb = max(0, oy), min(GRID, oy + nh), max(0, ox), min(GRID, ox + nw)
+    cm[ya:yb, xa:xb] = m[yi][:, xi][ya - oy:yb - oy, xa - ox:xb - ox]; cr[ya:yb, xa:xb] = rgb[yi][:, xi][ya - oy:yb - oy, xa - ox:xb - ox]
+    return cm, cr
+
+def normalise_pair(a, b):
+    """Two silhouettes (with their colours) cropped to their bounding boxes and scaled to the same width, aspect kept, so
+    framing and scale do not count. The width is FILL of the canvas, or less when either is taller than wide, so both fit."""
+    ca, cb = crop(*a), crop(*b)
+    if ca is None or cb is None: return None
+    tall = max(1.0, ca[0].shape[0] / ca[0].shape[1], cb[0].shape[0] / cb[0].shape[1])
+    width = FILL * GRID / tall
+    return fit(ca, width), fit(cb, width)
+
+def erode(m, n=1):
+    for _ in range(n):
+        e = m.copy(); e[1:] &= m[:-1]; e[:-1] &= m[1:]; e[:, 1:] &= m[:, :-1]; e[:, :-1] &= m[:, 1:]; m = e
+    return m
+
+def colour_score(am, ar, bm, br):
+    """1 minus the colour distance inside the overlap, over FALLOFF. References are shaded (lit, painted) and the model is drawn flat, so
+    lighting must not count as a wrong colour: the distance is mostly the chromaticity (the colour with its brightness taken out),
+    plus the lightness after each image's overall exposure is matched."""
+    ov = erode(am & bm, 2)
+    if ov.sum() < 30: return 0.0
+    fa = box(ar * am[..., None], 2) / np.maximum(box(am.astype(np.float32), 2), 1e-3)[..., None]
+    fb = box(br * bm[..., None], 2) / np.maximum(box(bm.astype(np.float32), 2), 1e-3)[..., None]
+    ca = fa / (fa.sum(2, keepdims=True) + 1e-3); cb = fb / (fb.sum(2, keepdims=True) + 1e-3)
+    chroma = 0.5 * np.abs(ca - cb).sum(2)
+    la, lb = fa.mean(2), fb.mean(2); la = la / max(la[ov].mean(), 1e-3); lb = lb / max(lb[ov].mean(), 1e-3)
+    light = np.clip(np.abs(la - lb) / 2, 0, 1)
+    d = 0.75 * chroma + 0.25 * light
+    return float(np.clip(1 - d[ov].mean() / FALLOFF, 0, 1))
+
+def combined(iou, col):
+    ws, wc = float(W.get("silhouette", 0.6)), float(W.get("colour", 0.4)); t = ws + wc
+    return (ws * iou + wc * col) / t if t > 0 else iou
+
+REFS = {}
+for v in VIEWS:
+    px, size_px = load_ref(cfg["refs"][v]); m, how, why = ref_mask(px)
+    REFS[v] = {"px": px, "mask": m, "background": how, "why": why, "size": size_px}
+ref_warnings = [{"view": v, "kind": "background", "text": f"{v}: {REFS[v]['why']}"} for v in VIEWS if REFS[v]["why"]]
+
+def ref_extent(R):
+    c = crop(R["mask"], R["px"]); return None if c is None else list(c[0].shape[::-1])
+
+# ---------------------------------------------------------------- the references alone (refsOnly): no model is read
+# An object's outline seen from one side is the mirror image of its outline from the opposite side: each pair is scored as
+# the first view's mask against the second's mirrored left to right. A pair needs both views, each with a clean background.
+PAIRS = (("left", "right"), ("front", "back"), ("top", "bottom"))
+if cfg.get("refsOnly"):
+    pu = cfg.get("planUp"); pu = pu if pu in ("up", "right", "down", "left") else "up"
+    pairs = {}
+    for a, b in PAIRS:
+        if a not in REFS or b not in REFS or "unclean" in (REFS[a]["background"], REFS[b]["background"]): continue
+        A, B = REFS[a], REFS[b]
+        pair = normalise_pair((A["mask"], A["px"][:, :, :3]), (B["mask"][:, ::-1], B["px"][:, ::-1, :3]))
+        if pair is None: iou = col = 0.0
+        else:
+            (am, ar), (bm, br) = pair
+            iou = float((am & bm).sum() / max(1, (am | bm).sum())); col = colour_score(am, ar, bm, br)
+        pairs[f"{a}-{b}"] = {"outline": round(iou, 4), "colour": round(col, 4)}
+    finish({
+        "ok": True, "refsOnly": True,
+        "views": {v: {"background": REFS[v]["background"], "refSize": REFS[v]["size"], "refExtent": ref_extent(REFS[v]), "planUp": pu if v in PLAN else None} for v in VIEWS},
+        "pairs": pairs, "warnings": ref_warnings, "seconds": round(time.time() - t0, 1),
+    })
+
+# ---------------------------------------------------------------- the model
 sc = bpy.context.scene
 try:
     bpy.ops.import_scene.gltf(filepath=cfg["model"])
@@ -181,10 +303,6 @@ def setup(mode):
     sc.view_settings.view_transform = 'Standard'; sc.view_settings.look = 'None'; sc.display_settings.display_device = 'sRGB'
     sc.render.image_settings.file_format = 'PNG'; sc.render.image_settings.color_mode = 'RGBA'; sc.render.image_settings.color_depth = '8'
 
-def pixels(im, w, h):
-    a = np.empty(w * h * 4, np.float32); im.pixels.foreach_get(a)
-    return a.reshape(h, w, 4)[::-1]
-
 def render(view, mode, res, bounds, path=None, up=None):
     setup(mode); right, up2 = aim(view, up)
     lo, hi = bounds; ext = hi - lo
@@ -202,95 +320,6 @@ def save_png(arr, path):
     im = bpy.data.images.new("out", w, h, alpha=True)
     im.pixels.foreach_set(np.ascontiguousarray(rgba[::-1]).ravel()); im.filepath_raw = path; im.file_format = 'PNG'; im.save()
     bpy.data.images.remove(im)
-
-# ---------------------------------------------------------------- the references
-def load_ref(path):
-    im = bpy.data.images.load(path); w, h = im.size
-    px = pixels(im, w, h).copy(); bpy.data.images.remove(im)
-    step = max(1, max(w, h) // REF_MAX)
-    return px[::step, ::step], [w, h]
-
-def ref_mask(px):
-    """The object's silhouette in a reference, and how its background was found: 'alpha', 'flat', or 'unclean' with why."""
-    h, w = px.shape[:2]; rgb, a = px[:, :, :3], px[:, :, 3]
-    ring = np.zeros((h, w), bool); r = max(2, min(h, w) // 100); ring[:r] = ring[-r:] = True; ring[:, :r] = ring[:, -r:] = True
-    if (a[ring] < 0.1).mean() > 0.9 and (a > 0.5).any():
-        m = a > 0.5
-        return m, "alpha", None
-    bg = np.median(rgb[ring], 0); dist = np.abs(rgb - bg).max(2)
-    spread = float(np.percentile(dist[ring], 95))
-    tol = max(0.035, min(0.12, spread * 1.5)); bgl = dist < tol
-    reach = np.zeros_like(bgl); reach[:r] = bgl[:r]; reach[-r:] = bgl[-r:]; reach[:, :r] = bgl[:, :r]; reach[:, -r:] = bgl[:, -r:]
-    while True:
-        g = reach.copy(); g[1:] |= reach[:-1]; g[:-1] |= reach[1:]; g[:, 1:] |= reach[:, :-1]; g[:, :-1] |= reach[:, 1:]
-        g &= bgl
-        if (g == reach).all(): break
-        reach = g
-    m = ~reach; cover = float(m.mean()); why = None
-    if spread > 0.12: why = "the image's edge is not one flat colour (a gradient, a photo or a scene), so the background cannot be told from the object"
-    elif cover > 0.85: why = "the background fills almost none of the image, so the object's outline is not clear"
-    elif cover < 0.005: why = "no object was found: the image is one flat colour"
-    return m, ("unclean" if why else "flat"), why
-
-def box(a, r):
-    """A box blur of a 2D or 3D array, radius r (edges repeated)."""
-    k = 2 * r + 1; p = np.pad(a, [(r, r), (r, r)] + [(0, 0)] * (a.ndim - 2), mode='edge')
-    c = np.cumsum(p, 0); c = np.concatenate([np.zeros_like(c[:1]), c], 0); v = (c[k:] - c[:-k])
-    c = np.cumsum(v, 1); c = np.concatenate([np.zeros_like(c[:, :1]), c], 1); return (c[:, k:] - c[:, :-k]) / (k * k)
-
-def crop(mask, rgb):
-    ys, xs = np.nonzero(mask)
-    if len(xs) == 0: return None
-    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
-    return mask[y0:y1, x0:x1], rgb[y0:y1, x0:x1, :3]
-
-def fit(c, width):
-    """A crop scaled so it is `width` pixels wide (aspect kept) and centred on the canvas."""
-    m, rgb = c; h, w = m.shape; k = width / w; nh, nw = max(1, round(h * k)), max(1, round(w * k))
-    yi = np.minimum((np.arange(nh) / k).astype(int), h - 1); xi = np.minimum((np.arange(nw) / k).astype(int), w - 1)
-    cm = np.zeros((GRID, GRID), bool); cr = np.zeros((GRID, GRID, 3), np.float32)
-    oy, ox = (GRID - nh) // 2, (GRID - nw) // 2
-    ya, yb, xa, xb = max(0, oy), min(GRID, oy + nh), max(0, ox), min(GRID, ox + nw)
-    cm[ya:yb, xa:xb] = m[yi][:, xi][ya - oy:yb - oy, xa - ox:xb - ox]; cr[ya:yb, xa:xb] = rgb[yi][:, xi][ya - oy:yb - oy, xa - ox:xb - ox]
-    return cm, cr
-
-def normalise_pair(a, b):
-    """Two silhouettes (with their colours) cropped to their bounding boxes and scaled to the same width, aspect kept, so
-    framing and scale do not count. The width is FILL of the canvas, or less when either is taller than wide, so both fit."""
-    ca, cb = crop(*a), crop(*b)
-    if ca is None or cb is None: return None
-    tall = max(1.0, ca[0].shape[0] / ca[0].shape[1], cb[0].shape[0] / cb[0].shape[1])
-    width = FILL * GRID / tall
-    return fit(ca, width), fit(cb, width)
-
-def erode(m, n=1):
-    for _ in range(n):
-        e = m.copy(); e[1:] &= m[:-1]; e[:-1] &= m[1:]; e[:, 1:] &= m[:, :-1]; e[:, :-1] &= m[:, 1:]; m = e
-    return m
-
-def colour_score(am, ar, bm, br):
-    """1 minus the colour distance inside the overlap, over FALLOFF. References are shaded (lit, painted) and the model is drawn flat, so
-    lighting must not count as a wrong colour: the distance is mostly the chromaticity (the colour with its brightness taken out),
-    plus the lightness after each image's overall exposure is matched."""
-    ov = erode(am & bm, 2)
-    if ov.sum() < 30: return 0.0
-    fa = box(ar * am[..., None], 2) / np.maximum(box(am.astype(np.float32), 2), 1e-3)[..., None]
-    fb = box(br * bm[..., None], 2) / np.maximum(box(bm.astype(np.float32), 2), 1e-3)[..., None]
-    ca = fa / (fa.sum(2, keepdims=True) + 1e-3); cb = fb / (fb.sum(2, keepdims=True) + 1e-3)
-    chroma = 0.5 * np.abs(ca - cb).sum(2)
-    la, lb = fa.mean(2), fb.mean(2); la = la / max(la[ov].mean(), 1e-3); lb = lb / max(lb[ov].mean(), 1e-3)
-    light = np.clip(np.abs(la - lb) / 2, 0, 1)
-    d = 0.75 * chroma + 0.25 * light
-    return float(np.clip(1 - d[ov].mean() / FALLOFF, 0, 1))
-
-def combined(iou, col):
-    ws, wc = float(W.get("silhouette", 0.6)), float(W.get("colour", 0.4)); t = ws + wc
-    return (ws * iou + wc * col) / t if t > 0 else iou
-
-REFS = {}
-for v in VIEWS:
-    px, size_px = load_ref(cfg["refs"][v]); m, how, why = ref_mask(px)
-    REFS[v] = {"px": px, "mask": m, "background": how, "why": why, "size": size_px}
 
 def plan_choices(view):
     p = cfg.get("planUp", "auto")
@@ -326,7 +355,7 @@ for o in cands:
 bi = max(range(len(cands)), key=lambda i: (tried[i]["mean"], -i))
 best = cands[bi]; bounds = orient(best)
 
-res_views = {}; warnings = []
+res_views = {}; warnings = ref_warnings
 for v in VIEWS:
     n += 1; progress(n, total, f"scoring {v}")
     s = score_view(v, bounds, FINAL_RES); mm = s.pop("mask"); R = REFS[v]
@@ -354,7 +383,6 @@ for v in VIEWS:
         "background": R["background"], "refSize": R["size"], "refExtent": s["refExtent"], "modelExtent": s["modelExtent"],
         "planUp": s["planUp"], "overlay": f"overlay-{v}.png", "render": f"render-{v}.png",
     }
-    if R["why"]: warnings.append({"view": v, "kind": "background", "text": f"{v}: {R['why']}"})
 
 def mean(key): return round(sum(res_views[v][key] for v in VIEWS) / len(VIEWS), 4)
 finish({

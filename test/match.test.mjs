@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
-import { SCORER, consistency, createMatcher, decide, drift, normaliseLoop, normaliseMatch, scoredViews, blenderMissing, DEFAULTS } from '../src/match.mjs';
+import { SCORER, consistency, createMatcher, decide, drift, normaliseLoop, normaliseMatch, refsVerdict, scoredViews, blenderMissing, DEFAULTS, REFS_LIMITS } from '../src/match.mjs';
 import { createReview, listReviews } from '../src/reviews.mjs';
 import { finishLoop, openJob, recordRound, setStatus, startLoop } from '../src/matchloop.mjs';
 import { sampleCopy, makeGlb, PNG_1PX, dataBytes } from './helpers.mjs';
@@ -64,6 +64,29 @@ describe('reference consistency', () => {
     const three = consistency({ front: { refExtent: [600, 200] }, left: sound.left, top: sound.top }, 0.05);
     assert.equal(three.checked, true); assert.equal(three.ambiguous, true); assert.deepEqual(three.flagged, ['front']);      // any of the three could be the odd one: the sides and the top are trusted
     assert.equal(consistency({ front: { refExtent: [0, 5] }, left: sound.left, top: sound.top }).checked, false);
+  });
+});
+
+describe('references alone: the verdict', () => {
+  const views = { left: { refExtent: [300, 200] }, right: { refExtent: [150, 100] } };
+  const verdict = (pairs, limits) => refsVerdict({ ok: true, refsOnly: true, views, pairs, warnings: [] }, undefined, limits);
+  it('opposite views whose outlines disagree are named; a pair that is a mirrored copy is noted', () => {
+    assert.deepEqual(REFS_LIMITS, { outline: 0.9, copy: 0.97 });
+    const low = verdict({ 'left-right': { outline: 0.71, colour: 0.9 } });
+    assert.equal(low.checked, true); assert.deepEqual(low.notes, []);
+    assert.deepEqual(low.warnings, ['left and right: their outlines agree 0.71 (below 0.9): they show two different shapes']);
+    assert.deepEqual(verdict({ 'front-back': { outline: 0.88, colour: 0.9 } }).warnings, ['front and back: their outlines agree 0.88 (below 0.9): they show two different shapes']);
+    const copy = verdict({ 'top-bottom': { outline: 0.99, colour: 0.99 } });
+    assert.deepEqual(copy.warnings, []); assert.deepEqual(copy.notes, ['bottom looks like a mirrored copy of top: right for a symmetric object; redraw one if it has one-sided details']);
+    const fine = verdict({ 'left-right': { outline: 0.93, colour: 0.6 } });
+    assert.deepEqual([fine.warnings, fine.notes], [[], []]);
+    assert.deepEqual(verdict({ 'left-right': { outline: 0.88, colour: 0.9 } }, { outline: 0.85, copy: 0.97 }).warnings, [], 'the limits decide');
+  });
+  it('the references\' sizes are checked too; with no pair and too few views nothing is', () => {
+    const off = refsVerdict({ views: { front: { refExtent: [600, 200] }, back: { refExtent: [200, 100] }, left: { refExtent: [300, 200] }, top: { refExtent: [400, 300], planUp: 'up' } }, pairs: {} }, 0.05);
+    assert.equal(off.checked, true); assert.deepEqual(off.consistency.flagged, ['front']); assert.match(off.warnings[0], /^front reference: its shape is/);
+    const none = refsVerdict({ views: { front: { refExtent: [400, 200] } }, pairs: {} });
+    assert.equal(none.checked, false); assert.deepEqual(none.warnings, []); assert.deepEqual(none.notes, ['fewer than two views with a clean background: not checked']);
   });
 });
 

@@ -126,6 +126,24 @@ export function consistency(views, tolerance = DEFAULTS.tolerance) {
   return { checked: true, flagged, views: out, warnings, ambiguous: tied.length > 1 };
 }
 
+// ---- the references alone, before any model: an outline seen from one side is the mirror image of the outline from the
+// opposite side, so a pair whose outlines (the scorer's refsOnly `pairs`) disagree shows two different shapes; one that agrees
+// in outline and colour both is likely a mirrored copy, right only for a symmetric object.
+export const REFS_LIMITS = { outline: 0.9, copy: 0.97 };
+/** { checked, pairs, consistency, warnings: [text], notes: [text] } from a refsOnly result: its pairs, and consistency() of its views. */
+export function refsVerdict(result, tolerance = DEFAULTS.tolerance, limits = REFS_LIMITS) {
+  const pairs = (result && result.pairs) || {}, c = consistency(result && result.views, tolerance);
+  const warnings = [...c.warnings], notes = [];
+  for (const [name, p] of Object.entries(pairs)) {
+    const [a, b] = name.split('-');
+    if (p.outline < limits.outline) warnings.push(`${a} and ${b}: their outlines agree ${p.outline.toFixed(2)} (below ${limits.outline}): they show two different shapes`);
+    if (p.outline >= limits.copy && p.colour >= limits.copy) notes.push(`${b} looks like a mirrored copy of ${a}: right for a symmetric object; redraw one if it has one-sided details`);
+  }
+  const checked = Object.keys(pairs).length > 0 || c.checked;
+  if (!checked) notes.push('fewer than two views with a clean background: not checked');
+  return { checked, pairs, consistency: c, warnings, notes };
+}
+
 // ---- what must stay as it was sent
 // The score ignores scale and framing, so a model could reach the target by being made bigger, heavier, moved off its origin
 // or broken into floating pieces. Each of those is held to round 0's shape (the scorer's `shape`), by its own limit.

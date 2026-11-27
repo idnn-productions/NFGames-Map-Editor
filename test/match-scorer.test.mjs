@@ -3,11 +3,12 @@
 // search must recover, references with a transparent or an unclean background, and a reference that disagrees with the rest.
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
-import { createMatcher } from '../src/match.mjs';
+import { SCORER, VIEWS, createMatcher } from '../src/match.mjs';
 import { findBlender } from '../src/blender.mjs';
 import { boxesGlb, linear, manyBoxesGlb, sphereGlb, turnedBoxes, writeRefs } from './match-fixtures.mjs';
 
@@ -28,6 +29,17 @@ describe('the scorer in Blender', { skip: findBlender('') ? false : 'Blender is 
     return (await createMatcher(project).start('thing.glb').done).result;
   }
   const mean = (r) => r.mean.silhouette;
+  /** The scorer on the references in `refs` alone (<view>.png), run as createMatcher runs it: a fixed command, one settings file. */
+  function refsOnly(refs, extra = {}) {
+    const out = join(dir, `r${++n}`); mkdirSync(out, { recursive: true });
+    const args = join(out, 'args.json'), result = join(out, 'result.json');
+    const files = Object.fromEntries(VIEWS.filter((v) => existsSync(join(refs, `${v}.png`))).map((v) => [v, join(refs, `${v}.png`)]));
+    writeFileSync(args, JSON.stringify({ refs: files, outDir: out, result, refsOnly: true, planUp: 'auto', ...extra }));
+    return new Promise((ok, no) => {
+      const child = spawn(findBlender(''), ['-b', '--factory-startup', '--python', SCORER, '--', args], { shell: false, stdio: 'ignore' });
+      child.on('error', no); child.on('close', () => { try { ok(JSON.parse(readFileSync(result, 'utf8'))); } catch (e) { no(e); } });
+    });
+  }
 
   it('a sphere matches a circle in every view, and its colour is what tells a red one from a grey one', async () => {
     const shape = { sphere: 1 }, refs = (d) => writeRefs(d, shape, ['front', 'left', 'top'], { colour: RED });
@@ -99,5 +111,27 @@ describe('the scorer in Blender', { skip: findBlender('') ? false : 'Blender is 
   it('a mesh in hundreds of pieces is still scored, and its floating pieces are not counted', async () => {
     const r = await score(manyBoxesGlb(600), (d) => writeRefs(d, { boxes: BOX }, ['front', 'left', 'top'], { colour: RED }));
     assert.equal(r.shape.pieces, 600); assert.equal(r.shape.floating, null);
+  });
+  it('references alone: opposite views of one shape agree, a pair that does not is found', async () => {
+    const d = join(dir, 'refs1'); writeRefs(d, { boxes: SHAPE }, ['front', 'back', 'left', 'right', 'top', 'bottom'], { colour: RED });
+    const same = await refsOnly(d);
+    assert.equal(same.ok, true); assert.equal(same.refsOnly, true);
+    for (const p of ['left-right', 'front-back', 'top-bottom']) assert.ok(same.pairs[p].outline > 0.95, `${p} ${same.pairs[p].outline}`);
+    assert.deepEqual(Object.keys(same.pairs), ['left-right', 'front-back', 'top-bottom']);
+    assert.equal(same.views.top.planUp, 'up'); assert.equal(same.views.front.planUp, null); assert.equal(same.views.front.background, 'flat');
+    assert.equal(same.views.front.refExtent.length, 2); assert.deepEqual(same.views.front.refSize, [192, 192]); assert.deepEqual(same.warnings, []);
+    const e = join(dir, 'refs2'); writeRefs(e, { boxes: SHAPE }, ['front', 'left'], { colour: RED }); writeRefs(join(e, 'x'), { boxes: BOX }, ['right'], { colour: RED });
+    copyFileSync(join(e, 'x', 'right.png'), join(e, 'right.png'));
+    const other = await refsOnly(e);
+    assert.ok(other.pairs['left-right'].outline < 0.9, `left-right ${other.pairs['left-right'].outline}`);
+    assert.deepEqual(Object.keys(other.pairs), ['left-right']);            // front has no back
+  });
+  it('references alone: one view, or an unclean background, is not a pair', async () => {
+    const one = await refsOnly(writeRefs(join(dir, 'refs3'), { boxes: SHAPE }, ['front'], { colour: RED }));
+    assert.equal(one.ok, true); assert.deepEqual(one.pairs, {}); assert.deepEqual(Object.keys(one.views), ['front']);
+    const messy = await refsOnly(writeRefs(join(dir, 'refs4'), { boxes: SHAPE }, ['front', 'back', 'left', 'right'], { colour: RED }, { left: { gradient: true } }));
+    assert.deepEqual(Object.keys(messy.pairs), ['front-back']); assert.equal(messy.views.left.background, 'unclean');
+    assert.equal(messy.warnings.length, 1); assert.equal(messy.warnings[0].view, 'left'); assert.equal(messy.warnings[0].kind, 'background');
+    assert.match(messy.warnings[0].text, /^left: the image's edge is not one flat colour/);
   });
 });
