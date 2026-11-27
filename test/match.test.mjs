@@ -277,6 +277,8 @@ describe('the scorer\'s wrapper', () => {
     await matcher.start('ships/cruiser.glb').done;
     const again = matcher.start('ships/cruiser.glb'); assert.equal(again.started, false); await again.done; assert.equal(fake.calls.length, 1);
     assert.equal(matcher.status('ships/cruiser.glb').state, 'done');
+    const old = matcher.status('ships/cruiser.glb'), now = matcher.status('models/ships/cruiser.glb');   // one model, by either path
+    assert.equal(old.key, now.key); assert.deepEqual(old.references, now.references); assert.equal(now.state, 'done');
     writeFileSync(join(copy.root, 'models', 'ships', 'cruiser.glb'), Buffer.concat([makeGlb(), Buffer.alloc(4)]));        // the model changed
     assert.equal(matcher.status('ships/cruiser.glb').state, 'idle');
     await matcher.start('ships/cruiser.glb').done; assert.equal(fake.calls.length, 2);

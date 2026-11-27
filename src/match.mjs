@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BLENDER_DOWNLOAD, findBlender } from './blender.mjs';
-import { modelRefs, resolveModel } from './models.mjs';
+import { modelRefs } from './models.mjs';
 
 export const SCORER = join(dirname(fileURLToPath(import.meta.url)), 'match', 'score.py');
 export const SCORER_VERSION = 2;
@@ -292,9 +292,10 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
   const memo = new Map();                 // model path -> { stamp, key } : hashing a 25 MB model on every poll would be a waste
 
   function plan(rel) {
-    const file = resolveModel(project.modelsDir, rel);
+    const asset = project.resolveAsset(rel), file = asset && asset.file;
     if (!file) bad('no such model');
-    const refs = modelRefs(project.modelsDir, rel), named = scoredViews(refs), views = Object.keys(named);
+    rel = asset.path;                    // the model's path as the viewer lists it: one memo, one result, whatever path asked
+    const refs = modelRefs(project.assetsDir, rel), named = scoredViews(refs), views = Object.keys(named);
     const stamp = [statSync(file).mtimeMs, statSync(file).size, ...refs.map((r) => `${r.name}:${r.size}:${r.mtime}`)].join('|');
     let m = memo.get(rel);
     if (!m || m.stamp !== stamp) {
@@ -302,13 +303,13 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
       const key = createHash('sha256').update(JSON.stringify({ v: SCORER_VERSION, scorer: sha(SCORER), model: sha(file), refs: Object.fromEntries(views.map((v) => [v, sha(files[v])])), config: { ...config, limits: undefined } })).digest('hex').slice(0, 32);
       m = { stamp, key, files }; memo.set(rel, m);
     }
-    return { file, refs, views, named, files: m.files, key: m.key, dir: join(root, m.key) };
+    return { path: rel, file, refs, views, named, files: m.files, key: m.key, dir: join(root, m.key) };
   }
   const readResult = (dir) => { try { return JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8')); } catch { return null; } };
 
   /** What the page shows for a model: its scoreable views, whether Blender is there, the cached result, any run. */
   function status(rel) {
-    const p = plan(rel), blender = findBlender(project.options.blender);
+    const p = plan(rel), blender = findBlender(project.options.blender); rel = p.path;
     const out = { views: p.views, references: p.refs.map((r) => r.name), blender: blender ? { found: true } : { found: false, text: blenderMissing(project.options.blender) }, key: p.key, config: { weights: config.weights, upFix: config.upFix, planUp: config.planUp, tolerance: config.tolerance } };
     if (run && run.path === rel && run.state === 'running') return { ...out, state: 'running', progress: { done: run.done, total: run.total, text: run.text }, startedAt: run.startedAt };
     const cached = readResult(p.dir);
@@ -321,7 +322,7 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
 
   /** Starts scoring `rel` in the background. Resolves with the result (also from the cache) when it ends: { result, dir, key }. */
   function start(rel, { onProgress = () => {} } = {}) {
-    const p = plan(rel);
+    const p = plan(rel); rel = p.path;
     if (!p.views.length) bad('this model has no front, back, left, right, top or bottom reference to match against');
     const have = cached(rel);
     if (have) return { started: false, done: Promise.resolve(have) };
@@ -374,7 +375,7 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
    * the front is toward the top of the picture, and the result says so (`planUpAssumed: true`).
    */
   function outlines(rel, { points = 40 } = {}) {
-    const p = plan(rel);
+    const p = plan(rel); rel = p.path;
     if (!p.views.length) bad('this model has no front, back, left, right, top or bottom reference to trace');
     const blender = findBlender(project.options.blender);
     if (!blender) bad(blenderMissing(project.options.blender), 409);

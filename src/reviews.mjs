@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
-import { IMAGE_SIGNATURES as SIGNATURES, modelRefs, resolveModel } from './models.mjs';
+import { IMAGE_SIGNATURES as SIGNATURES, modelRefs } from './models.mjs';
 import { VIEWS, createMatcher, normaliseLoop } from './match.mjs';
 import { STOP_REASONS, roundOf } from './matchloop.mjs';
 
@@ -93,9 +93,10 @@ export function jobId(reviewsDir, model, now = new Date()) {
 /** Checks a job from the page and writes it under project.reviewsDir. Returns { id }. Throws (code 400) on a bad job. */
 export function createReview(project, job, { now = new Date(), matcher = null } = {}) {
   if (!job || typeof job !== 'object') bad('not a job');
-  if (!project.modelsDir) bad('this project has no models folder (the config\'s "models")');
-  const modelFile = resolveModel(project.modelsDir, job.model);
-  if (!modelFile) bad('no such model');
+  if (!project.assetsDir) bad('this project has no models folder (the config\'s "models")');
+  const asset = project.resolveAsset(job.model);
+  if (!asset) bad('no such model');
+  const modelFile = asset.file, modelPath = asset.path;   // its path as the viewer lists it now, whatever path the request used
   const workflow = project.reviewWorkflows.find((w) => w.id === job.workflow);
   if (!workflow || !workflow.enabled) bad('no such workflow, or it is not set up yet');
   const pins = Array.isArray(job.pins) ? job.pins : job.pins === undefined ? [] : bad('pins: a list');
@@ -108,7 +109,7 @@ export function createReview(project, job, { now = new Date(), matcher = null } 
   if (wantsMatch) {
     loop = normaliseLoop(job.match);
     matcher = matcher || createMatcher(project);
-    scored = matcher.cached(job.model);
+    scored = matcher.cached(modelPath);
     if (!scored) bad('measure the model against its references first (Match, Measure): a loop starts from its current scores');
   }
 
@@ -140,14 +141,14 @@ export function createReview(project, job, { now = new Date(), matcher = null } 
 
   const st = statSync(modelFile);
   // the model's own reference images (<name>.refs/ beside it) are named, not copied: the job stays small and there is one set of them
-  const refsDir = project.rel(modelFile).replace(/\.glb$/i, '.refs'), references = modelRefs(project.modelsDir, job.model).map((r) => `${refsDir}/${r.name}`);
+  const refsDir = project.rel(modelFile).replace(/\.glb$/i, '.refs'), references = modelRefs(project.assetsDir, modelPath).map((r) => `${refsDir}/${r.name}`);
   const refText = references.length ? `Reference images of this model (paths from the project root): ${references.join(', ')}. They are what the model was made from: open them, and treat them as the ground truth for what it should look like.` : '';
   const instructions = [workflow.instructions, workflow.instructionsFile && existsSync(workflow.instructionsFile) ? readFileSync(workflow.instructionsFile, 'utf8') : '', refText].filter(Boolean).join('\n\n');
   mkdirSync(project.reviewsDir, { recursive: true });
-  const id = jobId(project.reviewsDir, job.model, now), dir = join(project.reviewsDir, id), tmp = `${dir}.tmp`;
+  const id = jobId(project.reviewsDir, modelPath, now), dir = join(project.reviewsDir, id), tmp = `${dir}.tmp`;
   const record = {
     id, createdAt: now.toISOString(),
-    model: { path: job.model, file: project.rel(modelFile), sha256: createHash('sha256').update(readFileSync(modelFile)).digest('hex'), size: st.size, mtime: Math.round(st.mtimeMs) },
+    model: { path: modelPath, file: project.rel(modelFile), sha256: createHash('sha256').update(readFileSync(modelFile)).digest('hex'), size: st.size, mtime: Math.round(st.mtimeMs) },
     note, workflow: { id: workflow.id, label: workflow.label, instructions }, references, overview, pins: cleanPins, match,
   };
   if (match) record.workflow.instructions = [instructions, loopText(match, id, project.root, workflow.id)].join('\n\n');
@@ -174,7 +175,7 @@ export function listReviews(project, { limit = 50 } = {}) {
     if (!job) return { id, state: 'unknown', summary: 'job.json cannot be read', pins: 0, changedFiles: [], modelChanged: false };
     const hasStatus = existsSync(join(dir, 'status.json')), status = hasStatus ? readJsonOr(join(dir, 'status.json'), null) : null;
     const state = !hasStatus ? 'queued' : status && STATES.includes(status.state) ? status.state : 'unknown';
-    const file = resolveModel(project.modelsDir, job.model && job.model.path);
+    const asset = project.resolveAsset(job.model && job.model.path), file = asset && asset.file;   // a job from before names its model from the models folder
     let modelChanged = false;
     if (file) { const s = statSync(file); modelChanged = Math.round(s.mtimeMs) !== job.model.mtime || s.size !== job.model.size; }
     const str = (v) => (status && typeof status[v] === 'string' ? status[v] : '');
@@ -186,7 +187,7 @@ export function listReviews(project, { limit = 50 } = {}) {
       changed: Array.isArray(r.changed) ? r.changed.filter((f) => typeof f === 'string').slice(0, 20) : [], note: typeof r.note === 'string' ? r.note : '', flagged: Array.isArray(r.flagged) ? r.flagged : [],
       unchanged: r.unchanged === true, seconds: num(r.seconds), cost: num(r.cost), drift: Array.isArray(r.drift) ? r.drift.filter((t) => typeof t === 'string').slice(0, 10) : [] })) : [];
     return {
-      id, createdAt: job.createdAt, model: job.model && job.model.path, note: job.note, workflow: job.workflow && job.workflow.label, pins: (job.pins || []).length,
+      id, createdAt: job.createdAt, model: asset ? asset.path : job.model && job.model.path, note: job.note, workflow: job.workflow && job.workflow.label, pins: (job.pins || []).length,
       state, summary: str('summary'), question: str('question'), updatedAt: str('updatedAt') || null,
       match: loop, rounds, stopReason: STOP_REASONS.includes(str('stopReason')) ? str('stopReason') : '', stopDetail: str('stopDetail'),
       changedFiles: status && Array.isArray(status.changedFiles) ? status.changedFiles.filter((f) => typeof f === 'string') : [], modelChanged,

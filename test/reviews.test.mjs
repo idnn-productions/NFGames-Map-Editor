@@ -34,13 +34,23 @@ describe('review jobs', () => {
     assert.throws(() => imageFromDataUrl('data:image/svg+xml;base64,PHN2Zz4=', 'ref'), /not a PNG, JPEG or WebP/);
     assert.throws(() => imageFromDataUrl(`data:image/png;base64,${Buffer.alloc(7 * 1024 * 1024).toString('base64')}`, 'ref'), /larger than/);
   });
+  it('a job from before, naming its model from the models folder, is still listed with its model found', () => {
+    const { id } = createReview(project, { model: `models/${MODEL}`, workflow: 'auto', note: 'old' }, { now: new Date('2026-11-20T00:00:00Z') });
+    const file = join(inbox, id, 'job.json'), job = JSON.parse(readFileSync(file, 'utf8'));
+    job.model.path = MODEL; writeFileSync(file, JSON.stringify(job));                       // as it was written before the viewer browsed the whole project
+    const listed = listReviews(project).find((j) => j.id === id);
+    assert.equal(listed.model, `models/${MODEL}`); assert.equal(listed.modelChanged, false);
+    writeFileSync(join(copy.root, 'models', MODEL), Buffer.concat([makeGlb(), Buffer.alloc(4)]));
+    assert.equal(listReviews(project).find((j) => j.id === id).modelChanged, true);          // found, so a change to it is seen
+    writeFileSync(join(copy.root, 'models', MODEL), makeGlb()); rmSync(join(inbox, id), { recursive: true, force: true });
+  });
   it('writes a job folder with server-made names', () => {
     const { id } = createReview(project, { model: MODEL, note: 'overall', workflow: 'auto', overview: JPEG_SIG, pins: [pin(), pin({ refs: [] })] }, { now: new Date('2026-11-22T04:12:33Z') });
     assert.equal(id, '2026-11-22T041233-light-cruiser');
     const dir = join(inbox, id);
     assert.deepEqual(readdirSync(dir).sort(), ['job.json', 'overview.jpg', 'pin-1-ref-1.png', 'pin-1.jpg', 'pin-2.jpg']);
     const job = JSON.parse(readFileSync(join(dir, 'job.json'), 'utf8'));
-    assert.equal(job.model.path, MODEL); assert.equal(job.model.sha256.length, 64);
+    assert.equal(job.model.path, `models/${MODEL}`); assert.equal(job.model.file, `models/${MODEL}`); assert.equal(job.model.sha256.length, 64);   // sent by its old path, kept by the one the viewer lists
     assert.equal(job.workflow.id, 'auto'); assert.match(job.workflow.instructions, /build/);
     assert.deepEqual(job.pins[0].refs, ['pin-1-ref-1.png']); assert.equal(job.pins[0].screenshot, 'pin-1.jpg'); assert.deepEqual(job.pins[0].uv, [0.5, 0.25]);
     assert.ok(!existsSync(`${dir}.tmp`));

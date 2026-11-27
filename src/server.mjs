@@ -17,7 +17,7 @@ import { plantEditing } from './plan.mjs';
 import { view3d } from './view3d.mjs';
 import { checkFit, checkPlants } from './check.mjs';
 import { createJobs } from './jobs.mjs';
-import { listModels, listRefs, resolveModel, resolveRef } from './models.mjs';
+import { listRefs, resolveRef } from './models.mjs';
 import { readMaterialLibrary, resolveMaterialFile } from './materials.mjs';
 import { createReview, listReviews, publicWorkflows, LIMITS } from './reviews.mjs';
 import { LOOP, createMatcher } from './match.mjs';
@@ -175,11 +175,11 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       if (req.method === 'GET' && path === '/api/projects') return send(200, { current: { root: project.root, name: basename(project.root), title: project.options.title || null, maps: project.listMaps().length }, recent: recentProjects(stateDir), home: insideHome(home, home) });
       if (req.method === 'GET' && path === '/api/browse') { try { return send(200, browse(home, url.searchParams.get('path') || home)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
       if (req.method === 'POST' && path === '/api/project') { const b = await body(); try { return send(200, await switchProject(b && b.root, { trust: !!b && b.trust === true })); } catch (e) { return send(e.code || 500, { error: e.message }); } }
-      if (req.method === 'GET' && path === '/api/viewer') return send(200, { three: vendorState(editorRoot), models: project.modelsDir ? project.rel(project.modelsDir) || '.' : null, reviews: project.rel(project.reviewsDir), workflows: publicWorkflows(project.reviewWorkflows), match: { limits: LOOP, last: matcher.settings() }, title: project.options.title || null });
+      if (req.method === 'GET' && path === '/api/viewer') return send(200, { three: vendorState(editorRoot), models: project.assetsDir ? project.rel(project.assetsDir) || '.' : null, root: basename(project.root), reviews: project.rel(project.reviewsDir), workflows: publicWorkflows(project.reviewWorkflows), match: { limits: LOOP, last: matcher.settings() }, title: project.options.title || null });
       if (req.method === 'POST' && path === '/api/vendor/install') { try { return send(200, await installThree(editorRoot, { fetchImpl })); } catch (e) { return send(502, { error: e.message }); } }
-      if (req.method === 'GET' && path === '/api/models') return send(200, { models: project.modelsDir ? listModels(project.modelsDir) : [] });
+      if (req.method === 'GET' && path === '/api/models') return send(200, { models: project.assets() });
       if (req.method === 'GET' && path === '/api/model') {
-        const file = resolveModel(project.modelsDir, url.searchParams.get('path'));
+        const asset = project.resolveAsset(url.searchParams.get('path')), file = asset && asset.file;   // anywhere in the project; a path from the models folder still opens
         if (!file) return send(404, { error: 'no such model' });
         res.writeHead(200, { 'Content-Type': 'model/gltf-binary', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
         return createReadStream(file).pipe(res);
@@ -193,9 +193,9 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
         return createReadStream(hit.file).pipe(res);
       }
       // a model's reference images: only image files of the .refs folder beside it, named plainly (models.mjs)
-      if (req.method === 'GET' && path === '/api/model/refs') return send(200, { refs: listRefs(project.modelsDir, url.searchParams.get('path')) });
+      if (req.method === 'GET' && path === '/api/model/refs') { const asset = project.resolveAsset(url.searchParams.get('path')); return send(200, { refs: asset ? listRefs(project.assetsDir, asset.path) : [] }); }
       if (req.method === 'GET' && path === '/api/model/ref') {
-        const ref = resolveRef(project.modelsDir, url.searchParams.get('path'), url.searchParams.get('name'));
+        const asset = project.resolveAsset(url.searchParams.get('path')), ref = asset && resolveRef(project.assetsDir, asset.path, url.searchParams.get('name'));
         if (!ref) return send(404, { error: 'no such reference' });
         res.writeHead(200, { 'Content-Type': ref.type, 'Content-Length': ref.size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
         return createReadStream(ref.file).pipe(res);
