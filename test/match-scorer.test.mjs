@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
 import { createMatcher } from '../src/match.mjs';
 import { findBlender } from '../src/blender.mjs';
-import { boxesGlb, linear, sphereGlb, turnedBoxes, writeRefs } from './match-fixtures.mjs';
+import { boxesGlb, linear, manyBoxesGlb, sphereGlb, turnedBoxes, writeRefs } from './match-fixtures.mjs';
 
 const RED = [200, 30, 30];
 const SHAPE = [{ min: [-1, 0, -1.5], max: [1, 0.8, 1.5] }, { min: [0.2, 0.8, -1.5], max: [1, 2, -0.5] }, { min: [-0.4, 0.2, 1.5], max: [0.4, 0.6, 2.5] }];   // a base, a tower to one side at the back, a nose at the front
@@ -84,5 +84,20 @@ describe('the scorer in Blender', { skip: findBlender('') ? false : 'Blender is 
     const r = await score(glb, (d) => writeRefs(d, shape, ['front', 'left', 'right', 'top'], { colour: RED }, { front: { stretch: 1.6 } }));
     assert.deepEqual(r.consistency.flagged, ['front']); assert.match(r.consistency.warnings[0], /^front reference: its shape is \d+% wider/);
     assert.ok(r.views.front.silhouette < r.views.left.silhouette - 0.1, 'and that view is where the model cannot score');
+  });
+  it('describes the mesh: triangles, pieces, floating pieces, and where its origin is', async () => {
+    const refs = (d) => writeRefs(d, { boxes: BOX }, ['front', 'left', 'top'], { colour: RED });
+    const box = await score(boxesGlb(BOX, linear(RED)), refs);
+    assert.deepEqual([box.shape.triangles, box.shape.pieces, box.shape.floating], [12, 1, 0]);
+    assert.equal(box.shape.longest, 2);
+    box.shape.origin.forEach((f) => assert.ok(Math.abs(f - 0.5) < 0.01));
+    const shape = await score(boxesGlb(SHAPE, linear(RED)), refs);          // base on y = 0, three boxes that touch
+    assert.ok(Math.abs(shape.shape.origin[1]) < 0.01); assert.equal(shape.shape.floating, 0);
+    const apart = await score(boxesGlb([...BOX, { min: [5, 5, 5], max: [6, 6, 6] }], linear(RED)), refs);
+    assert.deepEqual([apart.shape.pieces, apart.shape.floating], [2, 2]);  // neither touches the other
+  });
+  it('a mesh in hundreds of pieces is still scored, and its floating pieces are not counted', async () => {
+    const r = await score(manyBoxesGlb(600), (d) => writeRefs(d, { boxes: BOX }, ['front', 'left', 'top'], { colour: RED }));
+    assert.equal(r.shape.pieces, 600); assert.equal(r.shape.floating, null);
   });
 });

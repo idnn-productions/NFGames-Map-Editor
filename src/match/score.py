@@ -17,7 +17,8 @@ and scale do not count), and a colour score inside the overlap of the two silhou
 over a falloff; lighting is not counted as colour). Models from generators come out turned arbitrarily: the four quarter-turns about up (all 24 axis-aligned
 orientations with upFix) are tried, the best kept, and which one is reported.
 """
-import bpy, json, math, os, sys, time
+import bpy, bmesh, json, math, os, sys, time
+import mathutils.bvhtree
 import numpy as np
 from mathutils import Vector, Matrix
 
@@ -70,17 +71,57 @@ for mat in bpy.data.materials:
         if nd.type == 'TEX_IMAGE' and any(l.to_socket.name == 'Base Color' for l in nd.outputs[0].links):
             mat.node_tree.nodes.active = nd
 
+def bbox():
+    pts = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
+    return (Vector((min(p[i] for p in pts) for i in range(3))), Vector((max(p[i] for p in pts) for i in range(3))))
+
+def mesh_shape(meshes, lo, hi):
+    """What the mesh is made of, as imported (world space, metres): triangles, connected pieces (counted on a welded copy, so UV
+    seams are not gaps), floating pieces (those that touch no other: no vertex of either within longest x 0.001 of the other's
+    surface; None past 500 pieces), the longest side, and where the file's origin lies in the bounding box (0..1 per axis, in
+    glTF's x, up, depth)."""
+    ext = hi - lo; longest = max(ext)
+    bm = bmesh.new()
+    for o in meshes:
+        me = o.data.copy(); me.transform(o.matrix_world); bm.from_mesh(me); bpy.data.meshes.remove(me)
+    tris = sum(len(f.verts) - 2 for f in bm.faces)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=longest * 1e-6)
+    bm.verts.index_update(); nv = len(bm.verts)
+    parent = list(range(nv))
+    def find(i):
+        while parent[i] != i: parent[i] = parent[parent[i]]; i = parent[i]
+        return i
+    for e in bm.edges:
+        a, b = find(e.verts[0].index), find(e.verts[1].index)
+        if a != b: parent[a] = b
+    piece = [find(i) for i in range(nv)]; pieces = len(set(piece))
+    floating = 0
+    if pieces > 500: floating = None
+    elif pieces > 1:
+        # a piece touches another when one of its vertices is within `near` of the other's surface (a box set on a face
+        # shares no vertex with it), so the distance is to the faces, not to the vertices
+        bm.faces.ensure_lookup_table(); face_piece = [piece[f.verts[0].index] for f in bm.faces]
+        tree = mathutils.bvhtree.BVHTree.FromBMesh(bm); near = longest * 0.001; touching = set()
+        for v in bm.verts:
+            p = piece[v.index]
+            if p in touching: continue
+            for _co, _no, fi, _d in tree.find_nearest_range(v.co, near):
+                if face_piece[fi] != p: touching.add(p); touching.add(face_piece[fi]); break
+        floating = pieces - len(touching)
+    bm.free()
+    at = lambda d, e: 0.5 if e <= 0 else round(d / e, 4)
+    origin = [at(0 - lo.x, ext.x), at(0 - lo.z, ext.z), at(hi.y, ext.y)]   # Blender's -Y is glTF's +Z: depth runs from hi.y
+    return {"triangles": tris, "pieces": pieces, "floating": floating, "longest": round(longest, 4), "origin": origin}
+
+lo, hi = bbox(); ext0 = hi - lo
+if max(ext0) <= 0: fail("the model has no size")
+shape = mesh_shape(meshes, lo, hi)   # as imported; the parenting below keeps world positions, so lo and hi stay right
+
 root = bpy.data.objects.new("root", None); sc.collection.objects.link(root)
 for o in [o for o in sc.objects if o.parent is None and o is not root]:
     mw = o.matrix_world.copy(); o.parent = root; o.matrix_world = mw
 bpy.context.view_layer.update()
 
-def bbox():
-    pts = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
-    return (Vector((min(p[i] for p in pts) for i in range(3))), Vector((max(p[i] for p in pts) for i in range(3))))
-
-lo, hi = bbox(); ext0 = hi - lo
-if max(ext0) <= 0: fail("the model has no size")
 SCALE = 10.0 / max(ext0)
 # the size in glTF's frame (x, up, depth), metres, before it is scaled
 size = [round(ext0.x, 4), round(ext0.z, 4), round(ext0.y, 4)]
@@ -317,7 +358,7 @@ for v in VIEWS:
 
 def mean(key): return round(sum(res_views[v][key] for v in VIEWS) / len(VIEWS), 4)
 finish({
-    "ok": True, "blender": bpy.app.version_string, "views": res_views, "size": size,
+    "ok": True, "blender": bpy.app.version_string, "views": res_views, "size": size, "shape": shape,
     "mean": {"silhouette": mean("silhouette"), "colour": mean("colour"), "combined": mean("combined")},
     "orientation": {"up": best["up"], "turn": best["turn"], "tried": tried, "searched": "all 24 orientations" if cfg.get("upFix") else "the 4 quarter-turns about up"},
     "warnings": warnings, "seconds": round(time.time() - t0, 1),

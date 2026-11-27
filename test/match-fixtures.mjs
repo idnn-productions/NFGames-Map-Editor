@@ -46,6 +46,8 @@ export function boxesGlb(boxes, colour) {
   }
   return meshGlb(positions, indices, colour);
 }
+/** `n` unit cubes on a line along X, 3 apart: a mesh in many pieces, none touching another. */
+export const manyBoxesGlb = (n, colour) => boxesGlb(Array.from({ length: n }, (_, i) => ({ min: [i * 3, 0, 0], max: [i * 3 + 1, 1, 1] })), colour);
 export function sphereGlb(r = 1, colour, segments = 32, rings = 16) {
   const positions = [], indices = [];
   for (let i = 0; i <= rings; i++) for (let j = 0; j <= segments; j++) {

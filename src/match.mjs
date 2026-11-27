@@ -15,7 +15,7 @@ import { BLENDER_DOWNLOAD, findBlender } from './blender.mjs';
 import { modelRefs, resolveModel } from './models.mjs';
 
 export const SCORER = join(dirname(fileURLToPath(import.meta.url)), 'match', 'score.py');
-export const SCORER_VERSION = 1;
+export const SCORER_VERSION = 2;
 /** The orthographic views that are scored, in this order. */
 export const VIEWS = ['front', 'back', 'left', 'right', 'top', 'bottom'];
 export const SCORES = ['combined', 'silhouette'];
