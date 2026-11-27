@@ -93,6 +93,25 @@ inspection is skipped.
   partly re-centred.
 - The floating-pieces check takes a few seconds on a mesh of several hundred thousand triangles in many dense pieces.
 
+## Handoff, 2026-11-27: the viewer finds every asset
+
+Branch `feature/find-assets` sits on top of `feature/pipeline-guards` (not pushed). Test it after the steps above.
+
+- The model viewer lists every `.glb` in the project, not only the `models` folder. Build and cache folders are left
+  out (`dist`, `build`, `out`, Unity's `Library` and `Temp`, dot-folders). Config: `assets: { skip, levels }`, or
+  `assets: false` for the old behaviour.
+- **Levels** are listed first: a `.glb` with a `.json` of the same name beside it, or one `assets.levels` names.
+- A model's path is now counted from the project's folder. A path counted from the `models` folder still opens: old
+  review jobs, old links, and unsent pins kept in the browser (they move to the new path when the model is opened).
+- The palette and New model still use the `models` folder only.
+- A project's own materials are shown on its models (`src/materials.mjs`; README, "A project's own materials"), with
+  Textured, Clay and Vertex mask shading and a Colliders switch.
+
+On the PC, open Thoon Run and Perseus in the viewer and check: the town is under **Levels** and opens; a character
+from `art/export/townsfolk` shows its reference images; a Perseus kit piece shows its scanned materials, and one
+whose material name has two sets (`a|b`) blends them without a shader error in the browser's console. Perseus has no
+level listed until its config names one in `assets.levels`. Thoon Run's cave is not a `.glb` and is not listed.
+
 ### Known and left for later
 
 `todo.md` has the list. From this branch: the overlay's placement has no test that reads its pixels; the combined

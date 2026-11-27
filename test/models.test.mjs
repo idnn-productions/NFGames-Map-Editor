@@ -36,12 +36,15 @@ describe('models', () => {
     assert.equal(list[1].size, makeGlb().length); assert.ok(list[1].mtime > 0);
   });
   it('skips build and cache copies at any depth, and the folders it is told to', () => {
-    assert.deepEqual(listModels(top).map((m) => m.path), ['a/x.glb', 'art/raw/x.glb', 'art/town/t.glb']);
-    assert.deepEqual(listModels(top, { skip: ['art/raw'] }).map((m) => m.path), ['a/x.glb', 'art/town/t.glb']);
-    assert.deepEqual(listModels(top, { skip: ['art'] }).map((m) => m.path), ['a/x.glb']);
+    const all = { copies: false };   // a whole project is searched without its builds' and caches' copies
+    assert.deepEqual(listModels(top, all).map((m) => m.path), ['a/x.glb', 'art/raw/x.glb', 'art/town/t.glb']);
+    assert.deepEqual(listModels(top, { ...all, skip: ['art/raw'] }).map((m) => m.path), ['a/x.glb', 'art/town/t.glb']);
+    assert.deepEqual(listModels(top, { ...all, skip: ['art'] }).map((m) => m.path), ['a/x.glb']);
+    // a models folder is listed as it always was: a folder in it called build or out is the project's own
+    assert.deepEqual(listModels(top).map((m) => m.path), ['a/x.glb', 'art/raw/x.glb', 'art/town/t.glb', 'unity/Library/x.glb', 'unity/Temp/x.glb', 'web/build/x.glb', 'web/dist/x.glb', 'web/out/x.glb']);
   });
   it('a model with a .json of its name beside it is a level, and so is one the config names', () => {
-    const by = Object.fromEntries(listModels(top, { levels: ['a/x.glb'] }).map((m) => [m.path, m.level]));
+    const by = Object.fromEntries(listModels(top, { copies: false, levels: ['a/x.glb'] }).map((m) => [m.path, m.level]));
     assert.deepEqual(by, { 'a/x.glb': true, 'art/raw/x.glb': undefined, 'art/town/t.glb': true });
     assert.equal('level' in listModels(top).find((m) => m.path === 'a/x.glb'), false);
   });

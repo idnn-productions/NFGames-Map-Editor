@@ -580,8 +580,12 @@ async function openModel(m, { keepCamera = false } = {}) {
   history.replaceState(null, '', `/viewer?model=${encodeURIComponent(m.path)}`);
   if (!keepCamera) frame();
   $('overlayBody').replaceChildren();
-  draft = (await loadDraft(modelPath)) || { note: '', workflow: $('workflow').value, pins: [] };
-  if (token !== loadToken) return;
+  let kept = await loadDraft(m.path);
+  // unsent pins kept before the viewer listed the whole project are under the model's path from the models folder: they move
+  const old = info.modelsFolder && info.modelsFolder !== '.' && m.path.startsWith(`${info.modelsFolder}/`) ? m.path.slice(info.modelsFolder.length + 1) : null;
+  if (!kept && old && (kept = await loadDraft(old))) { await idb('readwrite', (s) => s.put(kept, m.path)); await clearDraft(old); }
+  if (token !== loadToken) return;                      // another model was opened meanwhile: its draft, not this one
+  draft = kept || { note: '', workflow: $('workflow').value, pins: [] };
   $('note').value = draft.note || '';
   if (draft.workflow && [...$('workflow').options].some((o) => o.value === draft.workflow && !o.disabled)) $('workflow').value = draft.workflow;
   rebuildMarkers(); drawPins(); updateSend(); loadRefs(m.path); loadMatch(m.path);

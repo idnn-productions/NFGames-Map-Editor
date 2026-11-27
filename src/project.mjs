@@ -84,10 +84,24 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
   const assetSkip = assetPaths('skip'), assetLevels = assetPaths('levels', (p) => /\.glb$/i.test(p));
   const assetsDir = assetsOpt === false ? modelsDir : root;
   let assetList = null, assetsAt = 0;
-  /** Every model the viewer lists: [{ path (from assetsDir), size, mtime, level? }], looked for again after 2 seconds. */
+  /** Every model the viewer lists: [{ path (from assetsDir), size, mtime, level? }], looked for again after 2 seconds.
+   *  The models folder is listed whole, as it always was, even where the search of the project passes it over (a
+   *  models folder under dist/, or a folder in it called build); what the config's assets.skip leaves out stays out. */
   function assets() {
     if (!assetsDir) return [];
-    if (!assetList || Date.now() - assetsAt > 2000) { assetList = listModels(assetsDir, assetsOpt === false ? {} : { skip: assetSkip, levels: assetLevels }); assetsAt = Date.now(); }
+    if (assetList && Date.now() - assetsAt <= 2000) return assetList;
+    if (assetsOpt === false) assetList = listModels(assetsDir);
+    else {
+      const found = new Map(listModels(assetsDir, { skip: assetSkip, levels: assetLevels, copies: false }).map((m) => [m.path, m]));
+      const prefix = modelsDir && modelsDir !== assetsDir ? relative(assetsDir, modelsDir).split(/[\\/]/).join('/') : null;
+      const left = (path) => assetSkip.some((s) => path === s || path.startsWith(`${s}/`));
+      if (prefix && !prefix.startsWith('..')) for (const m of listModels(modelsDir)) {
+        const path = `${prefix}/${m.path}`;
+        if (!found.has(path) && !left(path)) found.set(path, { ...m, path, ...(assetLevels.includes(path) ? { level: true } : {}) });
+      }
+      assetList = [...found.values()].sort((a, b) => a.path.localeCompare(b.path));
+    }
+    assetsAt = Date.now();
     return assetList;
   }
   /** A model by its path from a request: { file (its real path), path (from assetsDir) }, or null. A path that is not

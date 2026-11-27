@@ -126,6 +126,17 @@ describe('what the model viewer browses', () => {
     assert.equal(p.resolveAsset('dist/t.glb').path, 'dist/t.glb');                                                 // not listed, still there
     for (const bad of ['../x.glb', 'nope.glb', 'art/town/t.json', '', null]) assert.equal(p.resolveAsset(bad), null, String(bad));
   });
+  it('a models folder the search would pass over is still listed, and the palette offers what it always did', async (t) => {
+    const root = game(t);
+    for (const f of ['web/dist/models/crane.glb', 'web/dist/models/build/gate.glb', 'web/dist/other.glb']) { mkdirSync(join(root, f, '..'), { recursive: true }); writeFileSync(join(root, f), makeGlb()); }
+    const p = await loadProject({ root, config: { models: 'web/dist/models' } });
+    assert.deepEqual(p.assets().map((m) => m.path), ['art/props/barrel.glb', 'art/town/t.glb', 'models/ship/ship.glb', 'web/dist/models/build/gate.glb', 'web/dist/models/crane.glb']);
+    assert.deepEqual(Object.keys(await p.kinds('x', {})).filter((k) => k.startsWith('model:')).sort(), ['model:crane', 'model:gate']);
+    const skipped = await loadProject({ root, config: { models: 'web/dist/models', assets: { skip: ['web'], levels: ['web/dist/models/crane.glb'] } } });
+    assert.deepEqual(skipped.assets().map((m) => m.path), ['art/props/barrel.glb', 'art/town/t.glb', 'models/ship/ship.glb']);   // what the config leaves out stays out
+    const named = await loadProject({ root, config: { models: 'web/dist/models', assets: { levels: ['web/dist/models/crane.glb'] } } });
+    assert.equal(named.assets().find((m) => m.path === 'web/dist/models/crane.glb').level, true);
+  });
   it('assets: false keeps the models folder as the whole list; skip and levels are checked', async (t) => {
     const root = game(t), off = await loadProject({ root, config: { assets: false } });
     assert.equal(off.assetsDir, join(root, 'models')); assert.deepEqual(listed(off), [['ship/ship.glb', false]]);
