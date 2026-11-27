@@ -68,7 +68,8 @@ export async function recordRound(project, id, matcher, { changed = [], note = '
   if (Number.isFinite(seconds)) extra.seconds = seconds;
   if (Number.isFinite(cost)) extra.cost = cost;
   const round = roundOf(n, result, loop, extra);
-  const off = drift(status.rounds[0].shape, result.shape, matcher.config.limits);
+  const limits = job.workflow && job.workflow.id === 'measured' ? { ...matcher.config.limits, size: null, triangles: null } : matcher.config.limits;   // a rebuild replaces the model: its size and triangles are new
+  const off = drift(status.rounds[0].shape, result.shape, limits);
   if (off.length) round.drift = off;
   if (last && last.key === result.key) round.unchanged = true;       // the model file is the one scored last round: nothing was re-exported
   const rounds = [...status.rounds, round];

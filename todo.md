@@ -8,6 +8,9 @@ reference images: `docs/superpowers/specs/2026-11-23-model-references-design.md`
 - [x] **Blender workflow** (`enabled: true`; its words are in `src/reviews.mjs` and the skill). Still open: Draco, WebP or
       KTX2 on export, and a way for a project to name its .blend or build script (it is searched for today).
 - [x] **Angelo workflow**, through Angelo's MCP server, with the Angelo 0.1.0 problems in the skill.
+- [x] **Build from measurements workflow** (`measured`; the words are in `src/reviews.mjs` and the skill): a hard-surface model is
+      rebuilt from `<name>.parts.json`, measured with `match.mjs outline`. Open: the proof by hand on the ship (a loop job with this
+      workflow, target 0.85, three rounds) needs another computer; put what it reached, and what the outlines could not give it, here.
 - [x] **Reference match** and the **match loop** (`src/match.mjs`, `src/match/score.py`, `bin/match.mjs`). Open:
       - the loop's first round is still a session's work: nothing starts a Claude Code session for a job;
       - the limits of `match.limits` are one number for the whole model: a model that is meant to grow (a rebuild at a new size) has to turn the limit off in the config;

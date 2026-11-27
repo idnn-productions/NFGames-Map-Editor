@@ -425,6 +425,19 @@ describe('match jobs and their rounds', () => {
     const fin = finishLoop(project, id, { summary: 'gave up' });
     assert.equal(fin.stopReason, 'out-of-rounds'); assert.match(fin.stopDetail, /drifted from what was sent: the longest side is 20 m, was 10 m/);
   });
+  it('a loop job that rebuilds the model (workflow measured) may change its size and triangles, but not leave pieces floating', async () => {
+    const shape = { triangles: 1000, pieces: 1, floating: 0, longest: 10, origin: [0.5, 0, 0.5] };
+    await setup([0.62, 0.8, 0.85], undefined, [shape, { ...shape, triangles: 4000, longest: 20 }, { ...shape, triangles: 4000, longest: 20, pieces: 3, floating: 1 }]);
+    const { id } = send({ workflow: 'measured' }); startLoop(project, id);
+    assert.equal(openJob(project, id).job.workflow.id, 'measured');
+    const r = await round(id);
+    assert.equal('drift' in r.round, false, 'four times the triangles and twice the size are what a rebuild does');
+    const f = await round(id);
+    assert.equal(f.round.drift.length, 1); assert.match(f.round.drift[0], /1 floating piece.*, was 0/);
+    await setup([0.62, 0.8], undefined, [shape, { ...shape, triangles: 4000 }]);
+    const other = send(); startLoop(project, other.id);
+    assert.match((await round(other.id)).round.drift[0], /4000 triangles, was 1000/, 'any other workflow keeps the limit');
+  });
   it('held back by references that disagree: they are named', async () => {
     const odd = { front: 0.45, left: 0.95, top: 0.95 };                                                       // the front is the one view that cannot score: its reference is off
     await setup([odd, odd, odd], ['front', 'left', 'top']);

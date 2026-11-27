@@ -570,7 +570,7 @@ Nothing is fetched at any other time, and no CDN is used.
 
 **Workflows.** **Auto**: Claude decides how to fix it (the project's build script when there is one, else Blender,
 else the GLB). **Blender**: fix the model's source (its build script, or a `.blend` beside it) with Blender scripts, re-export the GLB.
-**Angelo**: the session drives Angelo's agent through its MCP server. **ComfyUI** is listed but not set up yet. Both Blender
+**Angelo**: the session drives Angelo's agent through its MCP server. **Build from measurements**: for hard shapes (hulls, crates, buildings), the session measures the references with `match.mjs outline`, writes the parts and their sizes to `<name>.parts.json`, and rebuilds the model from them in Blender. **ComfyUI** is listed but not set up yet. Both Blender
 and Angelo work for any project: their instructions are in the editor (`src/reviews.mjs`, `skills/model-review`); a project's
 `reviewWorkflows` can name them (`'blender'`, `'angelo'`), replace them, or add its own.
 

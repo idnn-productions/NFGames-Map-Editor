@@ -90,6 +90,29 @@ create `<name>.blend` beside the model by importing the GLB, and say so in the f
 kept beside it (`<name>.fix-<round>.py`) and run it with `blender -b <file.blend> --python <script>`. Re-export the GLB over the
 model file (glTF binary, +Y up), to a temporary name first, then rename. Re-bake textures if you changed what they show.
 
+### Workflow: Build from measurements
+
+Use this for shapes you can measure: hulls, crates, buildings, vehicles. Do not use it for organic shapes (creatures, plants,
+cloth): use Blender or Angelo there. The model is rebuilt from boxes, cylinders and extruded outlines, so the textures of the old
+model are gone. Colours come from `parts.json` as flat materials, unless the job says otherwise. Do the steps in this order.
+
+1. Run `node <editor>/bin/match.mjs outline --project <game> <model path>` (add `--length <metres>` when the length is known). It
+   prints and writes `<name>.outlines.json` beside the model: each view's outlines in metres. Read it and open the references.
+2. Before any geometry, write `<name>.parts.json` beside the model:
+   `{ "units": "m", "length": n, "parts": [{ "name", "along": [from, to], "up": [from, to], "across": [from, to], "shape": "box" | "cylinder" | "outline:<view>", "colour", "attachesTo" }] }`.
+   `along` is measured from the back end, `up` from the lowest point, `across` from the middle. Every number comes from the
+   outlines, never from looking. With no loop target, set `needs-input` and show the list of parts before you build. With a loop
+   target, go on.
+3. Write `<name>.build.py`: one function per part in `parts.json`. A part with `outline:<view>` extrudes that outline. Nothing is
+   placed by a number that is not in `parts.json`. Run it with `blender -b --python <name>.build.py` and export the GLB over the
+   model file (to a temporary name first, then rename).
+4. A part must touch the part it `attachesTo`. Run `match.mjs round` (or, with no loop target, `match.mjs score --project <game>
+   <model path>`): it prints `shape.floating`, which must be 0.
+5. A wrong number is fixed in `parts.json`, then the build is run again. Never edit the GLB.
+
+A loop job with this workflow has no size or triangle limit against round 0, because the model is being replaced. The pivot and
+floating pieces are still held. Every number you report still comes from `match.mjs`, never from your own judgement.
+
 ### Workflow: Angelo
 
 Angelo (Hyperbond Studio, Blender 5.3 with its own AI agent) is driven through its MCP tools: `angelo_send` (a message to its

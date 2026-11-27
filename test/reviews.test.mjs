@@ -97,12 +97,15 @@ describe('review jobs', () => {
     assert.deepEqual(newJobs(inbox, seen), [id]);
   });
   it('workflows: the defaults, a default by its id, a project\'s own', () => {
-    assert.deepEqual(normaliseWorkflows(undefined, copy.root).map((w) => [w.id, w.enabled]), [['auto', true], ['blender', true], ['angelo', true], ['comfyui', false]]);
+    assert.deepEqual(normaliseWorkflows(undefined, copy.root).map((w) => [w.id, w.enabled]), [['auto', true], ['blender', true], ['angelo', true], ['measured', true], ['comfyui', false]]);
     const own = normaliseWorkflows(['auto', { id: 'cruiser-build', label: 'Cruiser build', instructionsFile: 'notes.md' }], copy.root);
     assert.deepEqual(own.map((w) => w.id), ['auto', 'cruiser-build']); assert.equal(own[1].instructionsFile, join(copy.root, 'notes.md'));
     assert.throws(() => normaliseWorkflows([{ id: 'x', instructionsFile: '../out.md' }], copy.root), /inside the project/);
     assert.throws(() => normaliseWorkflows(['nope'], copy.root), /no default workflow/);
     assert.throws(() => normaliseWorkflows([{ id: 'Bad Id' }], copy.root), /needs an id/);
     assert.equal(DEFAULT_WORKFLOWS[0].id, 'auto');
+    const measured = DEFAULT_WORKFLOWS.find((w) => w.id === 'measured');
+    assert.equal(measured.enabled, true); assert.equal(measured.label, 'Build from measurements');
+    for (const word of ['match.mjs outline', 'parts.json', 'build.py']) assert.ok(measured.instructions.includes(word), word);
   });
 });
