@@ -87,7 +87,7 @@ code) and from the notes already in the repository, which executors read with it
   `longest` is the longest side in metres (equal to `max(result.size)`). `origin` is where the file's origin lies in
   the bounding box, 0 to 1 on each axis, in glTF's order (x, up, depth): `[0.5, 0, 0.5]` is the centre of the base.
   `pieces` are connected pieces counted on a welded copy (vertices within `longest × 1e-6` made one, so UV seams are
-  not gaps). `floating` are pieces whose nearest vertex of any other piece is farther than `longest × 0.001`; `null`
+  not gaps). `floating` are pieces none of whose vertices is within `longest × 0.001` of another piece's surface (its faces, not only its vertices: a box resting on another's face touches it); `null`
   when there are more than 500 pieces.
 
 - [ ] **Step 1: Add the fixture** `manyBoxesGlb(n)` to `test/match-fixtures.mjs`: `n` unit cubes on a line, 3 apart, through `boxesGlb`.
@@ -114,7 +114,7 @@ it('a mesh in hundreds of pieces is still scored, and its floating pieces are no
 
 - [ ] **Step 3: Run them:** `node --test test/match-scorer.test.mjs` — both fail on `shape` undefined.
 
-- [ ] **Step 4: Implement `mesh_shape(meshes, lo, hi) -> dict` in `score.py`.** One `bmesh` of all meshes in world space, `bmesh.ops.remove_doubles`, pieces by union-find over edges, the nearest other piece through one `mathutils.kdtree.KDTree` of every vertex (ask for neighbours until one of another piece is found, at most 16). The origin in glTF's order from Blender's bounds: `[(0 - lo.x) / ext.x, (0 - lo.z) / ext.z, hi.y / ext.y]`, an axis with no extent giving 0.5. Add `"shape"` to the result written by `finish`.
+- [ ] **Step 4: Implement `mesh_shape(meshes, lo, hi) -> dict` in `score.py`.** One `bmesh` of all meshes in world space, `bmesh.ops.remove_doubles`, pieces by union-find over edges, the nearest other piece through one `mathutils.bvhtree.BVHTree` of every face (`find_nearest_range` from each vertex, stopping at the first face of another piece). The origin in glTF's order from Blender's bounds: `[(0 - lo.x) / ext.x, (0 - lo.z) / ext.z, hi.y / ext.y]`, an axis with no extent giving 0.5. Add `"shape"` to the result written by `finish`.
 
 - [ ] **Step 5: Run the scorer tests:** all pass, the earlier ones unchanged.
 
