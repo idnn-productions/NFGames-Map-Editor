@@ -127,14 +127,15 @@ def shifted(d, n):
     """The source and the destination slices of an axis of n pixels moved by d."""
     return slice(max(0, -d), n - max(0, d)), slice(max(0, d), n - max(0, -d))
 
-def place(ca, width, bm):
-    """The model's crop placed on the canvas where it agrees best with the reference's mask bm: at each of FIT_SCALES of `width`,
+def place(ca, width, bm, boxed):
+    """The model's crop placed on the canvas where it agrees best with the reference's mask bm: at each of FIT_SCALES of `width`
+    (scale 1 is `boxed`, the model's (mask, colours) as normalise_pair placed it),
     moved by FIT_STEPS each way. The highest IoU wins, a tie going to the one nearest the bounding-box placement (the smallest
     |scale - 1|, then the smallest |dx| + |dy|). That placement (scale 1, no move) is one of those tried, so the IoU is never
     lower than it. Returns the placed mask and colours and { scale, dx, dy } (dx, dy: canvas pixels, right and down)."""
     nb = int(bm.sum()); best = None
     for k in FIT_SCALES:
-        cm, cr = fit(ca, width * k)
+        cm, cr = boxed if k == 1 else fit(ca, width * k)
         for dy in FIT_STEPS:
             sy, ty = shifted(dy, GRID)
             for dx in FIT_STEPS:
@@ -367,7 +368,9 @@ def plan_choices(view):
 # ---------------------------------------------------------------- scoring one view of the model as it stands
 def score_view(view, bounds, res, full=False):
     """The best of the views' choices (top and bottom: where the reference has the model's front): its scores and the model's mask.
-    `full` (the final pass) places the model where it agrees best when FIT is on (place()); otherwise as normalise_pair does."""
+    `full` (the final pass) places the model where it agrees best when FIT is on (place()), and keeps that placement only when its
+    combined score is at least the bounding-box placement's; otherwise the model is placed as normalise_pair does. So with FIT
+    neither the silhouette nor the combined score of a view is below what it is without."""
     R = REFS[view]; best = None
     for where in (plan_choices(view) if view in PLAN else [None]):
         up = None if where is None else plan_up(view, where)
@@ -379,8 +382,12 @@ def score_view(view, bounds, res, full=False):
         else:
             (am, ar), (bm, br) = pair
             ca, cb = crop(mm, tex_px), crop(R["mask"], R["px"]); width = pair_width(ca, cb)
-            if full and FIT: am, ar, placed = place(ca, width, bm)
             iou = float((am & bm).sum() / max(1, (am | bm).sum())); col = colour_score(am, ar, bm, br)
+            if full and FIT:
+                pm, pr, f = place(ca, width, bm, (am, ar))
+                if f != placed:
+                    fi = float((pm & bm).sum() / max(1, (pm | bm).sum())); fc = colour_score(pm, pr, bm, br)
+                    if combined(fi, fc) >= combined(iou, col): iou, col, placed = fi, fc, f
             ext = list(ca[0].shape[::-1]); rext = list(cb[0].shape[::-1])
         s = {"silhouette": iou, "colour": col, "combined": combined(iou, col), "planUp": where, "refExtent": rext, "modelExtent": ext, "fit": placed, "mask": mm, "width": width}
         if best is None or s["silhouette"] > best["silhouette"] + 1e-9: best = s

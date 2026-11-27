@@ -77,6 +77,13 @@ describe('the scorer in Blender', { skip: findBlender('') ? false : 'Blender is 
     assert.ok(Math.abs(whole.mean.silhouette - wholeBoxed.mean.silhouette) < 0.005);   // nothing to gain when it already fits
     assert.ok(whole.mean.silhouette >= wholeBoxed.mean.silhouette);                     // and never lower
   });
+  it('with the fit on, no view scores lower, in silhouette or combined, than with it off', async () => {
+    const refs = (d) => writeRefs(d, { boxes: SHAPE }, ['front', 'left', 'top'], { colour: RED });
+    for (const boxes of [SHAPE.slice(0, 2), SHAPE]) {
+      const on = await score(boxesGlb(boxes, linear(RED)), refs), off = await score(boxesGlb(boxes, linear(RED)), refs, { fit: false });
+      for (const v of Object.keys(off.views)) for (const k of ['silhouette', 'combined']) assert.ok(on.views[v][k] >= off.views[v][k], `${boxes.length} boxes, ${v} ${k}: ${on.views[v][k]} vs ${off.views[v][k]}`);
+    }
+  });
   it('with upFix it also finds the way up: a model lying on its side', async () => {
     const r = await score(boxesGlb(lie(SHAPE), linear(RED)), (d) => writeRefs(d, { boxes: SHAPE }, ['front', 'left', 'top'], { colour: RED }), { upFix: true });
     assert.equal(r.orientation.tried.length, 24); assert.notEqual(r.orientation.up, '+Y'); assert.ok(mean(r) > 0.9, `${mean(r)}`);

@@ -650,8 +650,9 @@ tries all four per view and reports the one it used).
 scaled to the same width (aspect kept), so framing and scale do not count. *Best fit* (`match.fit`, on by default): a model missing
 one part at an edge (a nose, a pod) has a different box, so that placement shifts the whole outline. The final pass also tries the
 model at 0.90 to 1.10 of that width and moved up to 8 pixels each way (of a 256 grid), and keeps the placement with the highest IoU.
-The box placement is one of those tried, so this never lowers the score. Each view's `fit` says what was kept: `{ scale, dx, dy }`,
-`dx` and `dy` in pixels of the grid, right and down (`{ scale: 1, dx: 0, dy: 0 }` when it is off or the box was best). The colour
+The box placement is one of those tried, and the best fit is kept only when its combined score is at least the box placement's:
+so with it on, no view's silhouette or combined score is lower than with it off. Each view's `fit` says what was kept: `{ scale, dx, dy }`,
+`dx` and `dy` in pixels of the grid, right and down (`{ scale: 1, dx: 0, dy: 0 }` when it is off or the box placement was kept). The colour
 score and the overlay use the same placement, so only the missing part shows red. *Colour*: inside the overlap of the two outlines, 1 minus
 the mean colour distance over `colourFalloff`. References are shaded and the render is flat, so the distance is mostly chromaticity (the colour with its brightness taken out) plus lightness after each image's overall exposure is matched: lighting does not count as a wrong colour; silhouette alone flatters simple
 shapes (a grey blob scores high against a red apple), colour does not. *Combined*: `weights.silhouette` and `weights.colour`,
