@@ -10,6 +10,7 @@ import { checkFile } from './schema.mjs';
 import { normaliseWorkflows } from './reviews.mjs';
 import { normaliseMatch } from './match.mjs';
 import { createModelKinds } from './modelkinds.mjs';
+import { listModels, resolveModel } from './models.mjs';
 
 export const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const BUILT_IN_SCHEMAS = { layout: join(EDITOR_ROOT, 'schemas', 'map.schema.json'), plants: join(EDITOR_ROOT, 'schemas', 'map-plants.schema.json') };
@@ -70,6 +71,36 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
   const inside = (p, what) => { const abs = resolve(root, p), r = relative(root, abs); if (r.startsWith('..') || isAbsolute(r)) fail(`${what} must be a folder inside the project: ${p}`); return abs; };
   const modelsDir = options.models === false || options.models === null ? null : options.models ? inside(options.models, '"models"') : existsSync(join(root, 'models')) ? join(root, 'models') : root;
   const modelKindsOn = options.modelKinds !== false, modelKinds = createModelKinds(modelKindsOn ? modelsDir : null);
+  // what the viewer browses: every model of the project, wherever it is kept (models.mjs says which folders are left out).
+  // `assets: false` keeps it to the models folder; `assets: { skip, levels }` leaves folders out and names levels.
+  const assetsOpt = options.assets;
+  if (assetsOpt !== undefined && assetsOpt !== false && (!assetsOpt || typeof assetsOpt !== 'object' || Array.isArray(assetsOpt))) fail('"assets" must be false or { skip, levels }');
+  const assetPaths = (key, isOk = () => true) => {
+    const list = (assetsOpt && assetsOpt[key]) || [];
+    if (!Array.isArray(list) || !list.every((p) => typeof p === 'string' && p && isOk(p))) fail(`"assets.${key}" must be a list of ${key === 'levels' ? '.glb files' : 'folders'} inside the project`);
+    return list.map((p) => relative(root, inside(p, `"assets.${key}"`)).split(/[\\/]/).join('/'));
+  };
+  const assetSkip = assetPaths('skip'), assetLevels = assetPaths('levels', (p) => /\.glb$/i.test(p));
+  const assetsDir = assetsOpt === false ? modelsDir : root;
+  let assetList = null, assetsAt = 0;
+  /** Every model the viewer lists: [{ path (from assetsDir), size, mtime, level? }], looked for again after 2 seconds. */
+  function assets() {
+    if (!assetsDir) return [];
+    if (!assetList || Date.now() - assetsAt > 2000) { assetList = listModels(assetsDir, assetsOpt === false ? {} : { skip: assetSkip, levels: assetLevels }); assetsAt = Date.now(); }
+    return assetList;
+  }
+  /** A model by its path from a request: { file (its real path), path (from assetsDir) }, or null. A path that is not
+   *  there is tried under the models folder, where paths were counted from before the viewer browsed the whole project. */
+  function resolveAsset(rel) {
+    for (const dir of new Set([assetsDir, modelsDir])) {
+      const file = dir && resolveModel(dir, rel);
+      if (!file) continue;
+      const base = realpathSync(assetsDir), path = relative(base, file);
+      if (path.startsWith('..') || isAbsolute(path)) continue;
+      return { file, path: path.split(/[\\/]/).join('/') };
+    }
+    return null;
+  }
   const reviewsDir = inside(options.reviews || '.review', '"reviews"');
   const reviewWorkflows = normaliseWorkflows(options.reviewWorkflows, root);
   normaliseMatch(options.match);                                   // a mistake in the match settings is found at start
@@ -155,7 +186,7 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
 
   return {
     root, configFile, mapsDir, schemaFile, plantsSchemaFile, ctx, options,
-    modelsDir, reviewsDir, reviewWorkflows, modelProblems: () => modelKinds().problems,
+    modelsDir, assetsDir, assets, resolveAsset, reviewsDir, reviewWorkflows, modelProblems: () => modelKinds().problems,
     port: options.port || DEFAULT_PORT, defaultMap: options.defaultMap || null,
     mapDir, planFile, plantsFile, readPlan, readPlants, listMaps, knownMap, rel,
     planErrors, plantsErrors, kinds, presets, presetOf, actions, overlays, plants: plantsCfg, reserved,
