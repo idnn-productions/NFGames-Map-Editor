@@ -67,6 +67,16 @@ describe('the scorer in Blender', { skip: findBlender('') ? false : 'Blender is 
     const nonose = await score(boxesGlb(SHAPE.slice(0, 2), linear(RED)), refs);
     assert.ok(mean(nonose) < mean(right) - 0.03, `without the nose ${mean(nonose)} vs ${mean(right)}`);
   });
+  it('a model missing one part is placed where the rest agrees, so only that part is red', async () => {
+    const refs = (d) => writeRefs(d, { boxes: SHAPE }, ['left', 'top'], { colour: RED });
+    const noNose = boxesGlb(SHAPE.slice(0, 2), linear(RED));
+    const fitted = await score(noNose, refs), boxed = await score(noNose, refs, { fit: false });
+    assert.ok(fitted.mean.silhouette > boxed.mean.silhouette + 0.03, `${fitted.mean.silhouette} vs ${boxed.mean.silhouette}`);
+    assert.notDeepEqual(fitted.views.left.fit, { scale: 1, dx: 0, dy: 0 });
+    const whole = await score(boxesGlb(SHAPE, linear(RED)), refs), wholeBoxed = await score(boxesGlb(SHAPE, linear(RED)), refs, { fit: false });
+    assert.ok(Math.abs(whole.mean.silhouette - wholeBoxed.mean.silhouette) < 0.005);   // nothing to gain when it already fits
+    assert.ok(whole.mean.silhouette >= wholeBoxed.mean.silhouette);                     // and never lower
+  });
   it('with upFix it also finds the way up: a model lying on its side', async () => {
     const r = await score(boxesGlb(lie(SHAPE), linear(RED)), (d) => writeRefs(d, { boxes: SHAPE }, ['front', 'left', 'top'], { colour: RED }), { upFix: true });
     assert.equal(r.orientation.tried.length, 24); assert.notEqual(r.orientation.up, '+Y'); assert.ok(mean(r) > 0.9, `${mean(r)}`);

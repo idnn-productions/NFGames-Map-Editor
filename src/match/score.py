@@ -3,7 +3,7 @@
   blender -b --factory-startup --python score.py -- <args.json>
 
 args.json is written by the editor (never by hand): { model, refs: {view: path}, outDir, result, weights, colourFalloff,
-grid, fill, upFix, planUp, quick }. It reads the model (a GLB: glTF's frame, Y up, the front toward +Z) and one
+grid, fill, upFix, planUp, fit, quick }. It reads the model (a GLB: glTF's frame, Y up, the front toward +Z) and one
 orthographic reference image per view (front, back, left, right, top, bottom), and writes <result> (JSON) and, per view,
 overlay-<view>.png (the model's outline over the reference) and render-<view>.png (a textured render) into outDir.
 With { refs, outDir, result, refsOnly: true, planUp } (no model) it reads only the references and scores each pair of
@@ -16,7 +16,8 @@ Views (the model seen from ...; the image's up is the model's up, except top and
   top / bottom: from above / below, the front toward the image's top (planUp says where a reference has it instead)
 
 Per view: silhouette IoU (each silhouette cropped to its bounding box and scaled to the same width, aspect kept, so framing
-and scale do not count), and a colour score inside the overlap of the two silhouettes (1 minus the mean colour distance
+and scale do not count; in the final pass, with fit, the model's silhouette is then moved and scaled a little to where it agrees
+best, so a part missing at one edge does not shift the rest), and a colour score inside the overlap of the two silhouettes (1 minus the mean colour distance
 over a falloff; lighting is not counted as colour). Models from generators come out turned arbitrarily: the four quarter-turns about up (all 24 axis-aligned
 orientations with upFix) are tried, the best kept, and which one is reported.
 """
@@ -27,7 +28,9 @@ from mathutils import Vector, Matrix
 
 cfg = json.load(open(sys.argv[sys.argv.index("--") + 1]))
 OUT = cfg["outDir"]; os.makedirs(OUT, exist_ok=True)
-GRID = int(cfg.get("grid", 256)); FILL = float(cfg.get("fill", 0.92))
+GRID = int(cfg.get("grid", 256)); FILL = float(cfg.get("fill", 0.92)); FIT = bool(cfg.get("fit", True))
+FIT_SCALES = (0.90, 0.95, 1.0, 1.05, 1.10)                                           # of the bounding-box width
+FIT_STEPS = sorted({round(k * GRID / 256) for k in range(-8, 9, 2)})                 # -8 to 8 in steps of 2, in pixels of a 256 grid
 W = cfg.get("weights", {"silhouette": 0.6, "colour": 0.4}); FALLOFF = float(cfg.get("colourFalloff", 0.4))
 VIEWS = [v for v in ("front", "back", "left", "right", "top", "bottom") if v in cfg["refs"]]
 PLAN = ("top", "bottom")
@@ -108,14 +111,40 @@ def fit(c, width):
     cm[ya:yb, xa:xb] = m[yi][:, xi][ya - oy:yb - oy, xa - ox:xb - ox]; cr[ya:yb, xa:xb] = rgb[yi][:, xi][ya - oy:yb - oy, xa - ox:xb - ox]
     return cm, cr
 
+def pair_width(ca, cb):
+    """The width two crops are scaled to: FILL of the canvas, or less when either is taller than wide, so both fit."""
+    return FILL * GRID / max(1.0, ca[0].shape[0] / ca[0].shape[1], cb[0].shape[0] / cb[0].shape[1])
+
 def normalise_pair(a, b):
-    """Two silhouettes (with their colours) cropped to their bounding boxes and scaled to the same width, aspect kept, so
-    framing and scale do not count. The width is FILL of the canvas, or less when either is taller than wide, so both fit."""
+    """Two silhouettes (with their colours) cropped to their bounding boxes and scaled to the same width (pair_width), aspect
+    kept, so framing and scale do not count."""
     ca, cb = crop(*a), crop(*b)
     if ca is None or cb is None: return None
-    tall = max(1.0, ca[0].shape[0] / ca[0].shape[1], cb[0].shape[0] / cb[0].shape[1])
-    width = FILL * GRID / tall
+    width = pair_width(ca, cb)
     return fit(ca, width), fit(cb, width)
+
+def shifted(d, n):
+    """The source and the destination slices of an axis of n pixels moved by d."""
+    return slice(max(0, -d), n - max(0, d)), slice(max(0, d), n - max(0, -d))
+
+def place(ca, width, bm):
+    """The model's crop placed on the canvas where it agrees best with the reference's mask bm: at each of FIT_SCALES of `width`,
+    moved by FIT_STEPS each way. The highest IoU wins, a tie going to the one nearest the bounding-box placement (the smallest
+    |scale - 1|, then the smallest |dx| + |dy|). That placement (scale 1, no move) is one of those tried, so the IoU is never
+    lower than it. Returns the placed mask and colours and { scale, dx, dy } (dx, dy: canvas pixels, right and down)."""
+    nb = int(bm.sum()); best = None
+    for k in FIT_SCALES:
+        cm, cr = fit(ca, width * k)
+        for dy in FIT_STEPS:
+            sy, ty = shifted(dy, GRID)
+            for dx in FIT_STEPS:
+                sx, tx = shifted(dx, GRID); a = cm[sy, sx]
+                inter = int((a & bm[ty, tx]).sum()); iou = inter / max(1, int(a.sum()) + nb - inter)
+                key = (iou, -abs(k - 1), -(abs(dx) + abs(dy)))
+                if best is None or key > best[0]: best = (key, k, dx, dy, cm, cr)
+    _, k, dx, dy, cm, cr = best; (sy, ty), (sx, tx) = shifted(dy, GRID), shifted(dx, GRID)
+    pm = np.zeros_like(cm); pr = np.zeros_like(cr); pm[ty, tx] = cm[sy, sx]; pr[ty, tx] = cr[sy, sx]
+    return pm, pr, {"scale": k, "dx": dx, "dy": dy}
 
 def erode(m, n=1):
     for _ in range(n):
@@ -337,19 +366,23 @@ def plan_choices(view):
 
 # ---------------------------------------------------------------- scoring one view of the model as it stands
 def score_view(view, bounds, res, full=False):
-    """The best of the views' choices (top and bottom: where the reference has the model's front): its scores and the model's mask."""
+    """The best of the views' choices (top and bottom: where the reference has the model's front): its scores and the model's mask.
+    `full` (the final pass) places the model where it agrees best when FIT is on (place()); otherwise as normalise_pair does."""
     R = REFS[view]; best = None
     for where in (plan_choices(view) if view in PLAN else [None]):
         up = None if where is None else plan_up(view, where)
         mask_px = render(view, 'mask', res, bounds, up=up); tex_px = render(view, 'flat', res, bounds, up=up)
         mm = mask_px[:, :, 3] > 0.5
         pair = normalise_pair((mm, tex_px[:, :, :3]), (R["mask"], R["px"][:, :, :3]))
+        placed = {"scale": 1, "dx": 0, "dy": 0}; width = None
         if pair is None: iou = col = 0.0; ext = rext = None
         else:
             (am, ar), (bm, br) = pair
+            ca, cb = crop(mm, tex_px), crop(R["mask"], R["px"]); width = pair_width(ca, cb)
+            if full and FIT: am, ar, placed = place(ca, width, bm)
             iou = float((am & bm).sum() / max(1, (am | bm).sum())); col = colour_score(am, ar, bm, br)
-            ext = list(crop(mm, tex_px)[0].shape[::-1]); rext = list(crop(R["mask"], R["px"])[0].shape[::-1])
-        s = {"silhouette": iou, "colour": col, "combined": combined(iou, col), "planUp": where, "refExtent": rext, "modelExtent": ext, "mask": mm}
+            ext = list(ca[0].shape[::-1]); rext = list(cb[0].shape[::-1])
+        s = {"silhouette": iou, "colour": col, "combined": combined(iou, col), "planUp": where, "refExtent": rext, "modelExtent": ext, "fit": placed, "mask": mm, "width": width}
         if best is None or s["silhouette"] > best["silhouette"] + 1e-9: best = s
     return best
 
@@ -368,17 +401,18 @@ best = cands[bi]; bounds = orient(best)
 res_views = {}; warnings = ref_warnings
 for v in VIEWS:
     n += 1; progress(n, total, f"scoring {v}")
-    s = score_view(v, bounds, FINAL_RES); mm = s.pop("mask"); R = REFS[v]
-    # the overlay: the reference, the model's silhouette placed as the score places it (same width, centred)
+    s = score_view(v, bounds, FINAL_RES, full=True); mm = s.pop("mask"); width = s.pop("width"); R = REFS[v]; f = s["fit"]
+    # the overlay: the reference, the model's silhouette placed as the score places it (the same width, centred, then fit's
+    # scale and move; a canvas pixel is the reference's box width over `width` of its pixels)
     ref_rgb = R["px"][:, :, :3]; ref_m = R["mask"]
     H, Wd = ref_m.shape; over = np.zeros((H, Wd), bool)
     ys, xs = np.nonzero(ref_m); ms_y, ms_x = np.nonzero(mm)
     if len(xs) and len(ms_x):
         rx0, rx1, ry0, ry1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
         mc = mm[ms_y.min():ms_y.max() + 1, ms_x.min():ms_x.max() + 1]; mh, mw = mc.shape
-        kk = (rx1 - rx0) / mw; nh, nw = max(1, round(mh * kk)), max(1, round(mw * kk))
+        kk = (rx1 - rx0) * f["scale"] / mw; per = (rx1 - rx0) / width; nh, nw = max(1, round(mh * kk)), max(1, round(mw * kk))
         yi = np.minimum((np.arange(nh) / kk).astype(int), mh - 1); xi = np.minimum((np.arange(nw) / kk).astype(int), mw - 1)
-        sm = mc[yi][:, xi]; oy = (ry0 + ry1 - nh) // 2; ox = (rx0 + rx1 - nw) // 2
+        sm = mc[yi][:, xi]; oy = (ry0 + ry1 - nh) // 2 + round(f["dy"] * per); ox = (rx0 + rx1 - nw) // 2 + round(f["dx"] * per)
         ya, yb, xa, xb = max(0, oy), min(H, oy + nh), max(0, ox), min(Wd, ox + nw)
         over[ya:yb, xa:xb] = sm[ya - oy:yb - oy, xa - ox:xb - ox]
     img = ref_rgb * 0.8
@@ -391,7 +425,7 @@ for v in VIEWS:
     res_views[v] = {
         "silhouette": round(s["silhouette"], 4), "colour": round(s["colour"], 4), "combined": round(s["combined"], 4),
         "background": R["background"], "refSize": R["size"], "refExtent": s["refExtent"], "modelExtent": s["modelExtent"],
-        "planUp": s["planUp"], "overlay": f"overlay-{v}.png", "render": f"render-{v}.png",
+        "planUp": s["planUp"], "fit": f, "overlay": f"overlay-{v}.png", "render": f"render-{v}.png",
     }
 
 def mean(key): return round(sum(res_views[v][key] for v in VIEWS) / len(VIEWS), 4)

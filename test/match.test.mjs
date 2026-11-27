@@ -16,8 +16,9 @@ describe('match settings', () => {
   it('the config\'s match: defaults, and mistakes named', () => {
     assert.deepEqual(normaliseMatch(undefined), DEFAULTS);
     assert.deepEqual(normaliseMatch({ weights: { colour: 0.2 }, upFix: true, planUp: 'right' }).weights, { silhouette: 0.6, colour: 0.2 });
-    for (const [bad, why] of [[{ weights: { silhouette: -1 } }, /match\.weights/], [{ weights: { silhouette: 0, colour: 0 } }, /cannot both be 0/], [{ planUp: 'sideways' }, /match\.planUp/], [{ upFix: 'yes' }, /match\.upFix/], [{ grid: 8 }, /match\.grid/], [{ tolerance: 0 }, /match\.tolerance/], [[], /must be an object/]])
+    for (const [bad, why] of [[{ weights: { silhouette: -1 } }, /match\.weights/], [{ weights: { silhouette: 0, colour: 0 } }, /cannot both be 0/], [{ planUp: 'sideways' }, /match\.planUp/], [{ upFix: 'yes' }, /match\.upFix/], [{ fit: 'yes' }, /match\.fit: true or false/], [{ fit: null }, /match\.fit/], [{ grid: 8 }, /match\.grid/], [{ tolerance: 0 }, /match\.tolerance/], [[], /must be an object/]])
       assert.throws(() => normaliseMatch(bad), why);
+    assert.equal(DEFAULTS.fit, true); assert.equal(normaliseMatch({ fit: false }).fit, false);
   });
   it('the config\'s match.limits: defaults, some keys, off with null or false, mistakes named', () => {
     assert.deepEqual(DEFAULTS.limits, { size: 0.02, triangles: 1.25, pivot: 0.02, floating: true });
@@ -198,7 +199,7 @@ describe('the scorer\'s wrapper', () => {
     const s = call.settings;
     assert.deepEqual(Object.keys(s.refs), ['front', 'left', 'top']);                                         // not the concept, not the three-quarter view
     assert.ok(s.model.endsWith('cruiser.glb') && s.refs.front.endsWith('front.png'));
-    assert.deepEqual(s.weights, { silhouette: 0.6, colour: 0.4 }); assert.equal(s.upFix, false); assert.equal(s.planUp, 'auto');
+    assert.deepEqual(s.weights, { silhouette: 0.6, colour: 0.4 }); assert.equal(s.upFix, false); assert.equal(s.planUp, 'auto'); assert.equal(s.fit, true);
     assert.equal(result.consistency.checked, true); assert.ok(existsSync(join(dir, 'result.json'))); assert.ok(existsSync(join(dir, 'overlay-front.png')));
     assert.ok(dir.startsWith(join(copy.root, '.review', '.match')), 'kept under the reviews folder, out of the jobs\' way');
     assert.equal(listReviews(project).length, 0);

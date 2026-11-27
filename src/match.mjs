@@ -21,14 +21,14 @@ export const VIEWS = ['front', 'back', 'left', 'right', 'top', 'bottom'];
 export const SCORES = ['combined', 'silhouette'];
 /** The loop's limits, as the page's slider and fields show them. */
 export const LOOP = { target: { min: 0.5, max: 0.99, step: 0.01, default: 0.9 }, maxRounds: { min: 1, max: 20, default: 5 }, plateau: { min: 0, max: 0.2, default: 0.01 }, score: 'combined' };
-export const DEFAULTS = { weights: { silhouette: 0.6, colour: 0.4 }, colourFalloff: 0.4, grid: 256, upFix: false, planUp: 'auto', tolerance: 0.05, limits: { size: 0.02, triangles: 1.25, pivot: 0.02, floating: true } };
+export const DEFAULTS = { weights: { silhouette: 0.6, colour: 0.4 }, colourFalloff: 0.4, grid: 256, upFix: false, planUp: 'auto', fit: true, tolerance: 0.05, limits: { size: 0.02, triangles: 1.25, pivot: 0.02, floating: true } };
 const TIMEOUT = 15 * 60 * 1000, KEEP = 24;
 
 const fail = (text) => { throw new Error(`map editor config: ${text}`); };
 const bad = (text, code = 400) => { throw Object.assign(new Error(text), { code }); };
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 
-/** The config's `match` (all optional): { weights: { silhouette, colour }, colourFalloff, grid, upFix, planUp, tolerance, limits: { size, triangles, pivot, floating } }. */
+/** The config's `match` (all optional): { weights: { silhouette, colour }, colourFalloff, grid, upFix, planUp, fit, tolerance, limits: { size, triangles, pivot, floating } }. */
 export function normaliseMatch(options) {
   if (options === undefined || options === null) return { ...DEFAULTS, weights: { ...DEFAULTS.weights }, limits: { ...DEFAULTS.limits } };
   if (typeof options !== 'object' || Array.isArray(options)) fail('"match" must be an object');
@@ -43,6 +43,7 @@ export function normaliseMatch(options) {
   if (options.grid !== undefined) { if (!Number.isInteger(options.grid) || options.grid < 64 || options.grid > 1024) fail('match.grid: a whole number of 64 to 1024'); out.grid = options.grid; }
   if (options.upFix !== undefined) { if (typeof options.upFix !== 'boolean') fail('match.upFix: true or false'); out.upFix = options.upFix; }
   if (options.planUp !== undefined) { if (!['auto', 'up', 'right', 'down', 'left'].includes(options.planUp)) fail('match.planUp: "auto", "up", "right", "down" or "left"'); out.planUp = options.planUp; }
+  if (options.fit !== undefined) { if (typeof options.fit !== 'boolean') fail('match.fit: true or false'); out.fit = options.fit; }
   if (options.tolerance !== undefined) { if (!num(options.tolerance) || options.tolerance <= 0 || options.tolerance > 1) fail('match.tolerance: a number above 0 and at most 1'); out.tolerance = options.tolerance; }
   if (options.limits !== undefined) {
     const l = options.limits;
@@ -247,7 +248,7 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
     failed = null;
     const tmp = `${p.dir}.tmp`; rmSync(tmp, { recursive: true, force: true }); mkdirSync(tmp, { recursive: true });
     const argsFile = join(tmp, 'args.json');
-    writeFileSync(argsFile, JSON.stringify({ model: p.file, refs: p.files, outDir: tmp, result: join(tmp, 'result.json'), weights: config.weights, colourFalloff: config.colourFalloff, grid: config.grid, upFix: config.upFix, planUp: config.planUp }));
+    writeFileSync(argsFile, JSON.stringify({ model: p.file, refs: p.files, outDir: tmp, result: join(tmp, 'result.json'), weights: config.weights, colourFalloff: config.colourFalloff, grid: config.grid, upFix: config.upFix, planUp: config.planUp, fit: config.fit }));
     const mine = run = { path: rel, key: p.key, state: 'running', done: 0, total: 0, text: 'starting Blender', startedAt: Date.now() };
     const done = new Promise((ok, no) => {
       let log = '', buf = '', timer;

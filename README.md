@@ -221,7 +221,7 @@ onto these options.
 | `modelKinds` | `true` | `false`: the models folder's files are not offered as kinds of piece |
 | `reviews` | `.review` | the folder review jobs are written to. Must be inside the project |
 | `blender` | found on the PATH, or where Blender is usually installed | the Blender program, for [matching a model to its references](#matching-a-model-to-its-references). Optional: without it the Match panel says so |
-| `match` | see below | `{ weights: { silhouette: 0.6, colour: 0.4 }, colourFalloff: 0.4, grid: 256, upFix: false, planUp: 'auto', tolerance: 0.05, limits: { size: 0.02, triangles: 1.25, pivot: 0.02, floating: true } }`: how a model is scored against its references, and how far a loop may change the model (below) |
+| `match` | see below | `{ weights: { silhouette: 0.6, colour: 0.4 }, colourFalloff: 0.4, grid: 256, upFix: false, planUp: 'auto', fit: true, tolerance: 0.05, limits: { size: 0.02, triangles: 1.25, pivot: 0.02, floating: true } }`: how a model is scored against its references, and how far a loop may change the model (below) |
 | `reviewWorkflows` | Auto, Blender, Angelo, ComfyUI | the viewer's Workflow list: `[{ id, label, description, enabled, instructions, instructionsFile }]`, or a default's id (`'auto'`). `instructions` is text; `instructionsFile` is a file in the project whose text is added. Both are copied into each job. `enabled: false` shows "(not set up yet)". Blender and ComfyUI are placeholders by default (see `todo.md`) |
 
 ### Hooks
@@ -647,7 +647,12 @@ the config's `match.planUp` says where a project's references have it (`'right'`
 tries all four per view and reports the one it used).
 
 **Scores, per view.** *Silhouette*: intersection over union of the model's outline and the reference's, each cropped to its box and
-scaled to the same width (aspect kept), so framing and scale do not count. *Colour*: inside the overlap of the two outlines, 1 minus
+scaled to the same width (aspect kept), so framing and scale do not count. *Best fit* (`match.fit`, on by default): a model missing
+one part at an edge (a nose, a pod) has a different box, so that placement shifts the whole outline. The final pass also tries the
+model at 0.90 to 1.10 of that width and moved up to 8 pixels each way (of a 256 grid), and keeps the placement with the highest IoU.
+The box placement is one of those tried, so this never lowers the score. Each view's `fit` says what was kept: `{ scale, dx, dy }`,
+`dx` and `dy` in pixels of the grid, right and down (`{ scale: 1, dx: 0, dy: 0 }` when it is off or the box was best). The colour
+score and the overlay use the same placement, so only the missing part shows red. *Colour*: inside the overlap of the two outlines, 1 minus
 the mean colour distance over `colourFalloff`. References are shaded and the render is flat, so the distance is mostly chromaticity (the colour with its brightness taken out) plus lightness after each image's overall exposure is matched: lighting does not count as a wrong colour; silhouette alone flatters simple
 shapes (a grey blob scores high against a red apple), colour does not. *Combined*: `weights.silhouette` and `weights.colour`,
 normalised. The panel's mean is the mean over the scored views.
