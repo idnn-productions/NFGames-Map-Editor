@@ -22,6 +22,7 @@
     "start": "node bin/nfgames-map-editor.mjs --project examples/sample",
     "test": "node --test",
     "check:browser": "node scripts/browser-check.mjs",
+    "check:viewer": "node scripts/viewer-check.mjs",
     "screenshot": "node scripts/browser-check.mjs --screenshot docs/editor.png"
   }
 }

@@ -126,6 +126,116 @@ export function makeGlb() {
   return Buffer.concat([head, chunk(0x4e4f534a, j), chunk(0x004e4942, bin)]);
 }
 
+/** A small valid GLB with two named materials and two animation clips (for testing animations, stats and material tinting). */
+export function makeAnimatedGlb() {
+  const posA = Buffer.from(new Float32Array([0, 0, 0, 2, 0, 0, 0, 1, 0]).buffer);
+  const posB = Buffer.from(new Float32Array([0, 0, 1, 2, 0, 1, 0, 1, 1]).buffer);
+  const times = Buffer.from(new Float32Array([0, 1]).buffer);
+  const trans = Buffer.from(new Float32Array([0, 0, 0, 0, 0.5, 0]).buffer);
+  const scale = Buffer.from(new Float32Array([1, 1, 1, 1.2, 1.2, 1.2]).buffer);
+  const parts = [posA, posB, times, trans, scale];
+  const views = []; let off = 0;
+  for (const p of parts) { views.push({ buffer: 0, byteOffset: off, byteLength: p.length }); off += p.length; }
+  const bin = Buffer.concat(parts);
+  const json = {
+    asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0, 1] }],
+    nodes: [{ mesh: 0, name: 'hull' }, { mesh: 1, name: 'trim' }],
+    materials: [
+      { name: 'HullSteel', pbrMetallicRoughness: { baseColorFactor: [0.3, 0.4, 0.5, 1] } },
+      { name: 'TrimBrass', pbrMetallicRoughness: { baseColorFactor: [0.8, 0.6, 0.2, 1] } },
+    ],
+    meshes: [
+      { name: 'hull', primitives: [{ attributes: { POSITION: 0 }, material: 0 }] },
+      { name: 'trim', primitives: [{ attributes: { POSITION: 1 }, material: 1 }] },
+    ],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [2, 1, 0] },
+      { bufferView: 1, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 1], max: [2, 1, 1] },
+      { bufferView: 2, componentType: 5126, count: 2, type: 'SCALAR', min: [0], max: [1] },
+      { bufferView: 3, componentType: 5126, count: 2, type: 'VEC3' },
+      { bufferView: 4, componentType: 5126, count: 2, type: 'VEC3' },
+    ],
+    animations: [
+      { name: 'Hover', samplers: [{ input: 2, output: 3, interpolation: 'LINEAR' }], channels: [{ sampler: 0, target: { node: 0, path: 'translation' } }] },
+      { name: 'Pulse', samplers: [{ input: 2, output: 4, interpolation: 'LINEAR' }], channels: [{ sampler: 0, target: { node: 1, path: 'scale' } }] },
+    ],
+    bufferViews: views, buffers: [{ byteLength: bin.length }],
+  };
+  let j = Buffer.from(JSON.stringify(json)); j = Buffer.concat([j, Buffer.alloc((4 - (j.length % 4)) % 4, 0x20)]);
+  const head = Buffer.alloc(12); head.writeUInt32LE(0x46546c67, 0); head.writeUInt32LE(2, 4); head.writeUInt32LE(12 + 8 + j.length + 8 + bin.length, 8);
+  const chunk = (type, data) => { const h = Buffer.alloc(8); h.writeUInt32LE(data.length, 0); h.writeUInt32LE(type, 4); return Buffer.concat([h, data]); };
+  return Buffer.concat([head, chunk(0x4e4f534a, j), chunk(0x004e4942, bin)]);
+}
+
+/** Minimal valid ASCII FBX 7.4 containing a single textured-free triangle mesh with one named material. */
+export function makeFbx() {
+  return Buffer.from(`; FBX 7.4.0 project file
+FBXHeaderExtension:  {
+\tFBXHeaderVersion: 1003
+\tFBXVersion: 7400
+}
+GlobalSettings:  {
+\tVersion: 1000
+\tProperties70:  {
+\t\tP: "UpAxis", "int", "Integer", "",1
+\t\tP: "UpAxisSign", "int", "Integer", "",1
+\t\tP: "FrontAxis", "int", "Integer", "",2
+\t\tP: "FrontAxisSign", "int", "Integer", "",1
+\t\tP: "CoordAxis", "int", "Integer", "",0
+\t\tP: "CoordAxisSign", "int", "Integer", "",1
+\t\tP: "UnitScaleFactor", "double", "Number", "",100
+\t}
+}
+Objects:  {
+\tGeometry: 1001, "Geometry::", "Mesh" {
+\t\tVertices: *9 {
+\t\t\ta: 0,0,0,1,0,0,0,2,0
+\t\t}
+\t\tPolygonVertexIndex: *3 {
+\t\t\ta: 0,1,-3
+\t\t}
+\t\tGeometryVersion: 124
+\t\tLayerElementMaterial: 0 {
+\t\t\tVersion: 101
+\t\t\tName: ""
+\t\t\tMappingInformationType: "AllSame"
+\t\t\tReferenceInformationType: "IndexToDirect"
+\t\t\tMaterials: *1 {
+\t\t\t\ta: 0
+\t\t\t}
+\t\t}
+\t\tLayer: 0 {
+\t\t\tVersion: 100
+\t\t\tLayerElement:  {
+\t\t\t\tType: "LayerElementMaterial"
+\t\t\t\tTypedIndex: 0
+\t\t\t}
+\t\t}
+\t}
+\tModel: 2001, "Model::FbxTri", "Mesh" {
+\t\tVersion: 232
+\t\tProperties70:  {
+\t\t}
+\t\tShading: T
+\t\tCulling: "CullingOff"
+\t}
+\tMaterial: 3001, "Material::FbxClay", "" {
+\t\tVersion: 102
+\t\tShadingModel: "phong"
+\t\tMultiLayer: 0
+\t\tProperties70:  {
+\t\t\tP: "DiffuseColor", "Color", "", "A",0.6,0.4,0.2
+\t\t}
+\t}
+}
+Connections:  {
+\tC: "OO",2001,0
+\tC: "OO",1001,2001
+\tC: "OO",3001,2001
+}
+`, 'utf8');
+}
+
 /** Tiny images as data URLs: real signatures, for the checks. */
 export const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 export const JPEG_SIG = `data:image/jpeg;base64,${Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(32)]).toString('base64')}`;

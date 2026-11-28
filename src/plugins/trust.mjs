@@ -3,19 +3,30 @@
 // in the project, since a folder with no config is opened without asking. An installed package is trusted for its
 // exact pinned bytes (npm integrity, or git URL and commit). Kept in <stateDir>/plugins-trusted.json.
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-/** SHA-256 over every file a plugin could load (names and bytes; only .git and .DS_Store left out). */
+/** SHA-256 over every file a plugin could load (names, bytes, and symlinks' targets; only .git and .DS_Store left out). */
 export function folderHash(dir) {
-  const h = createHash('sha256');
-  const walk = (d) => {
+  const h = createHash('sha256'), seen = new Set();
+  const walk = (d, prefix = '') => {
+    let real; try { real = realpathSync(d); } catch { return; }
+    if (seen.has(real)) { h.update(`cycle\0${prefix}\0`); return; }
+    seen.add(real);
     for (const e of readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       if (e.name === '.git' || e.name === '.DS_Store') continue;
-      const f = join(d, e.name);
-      if (e.isDirectory()) walk(f);
-      else if (e.isFile()) { h.update(relative(dir, f)); h.update('\0'); h.update(readFileSync(f)); }
+      const f = join(d, e.name), rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isSymbolicLink()) {
+        h.update(`L\0${rel}\0${readlinkSync(f)}\0`);
+        try {
+          const st = statSync(f);
+          if (st.isDirectory()) walk(f, rel);
+          else if (st.isFile()) { h.update(readFileSync(f)); h.update('\0'); }
+        } catch { h.update('broken\0'); }
+      } else if (e.isDirectory()) walk(f, rel);
+      else if (e.isFile()) { h.update(`F\0${rel}\0`); h.update(readFileSync(f)); h.update('\0'); }
     }
+    seen.delete(real);
   };
   walk(dir);
   return h.digest('hex');

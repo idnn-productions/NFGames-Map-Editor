@@ -5,8 +5,21 @@
 import { slugOf, newDraft, viewPrompt, folderFor, startRound, settleRound, reconcile, pickConcept, pickView, approveConcept, setViews, approveViews, filesToKeep, startRevision, setModel, modelViews } from './draft.mjs';
 
 const DRAFTS = '.nfgames/drafts', IMAGES = '.nfgames/images', STYLE = `${DRAFTS}/style.txt`;
-const IMAGE = /\.(png|jpe?g|webp)$/i, MAX_REFS = 8;
+const IMAGE = /\.(png|jpe?g|webp)$/i, MAX_REFS = 8, MAX_IMAGE = 6 * 1024 * 1024;
+const SIGNATURES = {
+  png: (b) => b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  jpg: (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  webp: (b) => b.length >= 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP',
+};
 const refuse = (code, text) => { throw Object.assign(new Error(text), { code }); };
+function decodeImage(data, allowed, what) {
+  const m = new RegExp(`^data:image\\/(${allowed.join('|')});base64,([A-Za-z0-9+/=]+)$`).exec(typeof data === 'string' ? data : '');
+  if (!m) refuse(400, `${what}: a ${allowed.map((t) => (t === 'jpeg' ? 'JPEG' : t.toUpperCase())).join(', ')} image`);
+  const ext = m[1] === 'jpeg' ? 'jpg' : m[1], bytes = Buffer.from(m[2], 'base64');
+  if (bytes.length > MAX_IMAGE) refuse(400, `${what}: larger than ${MAX_IMAGE / 1024 / 1024} MB`);
+  if (!SIGNATURES[ext](bytes)) refuse(400, `${what}: its bytes are not a ${ext.toUpperCase()} image`);
+  return { ext, bytes };
+}
 
 export function activate(api) {
   const f = api.files;
@@ -69,12 +82,11 @@ export function activate(api) {
     return save(draft, { files: !!body.views });
   });
   api.routes.post('/draft/ref', ({ body = {} }) => {
-    const draft = read(known(body.slug)), m = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(typeof body.data === 'string' ? body.data : '');
-    if (!m) refuse(400, 'reference: a PNG, JPEG or WebP image');
+    const draft = read(known(body.slug)), { ext, bytes } = decodeImage(body.data, ['png', 'jpeg', 'webp'], 'reference');
     if (draft.refs.length >= MAX_REFS) refuse(400, `references: at most ${MAX_REFS}`);
     const n = draft.refs.reduce((max, r) => Math.max(max, Number(/ref-(\d+)\./.exec(r)?.[1]) || 0), 0) + 1;
-    const path = `${dirOf(draft.slug)}/refs/ref-${n}.${m[1] === 'jpeg' ? 'jpg' : m[1]}`;
-    f.write(path, Buffer.from(m[2], 'base64'));
+    const path = `${dirOf(draft.slug)}/refs/ref-${n}.${ext}`;
+    f.write(path, bytes);
     return save({ ...draft, refs: [...draft.refs, path] });
   });
   api.routes.post('/draft/unref', ({ body = {} }) => {
@@ -95,9 +107,8 @@ export function activate(api) {
     const before = read(known(body.slug)), now = Date.now(), folder = folderFor(before, body.step, now);
     let marked = null, bytes = null;
     if (body.marked !== undefined && body.marked !== null) {
-      const m = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(typeof body.marked === 'string' ? body.marked : '');
-      if (!m) refuse(400, 'marked: a PNG or JPEG image');
-      bytes = Buffer.from(m[2], 'base64'); marked = `${dirOf(before.slug)}/marks/${folder}.${m[1] === 'jpeg' ? 'jpg' : 'png'}`;
+      const img = decodeImage(body.marked, ['png', 'jpeg'], 'marked');
+      bytes = img.bytes; marked = `${dirOf(before.slug)}/marks/${folder}.${img.ext}`;
     }
     const { draft, round } = startRevision(before, body.step, { image: body.image, pins: body.pins, note: body.note, count: body.count ?? 2, folder, at: now, marked });
     if (!f.exists(round.from)) refuse(400, `That image is no longer there (${round.from}): pick another, or generate again.`);

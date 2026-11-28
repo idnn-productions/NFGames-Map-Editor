@@ -29,7 +29,7 @@ describe('installing three.js', () => {
   after(() => rmSync(editorRoot, { recursive: true, force: true }));
 
   it('the pinned version lists what the viewer imports', () => {
-    for (const f of ['build/three.module.js', 'build/three.core.js', 'examples/jsm/loaders/GLTFLoader.js', 'examples/jsm/loaders/DRACOLoader.js', 'examples/jsm/controls/OrbitControls.js']) assert.ok(THREE.files.includes(f), f);
+    for (const f of ['build/three.module.js', 'build/three.core.js', 'examples/jsm/loaders/GLTFLoader.js', 'examples/jsm/loaders/FBXLoader.js', 'examples/jsm/curves/NURBSCurve.js', 'examples/jsm/curves/NURBSUtils.js', 'examples/jsm/libs/fflate.module.js', 'examples/jsm/loaders/DRACOLoader.js', 'examples/jsm/controls/OrbitControls.js']) assert.ok(THREE.files.includes(f), f);
     assert.match(THREE.integrity, /^sha512-[A-Za-z0-9+/]+=*$/);
   });
   it('a download that does not match the pinned hash installs nothing', async () => {
@@ -54,6 +54,8 @@ describe('installing three.js', () => {
     assert.equal(vendorFile(editorRoot, '/vendor/three-9.9.9/examples/jsm/libs/draco/gltf/draco_decoder.wasm', t).type, 'application/wasm');
     for (const bad of ['/vendor/three-9.9.9/src/Three.js', '/vendor/three-9.9.9/../../package.json', '/vendor/three-9.9.8/build/three.module.js', '/vendor/three-9.9.9/.complete', '/elsewhere'])
       assert.equal(vendorFile(editorRoot, bad, t), null, bad);
+    // an older install missing a newly added allow-listed file reports installed: false until refreshed
+    assert.equal(vendorState(editorRoot, { ...t, files: [...t.files, 'examples/jsm/loaders/FBXLoader.js'] }).installed, false);
   });
   it('one install at a time', async () => {
     const tgz = pkg(), t = { ...FAKE, version: '9.9.10', integrity: integrityOf(tgz) };

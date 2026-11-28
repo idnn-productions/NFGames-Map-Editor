@@ -17,7 +17,7 @@ export const forgetSchemas = () => cache.clear();
 function resolveRef(ref, base) {
   const [file, pointer = ''] = ref.split('#');
   const target = file ? (isAbsolute(file) ? file : join(dirname(base), file)) : base;
-  const node = pointer.split('/').filter(Boolean).reduce((n, key) => n && n[key], load(target));
+  const node = pointer.split('/').filter(Boolean).map((k) => k.replace(/~1/g, '/').replace(/~0/g, '~')).reduce((n, key) => (n && typeof n === 'object' && Object.hasOwn(n, key) ? n[key] : undefined), load(target));
   if (!node) throw new Error(`unresolved $ref ${ref} (in ${base})`);
   return [node, target];
 }
@@ -48,9 +48,10 @@ export function check(value, s, base, path = '') {
     for (const key of s.required || []) if (!(key in value)) out.push(`${at}: missing "${key}"`);
     for (const [key, v] of Object.entries(value)) {
       const p = path ? `${path}.${key}` : key;
-      if (s.properties && key in s.properties) { out.push(...check(v, s.properties[key], base, p)); continue; }
-      const pattern = s.patternProperties && Object.entries(s.patternProperties).find(([re]) => new RegExp(re).test(key));
-      if (pattern) { out.push(...check(v, pattern[1], base, p)); continue; }
+      let matched = false;
+      if (s.properties && Object.hasOwn(s.properties, key)) { matched = true; out.push(...check(v, s.properties[key], base, p)); }
+      if (s.patternProperties) for (const [re, sub] of Object.entries(s.patternProperties)) if (new RegExp(re).test(key)) { matched = true; out.push(...check(v, sub, base, p)); }
+      if (matched) continue;
       if (s.additionalProperties === false) out.push(`${at}: "${key}" is not allowed here`);
       else if (s.additionalProperties && typeof s.additionalProperties === 'object') out.push(...check(v, s.additionalProperties, base, p));
     }

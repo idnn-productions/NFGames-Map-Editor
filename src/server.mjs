@@ -10,7 +10,7 @@
 // API, no other file. Child processes are started with a fixed list of arguments from the project's config (and a
 // checked map name): nothing from a request reaches a shell.
 import { createServer } from 'node:http';
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CONFIG_NAME, EDITOR_ROOT, loadProject } from './project.mjs';
 import { plantEditing } from './plan.mjs';
@@ -60,12 +60,16 @@ export const viewerPage = () => readFileSync(join(EDITOR_ROOT, 'src', 'viewer.ht
 /** The workbench (src/shell/index.html) with the import map and the nav bar written in. */
 export const shellPage = () => readFileSync(join(EDITOR_ROOT, 'src', 'shell', 'index.html'), 'utf8').replace('/*@importmap*/', importMap).replace('<!--@nav-->', navHtml);
 const SHELL = join(EDITOR_ROOT, 'src', 'shell');
-/** A file of src/shell for /shell/<rest>: inside that folder, no hidden parts. */
+/** A file of src/shell for /shell/<rest>: inside that folder (real paths compared), no hidden parts. */
 function shellFile(rest) {
   let rel; try { rel = decodeURIComponent(rest); } catch { return null; }
+  if (rel.includes('\0')) return null;
   const f = resolve(SHELL, rel), r = relative(SHELL, f);
-  if (!r || r.startsWith('..') || isAbsolute(r) || r.split(sep).some((x) => x.startsWith('.')) || rel.includes('\0') || !existsSync(f) || !statSync(f).isFile()) return null;
-  return f;
+  if (!r || r.startsWith('..') || isAbsolute(r) || r.split(sep).some((x) => x.startsWith('.'))) return null;
+  try {
+    const base = realpathSync(SHELL), real = realpathSync(f);
+    return real.startsWith(base + sep) && statSync(real).isFile() ? real : null;
+  } catch { return null; }
 }
 
 /** The plan compiled (when the project compiles) and checked, for the page: nothing is written. */
@@ -106,26 +110,44 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
   const ready = plugins.fire('onStartup', 'onProject');
   project.ctx.dryRun = dryRun;
   const fallback = () => startMap || project.defaultMap || project.listMaps()[0] || null;
+  let switching = false;
   /** Opens another project folder (inside home). A config not yet trusted is not run: { needsTrust, config }. */
   async function switchProject(root, { trust = false } = {}) {
+    if (switching) throw Object.assign(new Error('already switching project'), { code: 409 });
     const dir = insideHome(home, root);
     if (!dir) throw Object.assign(new Error('only folders in your home folder can be opened'), { code: 400 });
     const running = jobs.current();
     if (running && running.state === 'running') throw Object.assign(new Error(`wait for ${running.kind} to finish`), { code: 409 });
+    if (matcher.busy()) throw Object.assign(new Error('wait for reference match to finish'), { code: 409 });
     const t = configTrust(stateDir, dir);
     if (t === 'ask' && !trust) return { needsTrust: true, config: join(dir, CONFIG_NAME) };
-    if (t === 'ask') trustConfig(stateDir, dir);
-    let next;
-    try { next = await loadProject({ root: dir }); } catch (e) { throw Object.assign(new Error(e.message), { code: 400 }); }
-    await plugins.close();
-    project = next; jobs = createJobs(project, { dryRun }); matcher = createMatcher(project); project.ctx.dryRun = dryRun; startMap = null;
-    plugins = makePlugins(); await plugins.fire('onStartup', 'onProject'); events.emit('project/changed', { root: dir });
-    requests.stop(); requests = requestLoop();
-    addRecent(stateDir, dir);
-    return { ok: true, root: dir, maps: project.listMaps() };
+    switching = true;
+    try {
+      if (t === 'ask') trustConfig(stateDir, dir);
+      let next;
+      try { next = await loadProject({ root: dir }); } catch (e) { throw Object.assign(new Error(e.message), { code: 400 }); }
+      await plugins.close();
+      matcher.stop();
+      project = next; jobs = createJobs(project, { dryRun }); matcher = createMatcher(project); project.ctx.dryRun = dryRun; startMap = null;
+      plugins = makePlugins(); await plugins.fire('onStartup', 'onProject'); events.emit('project/changed', { root: dir });
+      requests.stop(); requests = requestLoop();
+      addRecent(stateDir, dir);
+      return { ok: true, root: dir, maps: project.listMaps() };
+    } finally { switching = false; }
   }
   const server = createServer(async (req, res) => {
     const send = (code, body, type = 'application/json') => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' }); res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body)); };
+    const sendFile = (file, type, size = null, missing = 'not here') => {
+      let len = size;
+      if (len === null) { try { len = statSync(file).size; } catch { return send(404, { error: missing }); } }
+      const stream = createReadStream(file);
+      stream.on('error', () => { if (!res.headersSent) send(404, { error: missing }); else res.destroy(); });
+      res.on('close', () => stream.destroy());
+      stream.on('open', () => {
+        res.writeHead(200, { 'Content-Type': type, 'Content-Length': len, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
+        stream.pipe(res);
+      });
+    };
     try {
       if (!hostAllowed(req.headers.host, port)) return send(403, { error: `local only: open http://127.0.0.1:${port}/` });
       const url = new URL(req.url, 'http://x'), path = url.pathname;
@@ -196,24 +218,21 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       if (req.method === 'GET' && path === '/api/model') {
         const asset = project.resolveAsset(url.searchParams.get('path')), file = asset && asset.file;   // anywhere in the project; a path from the models folder still opens
         if (!file) return send(404, { error: 'no such model' });
-        res.writeHead(200, { 'Content-Type': 'model/gltf-binary', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
-        return createReadStream(file).pipe(res);
+        return sendFile(file, /\.fbx$/i.test(file) ? 'application/octet-stream' : 'model/gltf-binary', null, 'no such model');
       }
       // external PBR material sets (for engines that bind scanned textures by material name)
       if (req.method === 'GET' && path === '/api/materials') return send(200, readMaterialLibrary(project.materials));
       if (req.method === 'GET' && path === '/api/material/file') {
         const hit = resolveMaterialFile(project.materials, url.searchParams.get('set'), url.searchParams.get('file'));
         if (!hit) return send(404, { error: 'no such material texture' });
-        res.writeHead(200, { 'Content-Type': hit.type, 'Content-Length': hit.size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
-        return createReadStream(hit.file).pipe(res);
+        return sendFile(hit.file, hit.type, hit.size, 'no such material texture');
       }
       // a model's reference images: only image files of the .refs folder beside it, named plainly (models.mjs)
       if (req.method === 'GET' && path === '/api/model/refs') { const asset = project.resolveAsset(url.searchParams.get('path')); return send(200, { refs: asset ? listRefs(project.assetsDir, asset.path) : [] }); }
       if (req.method === 'GET' && path === '/api/model/ref') {
         const asset = project.resolveAsset(url.searchParams.get('path')), ref = asset && resolveRef(project.assetsDir, asset.path, url.searchParams.get('name'));
         if (!ref) return send(404, { error: 'no such reference' });
-        res.writeHead(200, { 'Content-Type': ref.type, 'Content-Length': ref.size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
-        return createReadStream(ref.file).pipe(res);
+        return sendFile(ref.file, ref.type, ref.size, 'no such reference');
       }
       // matching a model against its references: the scorer runs in Blender in the background; the page polls (match.mjs)
       if (req.method === 'GET' && path === '/api/model/match') { try { return send(200, matcher.status(url.searchParams.get('path'))); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
@@ -224,8 +243,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       if (req.method === 'GET' && path === '/api/model/match/image') {
         const file = matcher.image(url.searchParams.get('key'), url.searchParams.get('name'));
         if (!file) return send(404, { error: 'no such picture' });
-        res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'no-referrer' });
-        return createReadStream(file).pipe(res);
+        return sendFile(file, 'image/png', null, 'no such picture');
       }
       if (req.method === 'POST' && path === '/api/match/settings') { const b = await body(); try { return send(200, matcher.saveSettings(b)); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
       if (req.method === 'POST' && path === '/api/review') { const job = await body(LIMITS.body); try { return send(200, createReview(project, job, { matcher })); } catch (e) { return send(e.code === 400 ? 400 : 500, { error: e.message }); } }
@@ -251,6 +269,7 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
       if (req.method === 'POST' && path === '/api/save') {
         const { plan, plants, stamps } = await body();
         const errors = await project.planErrors(plan, name);
+        for (const list of await plugins.runHook('validate', { plan, name })) if (Array.isArray(list)) errors.push(...list.map(String));
         if (plants !== undefined && plants !== null) { if (!project.plants) errors.push('plants.json: this project has no plants'); else errors.push(...(await project.plantsErrors(plants))); }
         if (errors.length) return send(400, { error: 'not saved: the plan does not pass its schema', errors });
         // a file changed on disk since the page read it (another editor, a hand edit) is not overwritten
@@ -289,6 +308,6 @@ export function createEditor(initial, { port = initial.port, defaultMap = null, 
   Object.defineProperty(server, 'plugins', { get: () => plugins });
   server.events = events; server.ready = ready;
   const closeServer = server.close.bind(server);
-  server.close = (cb) => { requests.stop(); events.close(); plugins.close().finally(() => closeServer(cb)); return server; };
+  server.close = (cb) => { matcher.stop(); requests.stop(); events.close(); plugins.close().finally(() => closeServer(cb)); return server; };
   return server;
 }

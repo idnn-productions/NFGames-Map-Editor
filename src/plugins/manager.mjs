@@ -214,13 +214,16 @@ export function createPluginManager({ builtinDir, userDir, packagesDir, stateDir
   function trust(id) { const p = find(id); if (!p || !p.manifest) throw Object.assign(new Error('no such plugin'), { code: 404 }); trustPlugin(stateDir, p); failures.delete(id); events.emit('plugins/changed', { id, state: stateOf(p) }); }
   async function reload(id) { await deactivate(id); failures.delete(id); refresh(); return activate(id); }
   async function close() { for (const id of [...live.keys()]) await deactivate(id); }
-  /** The file for /p/<id>/<rest>: inside the plugin's own folder, no hidden parts, only for a usable plugin. */
+  /** The file for /p/<id>/<rest>: inside the plugin's own folder (real paths compared), no hidden parts, only for a usable plugin. */
   function asset(id, rest) {
     const p = find(id);
     if (!usable(p) || !p.dir || !rest) return null;
     const f = resolve(p.dir, rest), r = relative(p.dir, f);
-    if (!r || r.startsWith('..') || isAbsolute(r) || r.split(sep).some((s) => s.startsWith('.')) || !existsSync(f) || !statSync(f).isFile()) return null;
-    return f;
+    if (!r || r.startsWith('..') || isAbsolute(r) || r.split(sep).some((s) => s.startsWith('.'))) return null;
+    try {
+      const base = realpathSync(p.dir), real = realpathSync(f);
+      return real.startsWith(base + sep) && statSync(real).isFile() ? f : null;
+    } catch { return null; }
   }
   /** A plugin's settings: { schema, values } (the manifest's defaults where nothing was set). */
   function getSettings(id) {

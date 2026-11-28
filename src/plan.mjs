@@ -1,8 +1,8 @@
 // A map's files as text: the plan (layout.json) and its planting plan (plants.json), each always written the same
 // way (stable key order, one piece a line), so a move shows as one changed line in a diff; the atomic write that
 // keeps the old file beside it; and the plant edits the page shares with the server.
-import { existsSync, readFileSync, renameSync, writeFileSync, copyFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
 /** A map's name: its folder, and nothing that could leave the maps folder. */
@@ -69,10 +69,12 @@ export const formatPlants = (plants) => JSON.stringify(normalisePlants(plants), 
  */
 export function writeKeeping(file, text, prev) {
   if (existsSync(file) && readFileSync(file, 'utf8') === text) return { file, changed: false };
-  const temp = `${file}.${process.pid}.tmp`;
-  writeFileSync(temp, text);
-  if (existsSync(file)) copyFileSync(file, join(dirname(file), prev));
-  renameSync(temp, file);
+  const temp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    writeFileSync(temp, text);
+    if (existsSync(file)) copyFileSync(file, join(dirname(file), prev));
+    renameSync(temp, file);
+  } catch (e) { rmSync(temp, { force: true }); throw e; }
   return { file, changed: true };
 }
 /** A file's identity for "has it changed on disk since the page read it": its bytes' hash ('' when there is none). */

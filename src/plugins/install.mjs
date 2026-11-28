@@ -11,6 +11,7 @@ import { readManifest } from './manifest.mjs';
 import { PROJECT_FILE, packageDir, readProjectPlugins, sourceMatches } from './sources.mjs';
 
 const REGISTRY = 'https://registry.npmjs.org';
+const MAX_DOWNLOAD = 64 * 1024 * 1024;
 
 /** "@scope/name@1.2.3" or "name@1.2.3" or "name" (the latest) → { name, version }. */
 export function parseNpmSpec(spec) { const at = spec.lastIndexOf('@'); return at > 0 ? { name: spec.slice(0, at), version: spec.slice(at + 1) } : { name: spec, version: 'latest' }; }
@@ -38,6 +39,7 @@ export async function installNpm(packagesDir, { npm, integrity = null }, { fetch
   const got = await fetchImpl(meta.dist.tarball);
   if (!got.ok) throw new Error(`download failed: ${got.status}`);
   const buf = Buffer.from(await got.arrayBuffer());
+  if (buf.length > MAX_DOWNLOAD) throw new Error(`${name}@${meta.version}: download larger than expected; nothing installed`);
   if (integrityOf(buf) !== want) throw new Error(`${name}@${meta.version}: the download does not match its SHA-512; nothing installed`);
   const files = [];
   for (const { name: entry, data } of tarEntries(gunzipSync(buf))) {
@@ -52,6 +54,7 @@ export async function installNpm(packagesDir, { npm, integrity = null }, { fetch
 
 export function installGit(packagesDir, { git, commit = null }, { gitBin = 'git', expectId = null } = {}) {
   if (typeof git !== 'string' || !git || git.startsWith('-')) throw new Error(`not a repository address: ${git}`);
+  if (commit !== null && commit !== undefined && (typeof commit !== 'string' || !commit || commit.startsWith('-') || /\s/.test(commit))) throw new Error(`not a commit: ${commit}`);
   const tmp = mkdtempSync(join(tmpdir(), 'nfgames-plugin-'));
   const run = (args, cwd = tmp) => execFileSync(gitBin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
   try {

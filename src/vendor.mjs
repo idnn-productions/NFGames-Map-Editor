@@ -16,10 +16,12 @@ export const THREE = {
   files: [
     'LICENSE', 'build/three.module.js', 'build/three.core.js',
     'examples/jsm/loaders/GLTFLoader.js', 'examples/jsm/loaders/DRACOLoader.js', 'examples/jsm/loaders/KTX2Loader.js',
+    'examples/jsm/loaders/FBXLoader.js',
+    'examples/jsm/curves/NURBSCurve.js', 'examples/jsm/curves/NURBSUtils.js',
     'examples/jsm/controls/OrbitControls.js', 'examples/jsm/environments/RoomEnvironment.js',
     'examples/jsm/utils/BufferGeometryUtils.js', 'examples/jsm/utils/SkeletonUtils.js', 'examples/jsm/utils/WorkerPool.js',
     'examples/jsm/math/ColorSpaces.js',
-    'examples/jsm/libs/ktx-parse.module.js', 'examples/jsm/libs/zstddec.module.js', 'examples/jsm/libs/meshopt_decoder.module.js',
+    'examples/jsm/libs/fflate.module.js', 'examples/jsm/libs/ktx-parse.module.js', 'examples/jsm/libs/zstddec.module.js', 'examples/jsm/libs/meshopt_decoder.module.js',
     'examples/jsm/libs/draco/gltf/draco_decoder.js', 'examples/jsm/libs/draco/gltf/draco_decoder.wasm', 'examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js',
     'examples/jsm/libs/basis/basis_transcoder.js', 'examples/jsm/libs/basis/basis_transcoder.wasm',
   ],
@@ -32,9 +34,11 @@ let installing = null;
 export const vendorDir = (editorRoot, t = THREE) => join(editorRoot, 'vendor', `three-${t.version}`);
 export const vendorBase = (t = THREE) => `/vendor/three-${t.version}/`;
 
-/** What the page needs to know: is the pinned version installed, and where it is served from. */
+/** What the page needs to know: is the pinned version installed (every allow-listed file present), and where it is served from. */
 export function vendorState(editorRoot, t = THREE) {
-  return { version: t.version, size: t.size, base: vendorBase(t), installed: existsSync(join(vendorDir(editorRoot, t), '.complete')), installing: !!installing };
+  const dir = vendorDir(editorRoot, t);
+  const installed = existsSync(join(dir, '.complete')) && t.files.every((f) => existsSync(join(dir, f)));
+  return { version: t.version, size: t.size, base: vendorBase(t), installed, installing: !!installing };
 }
 
 /** The regular files of a tar archive (USTAR, and the PAX long names npm can write): { name, data }. */
@@ -99,7 +103,8 @@ export function vendorFile(editorRoot, urlPath, t = THREE) {
   const base = vendorBase(t);
   if (typeof urlPath !== 'string' || !urlPath.startsWith(base)) return null;
   const path = urlPath.slice(base.length);
-  if (!t.files.includes(path) || !existsSync(join(vendorDir(editorRoot, t), '.complete'))) return null;
+  const dir = vendorDir(editorRoot, t), file = join(dir, path);
+  if (!t.files.includes(path) || !existsSync(join(dir, '.complete')) || !existsSync(file)) return null;
   const ext = /\.[a-z]+$/.exec(path)?.[0] ?? '';
-  return { file: join(vendorDir(editorRoot, t), path), type: TYPES[ext] || 'application/octet-stream' };
+  return { file, type: TYPES[ext] || 'application/octet-stream' };
 }

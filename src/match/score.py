@@ -27,7 +27,8 @@ import mathutils.bvhtree
 import numpy as np
 from mathutils import Vector, Matrix
 
-cfg = json.load(open(sys.argv[sys.argv.index("--") + 1]))
+with open(sys.argv[sys.argv.index("--") + 1], encoding="utf-8") as _f:
+    cfg = json.load(_f)
 OUT = cfg["outDir"]; os.makedirs(OUT, exist_ok=True)
 GRID = int(cfg.get("grid", 256)); FILL = float(cfg.get("fill", 0.92)); FIT = bool(cfg.get("fit", True))
 FIT_SCALES = (0.90, 0.95, 1.0, 1.05, 1.10)                                           # of the bounding-box width
@@ -48,7 +49,8 @@ def finish(res):
         except OSError: pass
     try: os.rmdir(TMP)
     except OSError: pass
-    json.dump(res, open(cfg["result"], "w"), indent=1)
+    with open(cfg["result"], "w", encoding="utf-8") as _f:
+        json.dump(res, _f, indent=1)
     print("MATCH_DONE", flush=True)
     sys.exit(0)
 
@@ -453,12 +455,11 @@ def score_view(view, bounds, res, full=False):
         up = None if where is None else plan_up(view, where)
         mask_px = render(view, 'mask', res, bounds, up=up); tex_px = render(view, 'flat', res, bounds, up=up)
         mm = mask_px[:, :, 3] > 0.5
-        pair = normalise_pair((mm, tex_px[:, :, :3]), (R["mask"], R["px"][:, :, :3]))
+        ca, cb = crop(mm, tex_px), crop(R["mask"], R["px"])
         placed = {"scale": 1, "dx": 0, "dy": 0}; width = None
-        if pair is None: iou = col = 0.0; ext = rext = None
+        if ca is None or cb is None: iou = col = 0.0; ext = rext = None
         else:
-            (am, ar), (bm, br) = pair
-            ca, cb = crop(mm, tex_px), crop(R["mask"], R["px"]); width = pair_width(ca, cb)
+            width = pair_width(ca, cb); (am, ar), (bm, br) = fit(ca, width), fit(cb, width)
             iou = float((am & bm).sum() / max(1, (am | bm).sum())); col = colour_score(am, ar, bm, br)
             if full and FIT:
                 pm, pr, f = place(ca, width, bm, (am, ar))

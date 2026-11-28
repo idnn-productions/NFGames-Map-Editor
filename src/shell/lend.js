@@ -37,7 +37,7 @@ window.nfLend = function nfLend(parts) {
         own.textContent = [...document.querySelectorAll('style')].map((s) => s.textContent).join('\n').replace(/:root\b/g, ':host')
           + `\n:host { display: block; height: 100%; } #${el.id} { height: 100%; border: 0; overflow-y: auto; box-sizing: border-box; }\n${css}`;
         root.replaceChildren(own, el); roots.set(region, root); listen();
-        document.body.classList.add(`lent-${region}`); dispatchEvent(new Event('resize'));   // the page's main area just grew
+        document.body.classList.add(`lent-${region}`); dispatchEvent(new Event('resize')); dispatchEvent(new CustomEvent('nf:lent', { detail: { region } }));   // the page's main area just grew
       },
       /** Takes the part back into the page. */
       unmount() {

@@ -7,7 +7,8 @@ use and walkers' rounds. You can also write the text on doors and things, and pl
 checks the plan against a JSON Schema, writes it atomically and keeps the old file as a backup. A fit
 check warns about pieces standing in each other, things outside the map, blocked doors and similar. A
 **3D view** shows the same plan as boxes, where you lift pieces onto roofs and move them along x, y and z.
-A **model viewer** shows the game's models (GLB): pin what is wrong on a model, add notes and reference images,
+A **model viewer** shows the game's models (GLB and FBX): inspect geometry stats, tint or isolate individual
+material slots, play and scrub animation clips, pin what is wrong on a model, add notes and reference images,
 and send it to a Claude Code session that fixes it and reports back (see [Model review](#model-review)). Both are
 tabs of one **workbench**, under one bar with **Open project…**, which browses your home folder for another project
 to open, and a project's models appear in the palette as kinds of piece by themselves.
@@ -76,7 +77,7 @@ If 8793 is already in use (another editor, say), pick another port:
 npm start -- --port 8794
 ```
 
-The model viewer is **Model viewer** in the bar (or **http://127.0.0.1:8793/viewer**). It lists every `.glb` in the project, wherever it is kept
+The model viewer is **Model viewer** in the bar (or **http://127.0.0.1:8793/viewer**). It lists every `.glb` and `.fbx` in the project, wherever it is kept
 (see [What the viewer lists](#what-the-viewer-lists)). The sample has no models.
 
 Everything the example writes goes into `examples/sample/maps/plaza/` and `examples/sample/out/`.
@@ -150,7 +151,7 @@ shows folder names and two markers, never file contents: **project** (the folder
 `maps/` or a `data/maps/`) and **N models** (`.glb` files directly in it). Recent projects are listed at the top
 (`~/.nfgames-editor/recent.json`). Any folder opens; one with no config uses the defaults: maps from `maps/` (or
 `data/maps/`), and for the map's palette the models of `models/` if it has one, else of the folder itself. The model viewer lists
-every `.glb` in the folder either way.
+every `.glb` and `.fbx` in the folder either way.
 
 **Trusting a config.** A `map-editor.config.mjs` is code the editor runs. The first time you open a folder with one, the
 dialog names the file and asks before running it (**Run its config and open**). The answer is kept in
@@ -219,7 +220,7 @@ onto these options.
 | `help` | | `[[what, how], ...]`: the "Which edit needs what" table under Apply |
 | `hints` | | short texts the page shows: `afterSave: { plan, plants, both }` after a save that changed those files, `ring`, `person`, `thing`, `plant`, `round` in the matching Selected panels |
 | `models` | `models/`, else the project's folder | the folder whose `.glb` files the palette offers as kinds of piece, and where New model writes (subfolders included). Must be inside the project. `false` for none. The [model viewer](#what-the-viewer-lists) lists the whole project, not only this folder |
-| `assets` | the whole project | what the [model viewer](#what-the-viewer-lists) lists. `{ skip: ['art/raw'], levels: ['web/public/khairos.glb'] }`: folders to leave out, and `.glb` files that are levels. `false`: only the `models` folder, as before |
+| `assets` | the whole project | what the [model viewer](#what-the-viewer-lists) lists. `{ skip: ['art/raw'], levels: ['web/public/khairos.glb'] }`: folders to leave out, and `.glb` or `.fbx` files that are levels. `false`: only the `models` folder, as before |
 | `materials` | found in the project | material sets a game keeps outside its `.glb` files (see [A project's own materials](#a-projects-own-materials)). A folder, `{ dirs: [...], plain: 'plain.json' }`, or `false` for none |
 | `modelKinds` | `true` | `false`: the models folder's files are not offered as kinds of piece |
 | `reviews` | `.review` | the folder review jobs are written to. Must be inside the project |
@@ -536,28 +537,44 @@ What it does not do (yet):
 
 ## Model review
 
-![The model viewer: a pin with a note on an apple's stem](docs/viewer.png)
+![The model viewer: a multi-material animated model with stats, material slots, animation playback and a review pin](docs/viewer.png)
 
 The **model viewer** (**Model viewer** in the bar, or `http://127.0.0.1:<port>/viewer`, which the editor prints on
 start; `?model=<path>` opens one model, and says so when the project has no such file) shows a game's
-models and sends what is wrong with them to a Claude Code session. Open a model, drop **pins** on the spots that
+models (`.glb` and `.fbx`), lets you inspect geometry, materials and animations, and sends what is wrong with them to a
+Claude Code session. Open a model, drop **pins** on the spots that
 need fixing, write a note on each (drop or paste up to four reference images onto a pin), choose a **workflow**
 and press **Send to Claude**. The job lands in an inbox folder; a Claude Code session watching it fixes the model
 and reports back, and the job list on the page shows its state.
 
 ### What the viewer lists
 
-Every `.glb` in the project, to any depth, grouped by folder. Left out: folders whose name starts with a dot,
+Every `.glb` and `.fbx` in the project, to any depth, grouped by folder. Left out: folders whose name starts with a dot,
 `node_modules`, `dist`, `build`, `out`, Unity's `Library` and `Temp`, and links, so a build's or a cache's copy of a
-model is not listed a second time. `assets.skip` in the config leaves more folders out.
+model is not listed a second time. `assets.skip` in the config leaves more folders out. The map editor's palette
+continues to read `.glb` files from the `models` folder only.
 
-**Levels** come first, in a group of their own. A level is a `.glb` with a `.json` of the same name beside it
+**Levels** come first, in a group of their own. A level is a `.glb` or `.fbx` with a `.json` of the same name beside it
 (`town.glb` and `town.json`: what a game reads with it), or one `assets.levels` names. It opens in the viewer like
-any model. A level that is not a `.glb` is not listed.
+any model. A level in a custom format is not listed.
 
 A model's path, in the list, in a link and in a review job, is counted from the project's folder
 (`art/town/models/barrel.glb`). A path counted from the `models` folder, as it was before the viewer listed the
 whole project, still opens.
+
+### Inspecting models: stats, materials and animations
+
+- **Model stats (`Stats`):** opens a floating summary of the open model—format and file size, real-world bounding-box
+  dimensions in metres (`W × H × D m`), triangles, vertices, meshes (plus collider count), unique materials, textures
+  (with max resolution), skinned meshes and bones when rigged, and animation clip count. The bottom status line also
+  keeps the path, triangle count, dimensions and file size visible at all times.
+- **Material inspector (`Materials`):** lists every material slot on the model with its triangle and mesh counts. Use
+  the colour swatch to tint any slot live, click a material name or **◎** to isolate it (ghosting all other slots so
+  face assignments are immediately clear), **↺** to revert one slot, or **Reset** to restore every original material.
+  Review pins still record the model's true original material name.
+- **Animation playback:** appears automatically at the foot of the 3D view when a `.glb` or `.fbx` carries animation
+  clips. Switch clips from the list, **Play / Pause** (**Space**), **Stop / Rewind**, scrub the timeline live, change
+  playback speed (`0.25×` to `2×`), and toggle looping (**↻**).
 
 ### A project's own materials
 
@@ -598,6 +615,8 @@ Nothing is fetched at any other time, and no CDN is used.
 | Drop or paste images on a pin | reference images (PNG, JPEG, WebP; at most 4), scaled to 2048 px at most |
 | Click a thumbnail under **References** | that image large beside the model, which still turns; see [Reference images](#reference-images) |
 | **Grid** | a floor grid scaled to the model; the same switch as the map's grids (**⌘G**) |
+| **Stats** / **Materials** | toggle the floating model stats panel or the material slot inspector (recolour and isolate slots) |
+| **Space** | play or pause the active animation clip (when the model has animations) |
 | **Send to Claude** | writes the job; pins and notes are kept as a draft in the browser until then |
 
 **Workflows.** **Auto**: Claude decides how to fix it (the project's build script when there is one, else Blender,
@@ -616,7 +635,7 @@ renamed, so a watcher never sees half of one. When a job is done and the model f
 
 ### Reference images
 
-A model can keep the images it was made from next to it: for `<dir>/<name>.glb`, the image files in the folder
+A model can keep the images it was made from next to it: for `<dir>/<name>.glb` (or `.fbx`), the image files in the folder
 `<dir>/<name>.refs/` (`.png`, `.jpg`, `.jpeg`, `.webp`). There is no list to write: the files are the list.
 
 ```
@@ -661,7 +680,9 @@ restarts it. Jobs wait on disk while nobody watches, so nothing is lost.
 
 ## Matching a model to its references
 
-Any model (a ship, an apple, a character, a prop) can be measured against the images it was made from. For a model with
+![Matching a model against its references, with per-view scores and silhouette overlay](docs/viewer-match.png)
+
+Any `.glb` model (a ship, an apple, a character, a prop) can be measured against the images it was made from. For a model with
 references (`<name>.refs/`, see [Reference images](#reference-images)) the viewer has a **Match** panel: **Measure** renders the
 model in Blender from the reference angles, compares each view with its reference, and shows a score per view, the mean, each
 overlay beside its reference, and warnings. It runs in the background with a progress bar and never blocks the page.
@@ -852,7 +873,11 @@ nfgames plugin list
 
 **The workbench.** `http://127.0.0.1:<port>/` is the workbench: an activity bar of tools, a side panel, documents
 in tabs, an inspector, a bottom panel (Jobs, Problems, Output and plugins' panels), a status bar, and **⌘K** for
-every command. Plugins add to it; **🧩 Plugins** turns them on and off and asks before trusting one, **⚙ Settings**
+every command.
+
+![The workbench: map editor in 3D, side palette, Inspector, activity bar and status bar](docs/workbench.png)
+
+Plugins add to it; **🧩 Plugins** turns them on and off and asks before trusting one, **⚙ Settings**
 edits their settings. The map editor and the model viewer are always its tabs (from the **Core Tools** plugin, until
 they are rebuilt as plugins): opening `/map` or `/viewer` in a browser goes to `/?view=map` or `/?view=viewer`, and
 only `?alone` (or a frame) gets the bare page. The side panel follows the view shown: the map editor's left column
@@ -863,6 +888,10 @@ panel's **Reviews** tab. The bottom panel rests as a one-line strip of its tabs,
 panel and the Inspector hide from the bar or with **⌘B** and **⌘I**, and their inner edges drag to set their widths
 (at least 200 px each; the documents always keep 320). All of this is kept per browser. **⌘G** turns every grid
 on or off. On Windows and Linux, Ctrl stands for ⌘.
+
+**Built-in Directed Games plugins.** Two built-in plugins connect the workbench to [directedgames.com](https://directedgames.com):
+- **Directed Games Account** (`nfgames.directed-connect`): adds **Connect Directed** in the status bar (and `⌘K` commands) to link your account via the vault (`DIRECTED_TOKEN`) and provides the `account` service.
+- **Directed Meshes** (`nfgames.directed-meshes`): adds the **🧱 Directed Meshes** tool in the activity bar to browse and search curated community meshes, 1-click import a `.glb` and its `.refs/` into `models/directed/<slug>/`, or share your own local models (with triangle count, bounds and references).
 
 How to write one, what it gets, and what trust means: [`docs/plugins.md`](docs/plugins.md). A small example:
 [`examples/plugins/hello`](examples/plugins/hello).
@@ -991,9 +1020,9 @@ The editor reads and writes files on your machine, so it accepts requests only f
 - **Opening projects.** `/api/browse` lists folder names under the real home folder only (no hidden folders, symlinks
   only when they land inside home, no file contents). `POST /api/project` (Origin and JSON checks) opens only folders
   under home, and runs a folder's config only once you have trusted it (see [Opening a project](#opening-a-project)).
-- **The model viewer.** `/vendor/` serves only the pinned three.js version's allow-listed files, and only after an
-  install whose download matched the pinned SHA-512. Models are read only from the real `models` folder (symlinks
-  out of it refused), and only `.glb` files. A model's reference images are read only from the real `<name>.refs`
+- **The model viewer.** `/vendor/` serves only the pinned three.js version's allow-listed files (including `GLTFLoader` and `FBXLoader`), and only after an
+  install whose download matched the pinned SHA-512 and every allow-listed file is present. Models are read only from inside the real project folder (symlinks
+  out of it refused), and only `.glb` or `.fbx` files. A model's reference images are read only from the real `<name>.refs`
   folder beside that model: a plain file name (no path), PNG, JPEG or WebP by name and by bytes, never SVG, no links,
   at most 40 MB. Jobs are written only to server-named folders and files under
   `reviews`; images are checked by their bytes. `POST /api/review` takes up to 24 MB; everything else keeps 2 MB.
@@ -1078,8 +1107,9 @@ loop stops, the wrapper (the fixed command, the cache, progress, Blender missing
 `test/match-server.test.mjs`.
 
 ```sh
-npm run check:browser    # the page in headless Chrome, against a copy of the sample project
-npm run screenshot       # the same, and docs/editor.png and docs/editor-3d.png
+npm run check:browser    # the map editor and workbench in headless Chrome, against a copy of the sample project
+npm run check:viewer     # the model viewer in headless Chrome (animated .glb, .fbx, stats, material tinting/isolation)
+npm run screenshot       # check:browser plus docs/editor.png and docs/editor-3d.png
 ```
 
 The browser check loads the page and fails on any console error or warning. It drags a piece with the

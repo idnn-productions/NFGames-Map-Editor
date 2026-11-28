@@ -18,7 +18,7 @@ describe('plugins over HTTP', () => {
     top = realpathSync(mkdtempSync(join(tmpdir(), 'nfgames-psrv-'))); copy = sampleCopy();
     const builtinDir = join(top, 'builtin');
     writePlugin(join(builtinDir, 'hello'), { id: 'nfgames.hello', server: 'server.mjs', web: 'web/index.js', activation: ['onRoute'] }, {
-      'server.mjs': `export function activate(api) { api.routes.get('/hi', () => ({ hi: api.project.name })); api.routes.post('/echo', ({ body }) => body); api.hooks.on('check', ({ name }) => [{ kind: 'hello', text: 'hello checked ' + name, sel: [], at: null }]); }`,
+      'server.mjs': `export function activate(api) { api.routes.get('/hi', () => ({ hi: api.project.name })); api.routes.post('/echo', ({ body }) => body); api.hooks.on('check', ({ name }) => [{ kind: 'hello', text: 'hello checked ' + name, sel: [], at: null }]); api.hooks.on('validate', ({ plan }) => (plan && plan.note === 'FORBID' ? ['hello forbade this plan'] : [])); }`,
       'web/index.js': 'export function activate() {}', 'web/.hidden': 'x' });
     writePlugin(join(builtinDir, 'pics'), { id: 'nfgames.pics', server: 'server.mjs', touches: { files: ['.x/**'] }, activation: ['onRoute'] }, { 'server.mjs': `
 export function activate(api) {
@@ -67,9 +67,11 @@ export function activate(api) {
     assert.equal((await ask('/api/p/nfgames.pics/boom')).status, 500);
     assert.equal((await (await ask('/api/plugins')).json()).plugins.find((p) => p.id === 'nfgames.pics').state, 'failed');
   });
-  it('a plugin\'s check hook reaches Problems', async () => {
+  it('a plugin\'s check hook reaches Problems and its validate hook blocks save', async () => {
     const s = await (await ask('/api/state')).json();
     assert.ok(s.problems.some((p) => p.kind === 'hello' && /hello checked plaza/.test(p.text)), JSON.stringify(s.problems));
+    const blocked = await post('/api/save?map=plaza', { plan: { ...s.plan, note: 'FORBID' }, stamps: s.stamps });
+    assert.equal(blocked.status, 400); assert.match((await blocked.json()).errors.join('\n'), /hello forbade this plan/);
   });
   it('streams plugin events', async () => {
     const res = await ask('/api/events'), reader = res.body.getReader(); let text = '';

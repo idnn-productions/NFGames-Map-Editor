@@ -10,7 +10,7 @@ import { checkFile } from './schema.mjs';
 import { normaliseWorkflows } from './reviews.mjs';
 import { normaliseMatch } from './match.mjs';
 import { createModelKinds } from './modelkinds.mjs';
-import { listModels, resolveModel } from './models.mjs';
+import { VIEWER_EXTENSIONS, listModels, resolveModel } from './models.mjs';
 import { resolveMaterialsConfig } from './materials.mjs';
 
 export const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -78,10 +78,10 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
   if (assetsOpt !== undefined && assetsOpt !== false && (!assetsOpt || typeof assetsOpt !== 'object' || Array.isArray(assetsOpt))) fail('"assets" must be false or { skip, levels }');
   const assetPaths = (key, isOk = () => true) => {
     const list = (assetsOpt && assetsOpt[key]) || [];
-    if (!Array.isArray(list) || !list.every((p) => typeof p === 'string' && p && isOk(p))) fail(`"assets.${key}" must be a list of ${key === 'levels' ? '.glb files' : 'folders'} inside the project`);
+    if (!Array.isArray(list) || !list.every((p) => typeof p === 'string' && p && isOk(p))) fail(`"assets.${key}" must be a list of ${key === 'levels' ? '.glb or .fbx files' : 'folders'} inside the project`);
     return list.map((p) => relative(root, inside(p, `"assets.${key}"`)).split(/[\\/]/).join('/'));
   };
-  const assetSkip = assetPaths('skip'), assetLevels = assetPaths('levels', (p) => /\.glb$/i.test(p));
+  const assetSkip = assetPaths('skip'), assetLevels = assetPaths('levels', (p) => /\.(glb|fbx)$/i.test(p));
   const assetsDir = assetsOpt === false ? modelsDir : root;
   let assetList = null, assetsAt = 0;
   /** Every model the viewer lists: [{ path (from assetsDir), size, mtime, level? }], looked for again after 2 seconds.
@@ -90,12 +90,12 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
   function assets() {
     if (!assetsDir) return [];
     if (assetList && Date.now() - assetsAt <= 2000) return assetList;
-    if (assetsOpt === false) assetList = listModels(assetsDir);
+    if (assetsOpt === false) assetList = listModels(assetsDir, { extensions: VIEWER_EXTENSIONS });
     else {
-      const found = new Map(listModels(assetsDir, { skip: assetSkip, levels: assetLevels, copies: false }).map((m) => [m.path, m]));
+      const found = new Map(listModels(assetsDir, { skip: assetSkip, levels: assetLevels, copies: false, extensions: VIEWER_EXTENSIONS }).map((m) => [m.path, m]));
       const prefix = modelsDir && modelsDir !== assetsDir ? relative(assetsDir, modelsDir).split(/[\\/]/).join('/') : null;
       const left = (path) => assetSkip.some((s) => path === s || path.startsWith(`${s}/`));
-      if (prefix && !prefix.startsWith('..')) for (const m of listModels(modelsDir)) {
+      if (prefix && !prefix.startsWith('..')) for (const m of listModels(modelsDir, { extensions: VIEWER_EXTENSIONS })) {
         const path = `${prefix}/${m.path}`;
         if (!found.has(path) && !left(path)) found.set(path, { ...m, path, ...(assetLevels.includes(path) ? { level: true } : {}) });
       }
@@ -108,7 +108,7 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
    *  there is tried under the models folder, where paths were counted from before the viewer browsed the whole project. */
   function resolveAsset(rel) {
     for (const dir of new Set([assetsDir, modelsDir])) {
-      const file = dir && resolveModel(dir, rel);
+      const file = dir && resolveModel(dir, rel, { extensions: VIEWER_EXTENSIONS });
       if (!file) continue;
       const base = realpathSync(assetsDir), path = relative(base, file);
       if (path.startsWith('..') || isAbsolute(path)) continue;
@@ -190,7 +190,8 @@ export async function loadProject({ root = process.cwd(), config = undefined } =
     if (isFn(options.kinds)) raw = (await options.kinds({ name, plan }, ctx)) || {};
     else { const kit = options.kit === undefined ? 'kit.json' : options.kit; if (kit) raw = readKit(at(kit)); }
     // the models folder's .glb files, under the kit's entries of the same name (a kit size without boxes drops the model's box)
-    for (const [kind, k] of Object.entries(modelKinds().kinds)) { const own = raw[kind] || {}; raw = { ...raw, [kind]: { ...k, ...own } }; if (own.size && !own.boxes) delete raw[kind].boxes; }
+    raw = { ...raw };
+    for (const [kind, k] of Object.entries(modelKinds().kinds)) { const own = raw[kind] || {}; raw[kind] = { ...k, ...own }; if (own.size && !own.boxes) delete raw[kind].boxes; }
     const out = {};
     for (const [kind, k] of Object.entries(raw)) out[kind] = normaliseKind(k);
     for (const [kind, size] of Object.entries((plan && plan.sizes) || {})) out[kind] = normaliseKind({ ...(raw[kind] || {}), size, boxes: undefined });

@@ -10,6 +10,7 @@ const NAME = /^[A-Za-z0-9._:-]{1,120}$/, ACCOUNT = 'nfgames';
 
 export function createVault({ stateDir, securityBin = process.platform === 'darwin' ? '/usr/bin/security' : null } = {}) {
   const file = join(stateDir, 'secrets.json'), keychain = !!securityBin && existsSync(securityBin);
+  const present = new Map();                                         // keychain presence cache: avoids spawning `security` on every has()
   const check = (name) => { if (typeof name !== 'string' || !NAME.test(name)) throw new Error(`not a key name: ${name}`); };
   const security = (line) => execFileSync(securityBin, ['-i'], { input: `${line}\n`, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
   const plainly = (e) => String((e.stderr && e.stderr.toString()) || e.message).split('\n').find((l) => /security:|returned/.test(l))?.replace(/^security:\s*/, '') || e.message;
@@ -20,18 +21,18 @@ export function createVault({ stateDir, securityBin = process.platform === 'darw
     set(name, value) {
       check(name);
       if (typeof value !== 'string' || !value) throw new Error('a key is some text');
-      if (keychain) { try { security(`add-generic-password -U -a ${ACCOUNT} -s nfgames:${name} -X ${Buffer.from(value, 'utf8').toString('hex')}`); } catch (e) { throw new Error(`Could not save the key in the macOS Keychain: ${plainly(e)}`); } return; }
+      if (keychain) { try { security(`add-generic-password -U -a ${ACCOUNT} -s nfgames:${name} -X ${Buffer.from(value, 'utf8').toString('hex')}`); present.set(name, true); } catch (e) { throw new Error(`Could not save the key in the macOS Keychain: ${plainly(e)}`); } return; }
       const all = readFile(); all[name] = value; writeFile(all);
     },
     get(name) {
       check(name);
       if (!keychain) return readFile()[name] ?? null;
-      try { const out = security(`find-generic-password -a ${ACCOUNT} -s nfgames:${name} -w`).replace(/\n$/, ''); return out || null; } catch { return null; }
+      try { const out = security(`find-generic-password -a ${ACCOUNT} -s nfgames:${name} -w`).replace(/\n$/, ''); present.set(name, !!out); return out || null; } catch { present.set(name, false); return null; }
     },
-    has(name) { return this.get(name) !== null; },
+    has(name) { check(name); return keychain && present.has(name) ? present.get(name) : this.get(name) !== null; },
     delete(name) {
       check(name);
-      if (keychain) { try { security(`delete-generic-password -a ${ACCOUNT} -s nfgames:${name}`); } catch { /* not there */ } return; }
+      if (keychain) { try { security(`delete-generic-password -a ${ACCOUNT} -s nfgames:${name}`); } catch { /* not there */ } present.set(name, false); return; }
       const all = readFile(); delete all[name]; writeFile(all);
     },
   };

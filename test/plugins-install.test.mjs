@@ -54,6 +54,7 @@ describe('installing plugins', () => {
     assert.equal(got.manifest.version, '0.1.0'); assert.equal(got.spec.commit, first);
     assert.ok(!existsSync(join(got.dir, '.git')));
     assert.throws(() => installGit(packages, { git: '--upload-pack=evil' }), /not a repository address/);
+    assert.throws(() => installGit(packages, { git: repo, commit: '--force' }), /not a commit/);
   });
   it('pins in nfgames.json, installs what is missing, unpins', async () => {
     const tgz = makeTgz({ 'package/plugin.json': manifest('acme.trees', '1.0.0') });

@@ -311,6 +311,7 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
   function status(rel) {
     const p = plan(rel), blender = findBlender(project.options.blender); rel = p.path;
     const out = { views: p.views, references: p.refs.map((r) => r.name), blender: blender ? { found: true } : { found: false, text: blenderMissing(project.options.blender) }, key: p.key, config: { weights: config.weights, upFix: config.upFix, planUp: config.planUp, tolerance: config.tolerance } };
+    if (!/\.glb$/i.test(p.file)) return { ...out, state: 'unsupported', error: 'Reference matching runs on .glb models.' };
     if (run && run.path === rel && run.state === 'running') return { ...out, state: 'running', progress: { done: run.done, total: run.total, text: run.text }, startedAt: run.startedAt };
     const cached = readResult(p.dir);
     if (cached && cached.ok) return { ...out, state: 'done', result: cached };
@@ -318,11 +319,12 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
     return { ...out, state: p.views.length ? 'idle' : 'no-views' };
   }
   /** The cached result for the model as it is now, or null (a job carries it; nothing is run). */
-  const cached = (rel) => { const r = readResult(plan(rel).dir); return r && r.ok ? { result: r, dir: plan(rel).dir, key: plan(rel).key } : null; };
+  const cached = (rel) => { const p = plan(rel), r = readResult(p.dir); return r && r.ok ? { result: r, dir: p.dir, key: p.key } : null; };
 
   /** Starts scoring `rel` in the background. Resolves with the result (also from the cache) when it ends: { result, dir, key }. */
   function start(rel, { onProgress = () => {} } = {}) {
     const p = plan(rel); rel = p.path;
+    if (!/\.glb$/i.test(p.file)) bad('reference matching only supports .glb models');
     if (!p.views.length) bad('this model has no front, back, left, right, top or bottom reference to match against');
     const have = cached(rel);
     if (have) return { started: false, done: Promise.resolve(have) };
@@ -343,7 +345,7 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
         prune(p.key); ok({ result, dir: p.dir, key: p.key });
       };
       // a fixed command: Blender, in the background, with the scorer and one settings file; no shell, no input
-      const child = spawnImpl(blender, ['-b', '--factory-startup', '--python', SCORER, '--', argsFile], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = mine.child = spawnImpl(blender, ['-b', '--factory-startup', '--python', SCORER, '--', argsFile], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, TIMEOUT);
       const take = (d) => {
         log = (log + d).slice(-4000); buf += d;
@@ -412,7 +414,9 @@ export function createMatcher(project, { spawnImpl = spawn } = {}) {
   const settingsFile = join(root, 'settings.json');
   const settings = () => { try { return normaliseLoop(JSON.parse(readFileSync(settingsFile, 'utf8'))); } catch { return normaliseLoop({}); } };
   const saveSettings = (input) => { const s = normaliseLoop(input); mkdirSync(root, { recursive: true }); writeFileSync(settingsFile, `${JSON.stringify(s)}\n`); return s; };
-  return { status, start, outlines, cached, image, settings, saveSettings, config, plan };
+  const busy = () => !!(run && run.state === 'running');
+  const stop = () => { if (run && run.state === 'running' && run.child) { try { run.child.kill(); } catch { /* gone */ } } };
+  return { status, start, outlines, cached, image, settings, saveSettings, config, plan, busy, stop };
 }
 
 export const blenderMissing = (setting) => (typeof setting === 'string' && setting.trim()

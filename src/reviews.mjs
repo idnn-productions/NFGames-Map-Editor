@@ -82,7 +82,7 @@ const text = (v, max, what) => { if (v === undefined || v === null) return ''; i
 const label = (v, what) => (v === undefined || v === null || v === '' ? null : text(v, LIMITS.name, what));
 
 /** A folder-safe name for a model file: "Light Cruiser_v2.glb" → "light-cruiser-v2". */
-export const slug = (file) => basename(String(file)).replace(/\.glb$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'model';
+export const slug = (file) => basename(String(file)).replace(/\.(glb|fbx)$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'model';
 
 /** A new job's id: UTC date and time to the second, then the model's slug; "-2", "-3" ... when taken. */
 export function jobId(reviewsDir, model, now = new Date()) {
@@ -141,7 +141,7 @@ export function createReview(project, job, { now = new Date(), matcher = null } 
 
   const st = statSync(modelFile);
   // the model's own reference images (<name>.refs/ beside it) are named, not copied: the job stays small and there is one set of them
-  const refsDir = project.rel(modelFile).replace(/\.glb$/i, '.refs'), references = modelRefs(project.assetsDir, modelPath).map((r) => `${refsDir}/${r.name}`);
+  const refsDir = project.rel(modelFile).replace(/\.(glb|fbx)$/i, '.refs'), references = modelRefs(project.assetsDir, modelPath).map((r) => `${refsDir}/${r.name}`);
   const refText = references.length ? `Reference images of this model (paths from the project root): ${references.join(', ')}. They are what the model was made from: open them, and treat them as the ground truth for what it should look like.` : '';
   const instructions = [workflow.instructions, workflow.instructionsFile && existsSync(workflow.instructionsFile) ? readFileSync(workflow.instructionsFile, 'utf8') : '', refText].filter(Boolean).join('\n\n');
   mkdirSync(project.reviewsDir, { recursive: true });
@@ -177,7 +177,7 @@ export function listReviews(project, { limit = 50 } = {}) {
     const state = !hasStatus ? 'queued' : status && STATES.includes(status.state) ? status.state : 'unknown';
     const asset = project.resolveAsset(job.model && job.model.path), file = asset && asset.file;   // a job from before names its model from the models folder
     let modelChanged = false;
-    if (file) { const s = statSync(file); modelChanged = Math.round(s.mtimeMs) !== job.model.mtime || s.size !== job.model.size; }
+    if (file) { try { const s = statSync(file); modelChanged = Math.round(s.mtimeMs) !== job.model.mtime || s.size !== job.model.size; } catch { /* model gone */ } }
     const str = (v) => (status && typeof status[v] === 'string' ? status[v] : '');
     const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
     // the match loop: its limits, and the rounds the editor's scorer recorded (a round's mean, scores per view, what was changed and why, what drifted)

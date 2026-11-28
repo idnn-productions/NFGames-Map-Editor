@@ -45,15 +45,41 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
 .state.working, .state.needs-input { color: var(--accent); border-color: var(--accent); }
 #overlay { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; color: var(--dim); text-align: center; padding: 20px; }
 #overlay > div { pointer-events: auto; max-width: 440px; } #overlay h2 { font-size: 14px; color: var(--text); text-transform: none; letter-spacing: 0; }
-#toolbar { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; } #toolbar select { width: auto; }
+#toolbar { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; flex-wrap: wrap; max-width: calc(100% - 20px); z-index: 2; } #toolbar select { width: auto; }
 #status { position: absolute; bottom: 8px; left: 10px; font-size: 12px; }
 #zoom { position: fixed; inset: 0; background: rgba(0, 0, 0, .8); display: none; place-items: center; z-index: 9; cursor: zoom-out; }
 #zoom img { max-width: 90vw; max-height: 90vh; }
 #main.pinning #view { cursor: crosshair; }
+/* floating inspector cards (Stats and Materials) at top-right of the 3D view, and bottom dock (References + Animation) */
+#inspectDock { position: absolute; top: 46px; right: 10px; width: 256px; max-height: calc(100% - 110px); display: flex; flex-direction: column; gap: 8px; z-index: 3; pointer-events: none; }
+.hud-card { pointer-events: auto; background: rgba(28, 32, 41, .92); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; overflow: auto; }
+.hud-card .hud-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.hud-card .hud-head h2 { margin: 0; flex: 1; }
+.hud-card .hud-head button { padding: 1px 6px; font-size: 11px; }
+#statsTable { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+#statsTable td { padding: 2px 0; vertical-align: top; }
+#statsTable td:first-child { color: var(--dim); padding-right: 8px; white-space: nowrap; }
+#statsTable td:last-child { text-align: right; word-break: break-word; }
+#matsList { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow: auto; }
+.mat-row { display: grid; grid-template-columns: 24px 1fr auto auto; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 5px; border: 1px solid transparent; }
+.mat-row:hover { background: #252a35; }
+.mat-row.solo { border-color: var(--accent); background: #33291c; }
+.mat-row input[type=color] { width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
+.mat-row .mat-name { min-width: 0; text-align: left; border: 0; background: none; padding: 0; display: flex; flex-direction: column; cursor: pointer; }
+.mat-row .mat-name b { font-weight: 500; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mat-row .mat-name span { font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.mat-row .mat-btn { padding: 1px 5px; font-size: 11px; }
+#bottomDock { position: absolute; left: 10px; right: 10px; bottom: 28px; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; pointer-events: none; z-index: 2; }
 /* the model's own reference images: a strip of thumbnails over the foot of the 3D view, and one of them large beside it */
-#modelRefs { position: absolute; left: 10px; bottom: 32px; max-width: calc(100% - 20px); background: rgba(28, 32, 41, .9); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px 6px; }
+#modelRefs { pointer-events: auto; min-width: 0; max-width: 60%; background: rgba(28, 32, 41, .9); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px 6px; }
 #modelRefs h2 { margin: 0; cursor: pointer; user-select: none; } #modelRefs.closed .strip { display: none; }
 #modelRefs .strip { display: flex; gap: 6px; overflow-x: auto; margin-top: 4px; }
+/* animation playback bar: shown automatically when a .glb or .fbx carries animation clips */
+#animBar { pointer-events: auto; margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 100%; background: rgba(28, 32, 41, .92); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 12px; }
+#animBar select { width: auto; max-width: 170px; padding: 2px 6px; font-size: 12px; }
+#animBar button { padding: 2px 7px; font-size: 12px; }
+#animBar input[type=range] { width: 130px; padding: 0; accent-color: var(--accent); cursor: pointer; }
+#animTime { font-variant-numeric: tabular-nums; color: var(--dim); min-width: 78px; text-align: right; }
 .mref { flex: none; display: grid; justify-items: center; gap: 1px; padding: 3px; background: none; border: 1px solid transparent; font-size: 11px; color: var(--dim); }
 .mref img { display: block; width: 56px; height: 56px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); background: #252a35; }
 .mref span { max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -61,9 +87,8 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
 #refPanel { position: relative; flex: none; width: 42%; min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
 #refPanel .bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
 #refPanel .bar b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #refPanel .bar .grow { flex: 1; }
-#refPanel .pic { flex: 1; min-height: 0; display: grid; place-items: center; padding: 8px; }
+#refPanel .pic { flex: 1; min-height: 0; display: flex; gap: 10px; align-items: center; justify-content: center; padding: 8px; }
 #refPanel .pic img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
-#refPanel .pic { display: flex; gap: 10px; align-items: center; justify-content: center; }
 #refPanel .pic figure { flex: 1 1 0; min-width: 0; max-height: 100%; margin: 0; display: grid; justify-items: center; gap: 4px; } #refPanel .pic figcaption { font-size: 11px; color: var(--dim); text-align: center; }
 #refPanel .pic figure img { max-width: 100%; max-height: calc(100% - 20px); }
 /* the match panel: scores per view, the target slider */
@@ -94,8 +119,31 @@ h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: v
     <button id="wire" title="Wireframe">Wire</button>
     <button id="colliders" title="Show collision meshes (*-colonly)" hidden>Colliders</button>
     <button id="gridBtn" title="The floor grid (the same switch as the map's grid)">Grid</button>
+    <button id="statsBtn" title="Model dimensions, geometry, materials and textures">Stats</button>
+    <button id="matsBtn" title="Inspect and tint individual material slots">Materials</button>
   </div>
-  <div id="modelRefs" hidden><h2 id="refsHead" title="The images this model was made from. Click to fold">References</h2><div class="strip" id="refStrip"></div></div>
+  <div id="inspectDock">
+    <section id="statsPanel" class="hud-card" hidden>
+      <div class="hud-head"><h2>Model stats</h2><button id="statsClose" title="Close">×</button></div>
+      <table id="statsTable"></table>
+    </section>
+    <section id="matsPanel" class="hud-card" hidden>
+      <div class="hud-head"><h2 id="matsHead">Materials</h2><button id="matsReset" hidden title="Restore original materials">Reset</button><button id="matsClose" title="Close">×</button></div>
+      <div id="matsList" class="dim">Open a model.</div>
+    </section>
+  </div>
+  <div id="bottomDock">
+    <div id="modelRefs" hidden><h2 id="refsHead" title="The images this model was made from. Click to fold">References</h2><div class="strip" id="refStrip"></div></div>
+    <div id="animBar" hidden>
+      <button id="animPlay" title="Play / Pause (Space)">▶</button>
+      <button id="animStop" title="Rewind to start">⏹</button>
+      <select id="animClip" title="Animation clip"></select>
+      <input id="animScrub" type="range" min="0" max="1" step="0.001" value="0" title="Scrub timeline">
+      <span id="animTime">0.00 / 0.00s</span>
+      <select id="animSpeed" title="Playback speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+      <button id="animLoop" class="on" title="Loop playback">↻</button>
+    </div>
+  </div>
   <div id="status" class="dim"></div>
   <div id="overlay"><div id="overlayBody"></div></div>
  </div>
@@ -160,9 +208,11 @@ const round = (v) => Math.round(v * 1e4) / 1e4;
 const MB = 1024 * 1024;
 
 // state
-let info, T, scene, camera, renderer, controls, loader, ktx2Loader, texLoader, envTexture, key, ray, ndc;
-let model = null, modelPath = null, models = [], pinMode = false, wire = false, shading = 'textured', preferredShading = null, showColliders = false, saveTimer = null, pollTimer = null, loadToken = 0;
-let matLib = { sets: {}, plain: {} }, clayMat = null, clayMatDouble = null;
+let info, T, scene, camera, renderer, controls, loader, fbxLoader, ktx2Loader, texLoader, envTexture, key, ray, ndc;
+let model = null, modelPath = null, modelMeta = null, models = [], pinMode = false, wire = false, shading = 'textured', preferredShading = null, showColliders = false, saveTimer = null, pollTimer = null, loadToken = 0;
+let matLib = { sets: {}, plain: {} }, clayMat = null, clayMatDouble = null, ghostMat = null, ghostMatDouble = null;
+let mixer = null, clips = [], activeAction = null, activeClip = -1, animPlaying = false, animSpeed = 1, animLoop = true, lastFrameMs = 0;
+let matSlots = [], soloSlot = -1, modelStats = null;
 const texCache = new Map();                            // "set/file:srgb" → Promise<THREE.Texture | null>
 let draft = { note: '', workflow: 'auto', pins: [] }; // a pin: { position, normal, mesh, material, uv, camera, screenshot, note, refs: [data URL] }
 const markers = [];                                    // a sprite per draft pin (in order), then the sent ones
@@ -196,9 +246,10 @@ function showInstall() {
 async function startThree() {
   const base = info.three.base;
   T = await import('three');
-  const [{ OrbitControls }, { GLTFLoader }, { DRACOLoader }, { KTX2Loader }, { MeshoptDecoder }, { RoomEnvironment }] = await Promise.all([
-    import('three/addons/controls/OrbitControls.js'), import('three/addons/loaders/GLTFLoader.js'), import('three/addons/loaders/DRACOLoader.js'),
-    import('three/addons/loaders/KTX2Loader.js'), import('three/addons/libs/meshopt_decoder.module.js'), import('three/addons/environments/RoomEnvironment.js')]);
+  const [{ OrbitControls }, { GLTFLoader }, { FBXLoader }, { DRACOLoader }, { KTX2Loader }, { MeshoptDecoder }, { RoomEnvironment }] = await Promise.all([
+    import('three/addons/controls/OrbitControls.js'), import('three/addons/loaders/GLTFLoader.js'), import('three/addons/loaders/FBXLoader.js'),
+    import('three/addons/loaders/DRACOLoader.js'), import('three/addons/loaders/KTX2Loader.js'),
+    import('three/addons/libs/meshopt_decoder.module.js'), import('three/addons/environments/RoomEnvironment.js')]);
   renderer = new T.WebGLRenderer({ canvas: $('view'), antialias: true, preserveDrawingBuffer: true }); // keeps frames for screenshots
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.toneMapping = T.ACESFilmicToneMapping;
@@ -213,13 +264,21 @@ async function startThree() {
   texLoader = new T.TextureLoader();
   clayMat = new T.MeshStandardMaterial({ color: 0xb8b2a8, roughness: 0.85, metalness: 0.0, vertexColors: false });
   clayMatDouble = new T.MeshStandardMaterial({ color: 0xb8b2a8, roughness: 0.85, metalness: 0.0, vertexColors: false, side: T.DoubleSide });
+  ghostMat = new T.MeshStandardMaterial({ color: 0x5c6474, roughness: 0.9, metalness: 0.0, transparent: true, opacity: 0.16, depthWrite: false });
+  ghostMatDouble = new T.MeshStandardMaterial({ color: 0x5c6474, roughness: 0.9, metalness: 0.0, transparent: true, opacity: 0.16, depthWrite: false, side: T.DoubleSide });
   loader = new GLTFLoader()
     .setDRACOLoader(new DRACOLoader().setDecoderPath(`${base}examples/jsm/libs/draco/gltf/`))
     .setKTX2Loader(ktx2Loader)
     .setMeshoptDecoder(MeshoptDecoder);
+  fbxLoader = new FBXLoader();
   ray = new T.Raycaster(); ndc = new T.Vector2();
   new ResizeObserver(resize).observe($('main')); resize();
-  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+  lastFrameMs = performance.now();
+  renderer.setAnimationLoop((now) => {
+    const dt = Math.min(0.1, Math.max(0, (now - lastFrameMs) / 1000)); lastFrameMs = now;
+    if (mixer && animPlaying) { mixer.update(dt * animSpeed); syncAnimUI(); }
+    controls.update(); renderer.render(scene, camera);
+  });
   $('toolbar').hidden = false;
   $('overlayBody').replaceChildren(el('p', { textContent: 'Pick a model on the left.' }));
   wireView();
@@ -254,19 +313,26 @@ function setColliders(on) {
   showColliders = on; $('colliders').classList.toggle('on', on);
   model?.traverse((o) => { if (o.isMesh && o.userData.collider) o.visible = on; });
 }
+function materialForSlot(orig, resolved, slotIdx) {
+  const slot = slotIdx >= 0 ? matSlots[slotIdx] : null;
+  if (soloSlot >= 0 && slotIdx !== soloSlot) return orig?.side === T.DoubleSide ? ghostMatDouble : ghostMat;
+  if (slot?.tintMat) return slot.tintMat;
+  if (shading === 'clay') return orig?.side === T.DoubleSide ? clayMatDouble : clayMat;
+  if (shading === 'mask') return orig;
+  return resolved || orig;
+}
 function applyShading() {
-  if (clayMat) clayMat.wireframe = wire;
-  if (clayMatDouble) clayMatDouble.wireframe = wire;
+  for (const m of [clayMat, clayMatDouble, ghostMat, ghostMatDouble]) if (m) m.wireframe = wire;
+  for (const s of matSlots) if (s.tintMat) s.tintMat.wireframe = wire;
   model?.traverse((o) => {
     if (!o.isMesh || !o.userData.origMaterial) return;
-    const orig = o.userData.origMaterial, resolved = o.userData.resolvedMaterial;
+    const orig = o.userData.origMaterial, resolved = o.userData.resolvedMaterial, slots = o.userData.matSlotIndices;
     let next;
-    if (shading === 'clay') {
-      next = Array.isArray(orig) ? orig.map((m) => (m?.side === T.DoubleSide ? clayMatDouble : clayMat)) : (orig?.side === T.DoubleSide ? clayMatDouble : clayMat);
-    } else if (shading === 'mask') {
-      next = orig;
+    if (Array.isArray(orig)) {
+      const resArr = Array.isArray(resolved) ? resolved : [];
+      next = orig.map((m, i) => materialForSlot(m, resArr[i], Array.isArray(slots) ? slots[i] : -1));
     } else {
-      next = resolved || orig;
+      next = materialForSlot(orig, resolved, typeof slots === 'number' ? slots : -1);
     }
     o.material = next;
     for (const m of [].concat(next || [])) if (m) m.wireframe = wire;
@@ -280,18 +346,23 @@ function setShading(mode, { byUser = false } = {}) {
 }
 function setWire(on) { wire = on; $('wire').classList.toggle('on', on); applyShading(); }
 function setPinMode(on) { pinMode = on; $('pinMode').classList.toggle('on', on); $('main').classList.toggle('pinning', on); }
+function disposeMaterialOverrides() {
+  for (const s of matSlots) { s.tintMat?.dispose(); s.tintMat = null; s.tint = null; }
+  matSlots = []; soloSlot = -1;
+}
 function dispose(root) {
+  const shared = new Set([clayMat, clayMatDouble, ghostMat, ghostMatDouble]);
   const seenOrig = new Set(), seenResolved = new Set();
   root.traverse((o) => {
     o.geometry?.dispose();
     for (const m of [].concat(o.userData?.origMaterial || o.material || [])) {
-      if (!m || m === clayMat || m === clayMatDouble || seenOrig.has(m)) continue;
+      if (!m || shared.has(m) || seenOrig.has(m)) continue;
       seenOrig.add(m);
       for (const v of Object.values(m)) if (v?.isTexture && !v.userData?.shared) v.dispose();
       m.dispose();
     }
     for (const m of [].concat(o.userData?.resolvedMaterial || [])) {
-      if (!m || seenOrig.has(m) || seenResolved.has(m)) continue;
+      if (!m || shared.has(m) || seenOrig.has(m) || seenResolved.has(m)) continue;
       seenResolved.add(m);
       m.dispose();
     }
@@ -504,6 +575,233 @@ async function resolveModelMaterials(root, token) {
   return { resolved, unresolvedMask };
 }
 
+// ---- model stats, material inspector and animation playback
+const TEX_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'alphaMap', 'bumpMap', 'specularMap', 'lightMap'];
+const fmtBytes = (n) => (n >= MB ? `${(n / MB).toFixed(2)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
+const fmtDim = (v) => (v >= 100 ? v.toFixed(1) : v >= 10 ? v.toFixed(2) : v.toFixed(3)).replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1');
+const fmtSec = (s) => `${Math.max(0, s).toFixed(2)}s`;
+
+function meshTris(o, group = null) {
+  const g = o.geometry; if (!g?.attributes?.position) return 0;
+  if (group) return Math.round((group.count || 0) / 3);
+  return Math.round((g.index ? g.index.count : g.attributes.position.count) / 3);
+}
+function computeStats(root, meta) {
+  const box = visibleBounds(root), size = box.getSize(new T.Vector3());
+  const mats = new Set(), texs = new Set(), bones = new Set();
+  let tris = 0, verts = 0, meshes = 0, skinned = 0, colliders = 0, maxTexW = 0, maxTexH = 0;
+  root.traverse((o) => {
+    if (o.isBone) bones.add(o);
+    if (!o.isMesh) return;
+    if (o.userData.collider) { colliders++; return; }
+    meshes++;
+    if (o.isSkinnedMesh) { skinned++; if (o.skeleton?.bones) for (const b of o.skeleton.bones) bones.add(b); }
+    tris += meshTris(o);
+    verts += o.geometry?.attributes?.position?.count || 0;
+    const active = o.userData.resolvedMaterial || o.userData.origMaterial || o.material;
+    for (const m of [].concat(active || [])) {
+      if (!m) continue;
+      mats.add(m);
+      for (const k of TEX_SLOTS) {
+        const t = m[k];
+        if (!t?.isTexture) continue;
+        texs.add(t);
+        const w = t.image?.width || t.image?.videoWidth || 0, h = t.image?.height || t.image?.videoHeight || 0;
+        if (w * h > maxTexW * maxTexH) { maxTexW = w; maxTexH = h; }
+      }
+    }
+  });
+  return {
+    format: /\.fbx$/i.test(meta.path) ? 'FBX' : 'GLB',
+    size: meta.size,
+    dims: [size.x, size.y, size.z],
+    min: [box.min.x, box.min.y, box.min.z],
+    max: [box.max.x, box.max.y, box.max.z],
+    tris, verts, meshes, skinned, bones: bones.size, colliders,
+    materials: mats.size, textures: texs.size, maxTex: maxTexW && maxTexH ? `${maxTexW}×${maxTexH}` : null,
+    clips: clips.length,
+  };
+}
+function renderStats() {
+  const table = $('statsTable');
+  if (!modelStats) { table.replaceChildren(); return; }
+  const s = modelStats;
+  const rows = [
+    ['Format', `${s.format} · ${fmtBytes(s.size)}`],
+    ['Dimensions', `${fmtDim(s.dims[0])} × ${fmtDim(s.dims[1])} × ${fmtDim(s.dims[2])} m`],
+    ['Triangles', s.tris.toLocaleString()],
+    ['Vertices', s.verts.toLocaleString()],
+    ['Meshes', s.colliders ? `${s.meshes} (+${s.colliders} col)` : String(s.meshes)],
+    ['Materials', String(s.materials)],
+    ['Textures', s.maxTex ? `${s.textures} (max ${s.maxTex})` : String(s.textures)],
+  ];
+  if (s.skinned || s.bones) rows.push(['Rig', `${s.skinned} skinned · ${s.bones} bones`]);
+  if (s.clips) rows.push(['Animations', `${s.clips} clip${s.clips === 1 ? '' : 's'}`]);
+  table.replaceChildren(...rows.map(([k, v]) => el('tr', {}, el('td', { textContent: k }), el('td', { textContent: v }))));
+}
+function baseStatusText() {
+  if (!modelMeta || !modelStats) return '';
+  const s = modelStats;
+  return `${modelMeta.path} · ${s.tris.toLocaleString()} tris · ${fmtDim(s.dims[0])}×${fmtDim(s.dims[1])}×${fmtDim(s.dims[2])} m · ${fmtBytes(s.size)}`;
+}
+
+function colorHexOf(mat) { return mat?.color?.isColor ? `#${mat.color.getHexString()}` : '#b8b2a8'; }
+function buildMaterialSlots(root) {
+  disposeMaterialOverrides();
+  const byMat = new Map();
+  const slotFor = (orig, resolved) => {
+    const key = orig || '__none__';
+    if (!byMat.has(key)) {
+      const idx = matSlots.length;
+      const slot = { index: idx, name: orig?.name || `Material ${idx + 1}`, orig, resolved: resolved || null, side: orig?.side ?? T.FrontSide, baseColor: colorHexOf(resolved || orig), tris: 0, meshes: 0, tint: null, tintMat: null };
+      matSlots.push(slot); byMat.set(key, slot);
+    }
+    return byMat.get(key);
+  };
+  root.traverse((o) => {
+    if (!o.isMesh || o.userData.collider) return;
+    const orig = o.userData.origMaterial, resolved = o.userData.resolvedMaterial;
+    if (Array.isArray(orig)) {
+      const resArr = Array.isArray(resolved) ? resolved : [], groups = o.geometry?.groups || [];
+      const seenHere = new Set();
+      o.userData.matSlotIndices = orig.map((m, i) => {
+        const s = slotFor(m, resArr[i]);
+        if (!seenHere.has(s)) { s.meshes++; seenHere.add(s); }
+        return s.index;
+      });
+      if (groups.length) for (const g of groups) { const idx = o.userData.matSlotIndices[g.materialIndex]; if (idx !== undefined) matSlots[idx].tris += meshTris(o, g); }
+      else if (o.userData.matSlotIndices.length) matSlots[o.userData.matSlotIndices[0]].tris += meshTris(o);
+    } else {
+      const s = slotFor(orig, resolved);
+      s.meshes++; s.tris += meshTris(o);
+      o.userData.matSlotIndices = s.index;
+    }
+  });
+  renderMaterials();
+}
+function refreshMaterialSlotColors() {
+  model?.traverse((o) => {
+    if (!o.isMesh || o.userData.collider || o.userData.matSlotIndices === undefined) return;
+    const res = o.userData.resolvedMaterial, slots = o.userData.matSlotIndices;
+    if (Array.isArray(slots)) slots.forEach((idx, i) => { const m = Array.isArray(res) ? res[i] : null; if (m && matSlots[idx]) { matSlots[idx].resolved = m; matSlots[idx].baseColor = colorHexOf(m); } });
+    else if (res && matSlots[slots]) { matSlots[slots].resolved = res; matSlots[slots].baseColor = colorHexOf(res); }
+  });
+  renderMaterials();
+}
+function setMaterialTint(idx, hex, { rebuild = true } = {}) {
+  const s = matSlots[idx]; if (!s) return;
+  if (!hex) { s.tintMat?.dispose(); s.tintMat = null; s.tint = null; }
+  else {
+    s.tint = hex;
+    if (!s.tintMat) s.tintMat = new T.MeshStandardMaterial({ color: hex, roughness: 0.65, metalness: 0.05, side: s.side, wireframe: wire });
+    else s.tintMat.color.set(hex);
+  }
+  applyShading();
+  if (rebuild) renderMaterials();
+  else {
+    $('matsReset').hidden = !(soloSlot >= 0 || matSlots.some((x) => !!x.tint));
+    const row = $('matsList').children[idx];
+    if (row) {
+      const sub = row.querySelector('.mat-name span'), undo = row.querySelector('.mat-undo');
+      if (sub) sub.textContent = `${s.tris.toLocaleString()} tris · ${s.meshes} mesh${s.meshes === 1 ? '' : 'es'}${s.tint ? ' · tinted' : ''}`;
+      if (undo) undo.hidden = !s.tint;
+    }
+  }
+}
+function toggleMaterialSolo(idx) {
+  soloSlot = soloSlot === idx ? -1 : idx;
+  applyShading(); renderMaterials();
+}
+function resetMaterials() {
+  for (const s of matSlots) { s.tintMat?.dispose(); s.tintMat = null; s.tint = null; }
+  soloSlot = -1;
+  applyShading(); renderMaterials();
+}
+function renderMaterials() {
+  const list = $('matsList'), head = $('matsHead'), reset = $('matsReset');
+  head.textContent = matSlots.length ? `Materials (${matSlots.length})` : 'Materials';
+  const dirty = soloSlot >= 0 || matSlots.some((s) => !!s.tint);
+  reset.hidden = !dirty;
+  if (!model) { list.className = 'dim'; list.textContent = 'Open a model.'; return; }
+  if (!matSlots.length) { list.className = 'dim'; list.textContent = 'No materials.'; return; }
+  list.className = '';
+  list.replaceChildren(...matSlots.map((s, i) => {
+    const pick = el('input', { type: 'color', value: s.tint || s.baseColor, title: 'Tint this material slot to inspect face assignments' });
+    pick.oninput = () => setMaterialTint(i, pick.value, { rebuild: false });
+    const name = el('button', { className: 'mat-name', title: `${s.name} · click to isolate faces`, onclick: () => toggleMaterialSolo(i) },
+      el('b', { textContent: s.name }),
+      el('span', { textContent: `${s.tris.toLocaleString()} tris · ${s.meshes} mesh${s.meshes === 1 ? '' : 'es'}${s.tint ? ' · tinted' : ''}` }));
+    const solo = el('button', { className: `mat-btn${soloSlot === i ? ' on' : ''}`, textContent: '◎', title: soloSlot === i ? 'Show all materials' : 'Isolate this material', onclick: () => toggleMaterialSolo(i) });
+    const undo = el('button', { className: 'mat-btn mat-undo', textContent: '↺', title: 'Reset tint', hidden: !s.tint, onclick: () => setMaterialTint(i, null) });
+    return el('div', { className: `mat-row${soloSlot === i ? ' solo' : ''}` }, pick, name, solo, undo);
+  }));
+}
+
+function stopAnimations() {
+  if (mixer) { mixer.stopAllAction(); if (model) mixer.uncacheRoot(model); mixer = null; }
+  clips = []; activeAction = null; activeClip = -1; animPlaying = false;
+  $('animBar').hidden = true;
+}
+function selectClip(index, { play = true } = {}) {
+  if (!mixer || !clips.length) return;
+  activeClip = Math.max(0, Math.min(index, clips.length - 1));
+  mixer.stopAllAction();
+  const clip = clips[activeClip];
+  activeAction = mixer.clipAction(clip);
+  activeAction.setLoop(animLoop ? T.LoopRepeat : T.LoopOnce, Infinity);
+  activeAction.clampWhenFinished = true;
+  activeAction.reset();
+  activeAction.play();
+  activeAction.paused = !play;
+  animPlaying = play;
+  $('animClip').value = String(activeClip);
+  $('animScrub').max = String(Math.max(clip.duration, 0.001));
+  if (!play) mixer.update(0);
+  syncAnimUI();
+}
+function setAnimPlaying(on) {
+  if (!activeAction) return;
+  if (on && !animLoop && activeAction.time >= activeAction.getClip().duration - 1e-4) activeAction.reset();
+  animPlaying = on;
+  activeAction.paused = !on;
+  syncAnimUI();
+}
+function scrubAnim(time) {
+  if (!mixer || !activeAction) return;
+  const dur = activeAction.getClip().duration || 0, t = Math.max(0, Math.min(dur, time));
+  const wasPaused = activeAction.paused;
+  activeAction.paused = false;
+  activeAction.time = t;
+  mixer.update(0);
+  activeAction.paused = wasPaused;
+  syncAnimUI();
+}
+function syncAnimUI() {
+  if (!activeAction) return;
+  const dur = activeAction.getClip().duration || 0;
+  const t = Math.max(0, Math.min(dur, activeAction.time));
+  $('animScrub').value = String(t);
+  $('animTime').textContent = `${fmtSec(t)} / ${fmtSec(dur)}`;
+  $('animPlay').textContent = animPlaying ? '⏸' : '▶';
+  $('animPlay').classList.toggle('on', animPlaying);
+  $('animLoop').classList.toggle('on', animLoop);
+}
+function setupAnimations(root, list) {
+  stopAnimations();
+  clips = Array.isArray(list) ? list.filter((c) => c && c.tracks?.length) : [];
+  if (!clips.length) return;
+  mixer = new T.AnimationMixer(root);
+  mixer.addEventListener('finished', () => { animPlaying = false; syncAnimUI(); });
+  $('animClip').replaceChildren(...clips.map((c, i) => el('option', { value: String(i), textContent: `${c.name || `Clip ${i + 1}`} (${fmtSec(c.duration)})` })));
+  $('animBar').hidden = false;
+  selectClip(0, { play: true });
+}
+function setHudPanel(name, on) {
+  const panelEl = $(`${name}Panel`), btnEl = $(`${name}Btn`);
+  panelEl.hidden = !on; btnEl.classList.toggle('on', on);
+  keep.set(`viewer-${name}-open`, on ? '1' : '0');
+}
+
 // ---- drafts of new models (the New model plugin, when it is on; only in the workbench, where its screen opens as a tab)
 const MAKER = 'nfgames.model-maker';
 let drafts = [], draftFolders = nfTree.store('viewer-drafts');
@@ -520,8 +818,8 @@ async function listDrafts() {
   nfTree.render(box, nfTree.build(drafts.map((d) => ({ ...d, path: `Drafts/${d.slug}` })), { closed: draftFolders.closed }), { onToggle: (path, open) => draftFolders.toggle(path, open),
     row: (d) => el('button', { className: 'model', title: `A draft of a new model: ${d.status}`, onclick: () => wb.run(`${MAKER}/new-model`, { slug: d.slug, name: d.name }) }, d.name, el('span', { className: 'draft-step', textContent: d.status })) });
 }
-// the list is shown again whenever this tab is (the side panel being lent back resizes the page)
-let draftsTimer = null; addEventListener('resize', () => { clearTimeout(draftsTimer); draftsTimer = setTimeout(listDrafts, 150); });
+// the list is shown again whenever this tab is shown again (its side panel is lent back to the workbench)
+let draftsTimer = null; addEventListener('nf:lent', (e) => { if (e.detail?.region !== 'side') return; clearTimeout(draftsTimer); draftsTimer = setTimeout(listDrafts, 50); });
 
 // ---- models
 async function listModels() {
@@ -537,7 +835,7 @@ let folders = nfTree.store('viewer');
 // once, under Levels at the top, by its name; a model directly in the project's folder goes under that folder's name.
 const LEVELS = 'Levels';
 function shownPaths() {
-  const name = (m) => m.path.split('/').pop().replace(/\.glb$/i, ''), where = (m) => m.path.split('/').slice(0, -1).join(' › ') || info.root;
+  const name = (m) => m.path.split('/').pop().replace(/\.(glb|fbx)$/i, ''), where = (m) => m.path.split('/').slice(0, -1).join(' › ') || info.root;
   const levels = models.filter((m) => m.level), twice = new Set(levels.map(name).filter((n, i, all) => all.indexOf(n) !== i));
   return new Map(models.map((m) => [m.path, m.level ? `${LEVELS}/${name(m)}${twice.has(name(m)) ? ` (${where(m)})` : ''}` : m.path.includes('/') ? m.path : `${info.root || info.models}/${m.path}`]));
 }
@@ -545,37 +843,42 @@ function drawModelList() {
   const box = $('models'), shown = shownPaths();
   const items = models.map((m) => ({ ...m, path: shown.get(m.path), search: m.path, model: m })).sort((a, b) => !!b.model.level - !!a.model.level);   // levels first, the rest as listed
   const nodes = nfTree.build(items, { filter: $('filter').value, closed: folders.closed });
-  if (!nodes.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : info.models === '.' ? 'no .glb files in this project' : `no .glb files in ${info.models}/`; return; }
+  if (!nodes.length) { box.className = 'dim'; box.textContent = models.length ? 'no match' : info.models === '.' ? 'no .glb or .fbx files in this project' : `no .glb or .fbx files in ${info.models}/`; return; }
   box.className = '';
   nfTree.render(box, nodes, { onToggle: (path, open) => folders.toggle(path, open),
-    row: ({ model: m }, n) => el('button', { className: `model${m.path === modelPath ? ' current' : ''}`, textContent: n.label, title: `${m.path} · ${(m.size / MB).toFixed(1)} MB`, onclick: () => openModel(m) }) });
+    row: ({ model: m }, n) => el('button', { className: `model${m.path === modelPath ? ' current' : ''}`, textContent: n.label, title: `${m.path} · ${fmtBytes(m.size)}`, onclick: () => openModel(m) }) });
 }
 async function openModel(m, { keepCamera = false } = {}) {
   if (!T) return;
   if (m.size > 200 * MB && !confirm(`${m.path} is ${(m.size / MB).toFixed(0)} MB. Load it?`)) return;
-  const token = ++loadToken;
+  const token = ++loadToken, isFbx = /\.fbx$/i.test(m.path);
   say(`loading ${m.path}…`);
-  let gltf;
-  try { gltf = await loader.loadAsync(`/api/model?path=${encodeURIComponent(m.path)}`); } catch (e) { if (token === loadToken) say(`could not load ${m.path}: ${e.message}`, 'bad'); return; }
-  if (token !== loadToken) { dispose(gltf.scene); return; }
+  let loaded, loadedClips = [];
+  try {
+    const url = `/api/model?path=${encodeURIComponent(m.path)}`;
+    if (isFbx) { loaded = await fbxLoader.loadAsync(url); loadedClips = loaded.animations || []; }
+    else { const gltf = await loader.loadAsync(url); loaded = gltf.scene; loadedClips = gltf.animations || []; }
+  } catch (e) { if (token === loadToken) say(`could not load ${m.path}: ${e.message}`, 'bad'); return; }
+  if (token !== loadToken) { dispose(loaded); return; }
+  stopAnimations();
+  disposeMaterialOverrides();
   if (model) { scene.remove(model); dispose(model); }
-  model = gltf.scene; scene.add(model); // the scene root stays at identity, so world coordinates are the model's own
-  let hasColliders = false, maskOnlyMeshes = 0, visibleMeshes = 0, tris = 0;
+  model = loaded; modelMeta = m; scene.add(model); // the scene root stays at identity, so world coordinates are the model's own
+  let hasColliders = false, maskOnlyMeshes = 0;
   model.traverse((o) => {
     if (!o.isMesh) return;
     o.userData.origMaterial = o.material;
     if (isCollider(o)) { o.userData.collider = true; o.visible = showColliders; hasColliders = true; }
-    else {
-      visibleMeshes++;
-      if (meshHasMaskColor(o) && [].concat(o.material || []).every((mat) => !mat?.map)) maskOnlyMeshes++;
-      tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
-    }
+    else if (meshHasMaskColor(o) && [].concat(o.material || []).every((mat) => !mat?.map)) maskOnlyMeshes++;
   });
   $('colliders').hidden = !hasColliders; $('colliders').classList.toggle('on', showColliders);
+  buildMaterialSlots(model);
+  setupAnimations(model, loadedClips);
   // start in Clay right away if the model has raw mask-only COLOR_0 so it never flashes red while textures load
   const initialMode = preferredShading || (maskOnlyMeshes > 0 ? 'clay' : 'textured');
   setShading(initialMode);
   placeGrid(visibleBounds(model));
+  modelStats = computeStats(model, m); renderStats();
   modelPath = m.path; folders.reveal(shownPaths().get(m.path)); drawModelList();
   history.replaceState(null, '', `/viewer?model=${encodeURIComponent(m.path)}`);
   if (!keepCamera) frame();
@@ -589,13 +892,15 @@ async function openModel(m, { keepCamera = false } = {}) {
   $('note').value = draft.note || '';
   if (draft.workflow && [...$('workflow').options].some((o) => o.value === draft.workflow && !o.disabled)) $('workflow').value = draft.workflow;
   rebuildMarkers(); drawPins(); updateSend(); loadRefs(m.path); loadMatch(m.path);
-  const baseStatus = `${m.path} · ${Math.round(tris).toLocaleString()} triangles`;
+  const baseStatus = baseStatusText();
   say(maskOnlyMeshes > 0 && !preferredShading ? `${baseStatus} · loading project materials…` : baseStatus);
   const { resolved } = await resolveModelMaterials(model, token);
   if (token !== loadToken) return;
   if (resolved > 0) {
+    refreshMaterialSlotColors();
     setShading(preferredShading || 'textured');
-    say(`${baseStatus} · ${resolved} project material${resolved === 1 ? '' : 's'}`);
+    modelStats = computeStats(model, m); renderStats();
+    say(`${baseStatusText()} · ${resolved} project material${resolved === 1 ? '' : 's'}`);
   } else if (maskOnlyMeshes > 0 && !preferredShading) {
     say(`${baseStatus} · clay (vertex mask)`);
   } else {
@@ -722,13 +1027,35 @@ function wireView() {
     if (pinMode && !moved && model) { const h = hitModel(e); if (h) addPin(h); }
   });
   $('pinMode').onclick = () => setPinMode(!pinMode);
-  addEventListener('keydown', (e) => { if (e.target.closest('textarea, input, select')) return; if (e.key === 'p' || e.key === 'P') setPinMode(!pinMode); if (e.key === 'Escape') setPinMode(false); });
+  addEventListener('keydown', (e) => {
+    if (e.target.closest('textarea, input, select')) return;
+    if (e.key === 'p' || e.key === 'P') setPinMode(!pinMode);
+    if (e.key === 'Escape') setPinMode(false);
+    if (e.key === ' ' && activeAction) { e.preventDefault(); setAnimPlaying(!animPlaying); }
+  });
   $('resetView').onclick = () => model && frame();
   $('lighting').onchange = (e) => setLighting(e.target.value);
   $('shading').onchange = (e) => setShading(e.target.value, { byUser: true });
   $('wire').onclick = () => setWire(!wire);
   $('colliders').onclick = () => setColliders(!showColliders);
   $('gridBtn').onclick = () => nfGrid.toggle();
+  $('statsBtn').onclick = () => setHudPanel('stats', $('statsPanel').hidden);
+  $('statsClose').onclick = () => setHudPanel('stats', false);
+  $('matsBtn').onclick = () => setHudPanel('mats', $('matsPanel').hidden);
+  $('matsClose').onclick = () => setHudPanel('mats', false);
+  $('matsReset').onclick = resetMaterials;
+  setHudPanel('stats', keep.get('viewer-stats-open') === '1');
+  setHudPanel('mats', keep.get('viewer-mats-open') === '1');
+  $('animPlay').onclick = () => setAnimPlaying(!animPlaying);
+  $('animStop').onclick = () => { setAnimPlaying(false); scrubAnim(0); };
+  $('animClip').onchange = (e) => selectClip(Number(e.target.value), { play: animPlaying });
+  $('animScrub').oninput = (e) => scrubAnim(Number(e.target.value));
+  $('animSpeed').onchange = (e) => { animSpeed = Number(e.target.value) || 1; };
+  $('animLoop').onclick = () => {
+    animLoop = !animLoop;
+    if (activeAction) { activeAction.setLoop(animLoop ? T.LoopRepeat : T.LoopOnce, Infinity); activeAction.clampWhenFinished = true; }
+    syncAnimUI();
+  };
 }
 async function shrink(file) { // at most 2048 px on the long side; PNG when it has transparency, else JPEG
   const bmp = await createImageBitmap(file), k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));
@@ -799,6 +1126,7 @@ function drawMatch() {
   if (!model || !s) { clear(); note.className = 'dim'; note.textContent = model ? 'Looking at its references…' : 'Open a model.'; return; }
   note.className = 'dim';
   if (s.state === 'error') { clear(); note.className = 'bad'; note.textContent = s.error; return; }
+  if (s.state === 'unsupported') { clear(); note.textContent = s.error || 'Reference matching runs on .glb models.'; return; }
   if (s.state === 'no-views') { clear(); note.textContent = 'To measure this model against its references, put images named front, back, left, right, top or bottom in its .refs folder (see References). Concept and three-quarter images are shown, not scored.'; return; }
   btn.hidden = false;
   note.textContent = `Renders the model from ${s.views.join(', ')} and compares each with its reference.`;
@@ -914,6 +1242,15 @@ const first = want && (models.find((x) => x.path === want) || models.find((x) =>
 if (want && !first) say(`no such model: ${want}${ends.length > 1 ? ` (${ends.length} models end with it)` : ''}. Pick one on the left.`, 'bad');
 if (first && T) await openModel(first);
 pollJobs();
+window.__viewer = {
+  get ready() { return !!T; },
+  get modelPath() { return modelPath; },
+  get stats() { return modelStats; },
+  get clips() { return clips.map((c) => ({ name: c.name, duration: c.duration })); },
+  get anim() { return { playing: animPlaying, clip: activeClip, time: activeAction ? activeAction.time : 0, speed: animSpeed, loop: animLoop }; },
+  get materials() { return matSlots.map((s) => ({ name: s.name, tris: s.tris, tint: s.tint, baseColor: s.baseColor, solo: soloSlot === s.index })); },
+  open: (path) => { const m = models.find((x) => x.path === path); return m ? openModel(m) : null; },
+};
 </script>
 </body>
 </html>

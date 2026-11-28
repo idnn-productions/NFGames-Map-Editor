@@ -2,10 +2,12 @@ node_modules/
 # the editor's backups and temporary files beside a map
 *.prev.json
 *.tmp
-# what the example's Apply action writes
+# what the example's Apply action and review session write
 examples/sample/out/
+examples/sample/.review/
 # test and check output
 test/out/
+.playwright-mcp/
 .DS_Store
 Thumbs.db
 # three.js, installed on demand by the model viewer

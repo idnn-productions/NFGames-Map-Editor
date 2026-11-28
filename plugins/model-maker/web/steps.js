@@ -7,7 +7,7 @@ import { shrink } from './shrink.js';
 import { openLarge } from './large.js';
 import { notesPanel } from './notes.js';
 
-const SERVICE = 'nfgames.codex-image/image', MODEL = 'nfgames.comfy-model/model', BLENDER = 'https://www.blender.org/download/', AUTOREMESHER = 'https://github.com/huxingyi/autoremesher/releases', ALL_VIEWS = ['front', 'back', 'left', 'right', 'three-quarter', 'top'];
+const SERVICE = 'nfgames.codex-image/image', MODEL = 'nfgames.comfy-model/model', BLENDER = 'https://www.blender.org/download/', AUTOREMESHER = 'https://github.com/huxingyi/autoremesher/releases', ALL_VIEWS = ['front', 'back', 'left', 'right', 'three-quarter', 'top', 'bottom'];
 const STEPS = [['concept', '① Concept'], ['views', '② Views'], ['model', '③ Model']];
 const post = (body) => ({ method: 'POST', body: JSON.stringify(body) });
 
@@ -289,7 +289,8 @@ export function createScreen({ el, api, doc, slug, then, reopen }) {
         ...(mesh ? [[mesh.floating, 'floating piece', 'parts that touch nothing'], [mesh.flippedFaces, 'flipped face', 'faces that point into the model'], [mesh.nonManifoldEdges, 'non-manifold edge', 'edges shared by more than two faces']]
           .filter(([n]) => n > 0).map(([n, what, why]) => h('p', { className: 'mm-bad', textContent: `✕ ${n} ${what}${n === 1 ? '' : 's'}: ${why}` })) : []),
         r && r.report && r.report.inspectError ? h('p', { className: 'mm-note', textContent: `The mesh was not inspected: ${r.report.inspectError}` }) : null,
-        Object.assign(h('a', { className: 'mm-btn primary', textContent: 'Open in the model viewer', href: `/viewer?model=${encodeURIComponent(draft.model.path.replace(/^models\//, ''))}` }), { target: '_blank', rel: 'noopener' })) : null];
+        Object.assign(h('a', { className: 'mm-btn primary', textContent: 'Open in the model viewer', href: `/viewer?model=${encodeURIComponent(draft.model.path)}`,
+          onclick: (e) => { if (window.nfWorkbench?.openView) { e.preventDefault(); window.nfWorkbench.openView('viewer', { model: draft.model.path }); } } }), { target: '_blank', rel: 'noopener' })) : null];
   }
   function draw() {
     if (gone) return;

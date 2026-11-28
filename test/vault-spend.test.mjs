@@ -28,8 +28,11 @@ describe('the vault', () => {
     assert.equal(v.where, 'the macOS Keychain');
     assert.equal(v.get('a.b.TOKEN'), null);
     v.set('a.b.TOKEN', 'sk live "quoted" secret'); assert.equal(v.get('a.b.TOKEN'), 'sk live "quoted" secret'); assert.ok(v.has('a.b.TOKEN'));
+    const callsBefore = readFileSync(join(dir, 'security.json.lines'), 'utf8').trim().split('\n').length;
+    assert.ok(v.has('a.b.TOKEN'));
+    assert.equal(readFileSync(join(dir, 'security.json.lines'), 'utf8').trim().split('\n').length, callsBefore);
     assert.doesNotMatch(readFileSync(join(dir, 'security.json.lines'), 'utf8'), /quoted/);
-    v.delete('a.b.TOKEN'); assert.equal(v.get('a.b.TOKEN'), null);
+    v.delete('a.b.TOKEN'); assert.equal(v.has('a.b.TOKEN'), false); assert.equal(v.get('a.b.TOKEN'), null);
     assert.throws(() => v.set('bad name; rm', 'x'), /not a key name/);
   });
   it('elsewhere: a file only its owner can read', () => {

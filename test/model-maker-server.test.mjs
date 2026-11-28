@@ -62,6 +62,7 @@ describe('the model maker', () => {
     const { draft } = await ok('/draft/ref', { slug: 'brass-lantern', name: 'photo.png', data: PNG_1PX });
     assert.deepEqual(draft.refs, ['.nfgames/drafts/brass-lantern/refs/ref-1.png']); assert.ok(existsSync(inDraft('brass-lantern', 'refs', 'ref-1.png')));
     assert.equal((await post('/draft/ref', { slug: 'brass-lantern', name: 'x.svg', data: 'data:image/svg+xml;base64,PHN2Zy8+' })).status, 400);
+    assert.equal((await post('/draft/ref', { slug: 'brass-lantern', name: 'fake.png', data: `data:image/png;base64,${Buffer.from('not a png').toString('base64')}` })).status, 400);
     for (let i = 2; i <= 8; i++) await ok('/draft/ref', { slug: 'brass-lantern', name: 'p.png', data: PNG_1PX });
     const ninth = await post('/draft/ref', { slug: 'brass-lantern', name: 'p.png', data: PNG_1PX });
     assert.equal(ninth.status, 400); assert.match(ninth.body.error, /8/);

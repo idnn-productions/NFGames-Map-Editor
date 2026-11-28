@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync, truncateSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listModels, resolveModel, listRefs, modelRefs, resolveRef, REF_LIMITS } from '../src/models.mjs';
-import { makeGlb, dataBytes, PNG_1PX, JPEG_SIG, WEBP_SIG } from './helpers.mjs';
+import { VIEWER_EXTENSIONS, listModels, resolveModel, listRefs, modelRefs, resolveRef, REF_LIMITS } from '../src/models.mjs';
+import { makeGlb, makeFbx, dataBytes, PNG_1PX, JPEG_SIG, WEBP_SIG } from './helpers.mjs';
 
 describe('models', () => {
   let root, dir, outside, top;
@@ -16,6 +16,7 @@ describe('models', () => {
     mkdirSync(join(dir, 'ships'), { recursive: true }); mkdirSync(join(dir, '.cache'), { recursive: true }); mkdirSync(outside);
     writeFileSync(join(dir, 'ships', 'cruiser.glb'), makeGlb());
     writeFileSync(join(dir, 'crate.GLB'), makeGlb());
+    writeFileSync(join(dir, 'rig.fbx'), makeFbx());
     writeFileSync(join(dir, 'notes.txt'), 'x');
     writeFileSync(join(dir, '.cache', 'hidden.glb'), makeGlb());
     writeFileSync(join(outside, 'leak.glb'), makeGlb());
@@ -50,6 +51,11 @@ describe('models', () => {
   });
   it('a missing folder lists nothing', () => assert.deepEqual(listModels(join(root, 'nope')), []));
   it('resolves a model inside the folder', () => assert.equal(resolveModel(dir, 'ships/cruiser.glb'), realpathSync(join(dir, 'ships', 'cruiser.glb'))));
+  it('lists and resolves .fbx files when given VIEWER_EXTENSIONS, while default stays .glb only', () => {
+    assert.deepEqual(listModels(dir, { extensions: VIEWER_EXTENSIONS }).map((m) => m.path), ['crate.GLB', 'rig.fbx', 'ships/cruiser.glb']);
+    assert.equal(resolveModel(dir, 'rig.fbx'), null);
+    assert.equal(resolveModel(dir, 'rig.fbx', { extensions: VIEWER_EXTENSIONS }), realpathSync(join(dir, 'rig.fbx')));
+  });
   it('refuses paths that leave the folder, or are not .glb files', () => {
     for (const bad of ['../secret/leak.glb', 'link/leak.glb', 'leak.glb', join(outside, 'leak.glb'), 'notes.txt', 'ships', 'ships/missing.glb', '', 'a\0.glb', null, 42, `${'x'.repeat(600)}.glb`])
       assert.equal(resolveModel(dir, bad), null, String(bad));

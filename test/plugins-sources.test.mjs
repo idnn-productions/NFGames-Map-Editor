@@ -1,7 +1,7 @@
 // Where plugins come from, which one wins, and which are trusted.
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discoverPlugins, packageDir } from '../src/plugins/sources.mjs';
@@ -66,5 +66,15 @@ describe('plugin sources', () => {
     assert.equal(pluginTrust(state, found['acme.terrain']), 'ask');
     trustPlugin(state, found['acme.terrain']); assert.equal(pluginTrust(state, found['acme.terrain']), 'trusted');
     assert.equal(pluginTrust(state, { ...found['acme.terrain'], spec: { npm: '@acme/terrain@2.1.0', integrity: 'sha512-other' } }), 'ask'); // other bytes, same version
+  });
+  it('trust hash covers symlinks and their target contents, and survives broken or cyclic links', () => {
+    const found = Object.fromEntries(discoverPlugins({ ...dirs, root }).map((p) => [p.id, p]));
+    const ext = join(top, 'linked.mjs'); writeFileSync(ext, 'export const v = 1;');
+    symlinkSync(ext, join(dirs.userDir, 'mine', 'linked.mjs'));
+    symlinkSync(join(top, 'does-not-exist'), join(dirs.userDir, 'mine', 'broken.mjs'));
+    symlinkSync(join(dirs.userDir, 'mine'), join(dirs.userDir, 'mine', 'loop'));
+    trustPlugin(state, found['jacek.mine']); assert.equal(pluginTrust(state, found['jacek.mine']), 'trusted');
+    writeFileSync(ext, 'export const v = 2;');
+    assert.equal(pluginTrust(state, found['jacek.mine']), 'ask');
   });
 });

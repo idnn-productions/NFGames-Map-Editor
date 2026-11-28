@@ -5,20 +5,23 @@ import { closeSync, lstatSync, openSync, readSync, readdirSync, realpathSync, st
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 
 const MAX_MODELS = 5000;
-const isGlb = (name) => /\.glb$/i.test(name);
+export const VIEWER_EXTENSIONS = ['.glb', '.fbx'];
+const hasExt = (name, exts) => exts.includes(extname(name).toLowerCase());
 
 /** Folders that hold a build's or a cache's copies of a project's models: left out, at any depth, when a whole project is searched. */
 export const SKIPPED = ['dist', 'build', 'out', 'Library', 'Temp'];
 
 /**
- * Every .glb under `dir` (subfolders too; dot-folders, node_modules and symlinks left out): [{ path, size, mtime, level? }],
- * sorted by path. `copies: false` also leaves out the SKIPPED folders: that is for a whole project; a models folder is
- * listed as it is, since a folder in it called build or out is the project's own. `skip`: folders (paths from `dir`) left out with everything under them. A model is a level (`level: true`)
- * when a .json of its name is beside it (town.glb, town.json: what the game reads with it), or `levels` names its path.
+ * Every model file (default `.glb`; the viewer passes VIEWER_EXTENSIONS) under `dir` (subfolders too; dot-folders,
+ * node_modules and symlinks left out): [{ path, size, mtime, level? }], sorted by path. `copies: false` also leaves out
+ * the SKIPPED folders: that is for a whole project; a models folder is listed as it is, since a folder in it called
+ * build or out is the project's own. `skip`: folders (paths from `dir`) left out with everything under them. A model is
+ * a level (`level: true`) when a .json of its name is beside it (town.glb, town.json: what the game reads with it), or
+ * `levels` names its path.
  */
-export function listModels(dir, { skip = [], levels = [], copies = true } = {}) {
+export function listModels(dir, { skip = [], levels = [], copies = true, extensions = ['.glb'] } = {}) {
   const out = [], tidy = (p) => String(p).split(/[\\/]+/).filter((s) => s && s !== '.').join('/');
-  const skipped = new Set(skip.map(tidy)), named = new Set(levels.map(tidy));
+  const skipped = new Set(skip.map(tidy)), named = new Set(levels.map(tidy)), exts = extensions.map((x) => x.toLowerCase());
   const walk = (at, rel) => {
     let entries;
     try { entries = readdirSync(at, { withFileTypes: true }); } catch { return; }
@@ -27,9 +30,11 @@ export function listModels(dir, { skip = [], levels = [], copies = true } = {}) 
       if (out.length >= MAX_MODELS || e.name.startsWith('.') || e.name === 'node_modules' || e.isSymbolicLink()) continue;
       const full = join(at, e.name), path = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) { if ((copies || !SKIPPED.includes(e.name)) && !skipped.has(path)) walk(full, path); }
-      else if (e.isFile() && isGlb(e.name)) {
-        const s = statSync(full), model = { path, size: s.size, mtime: Math.round(s.mtimeMs) };
-        if (named.has(path) || data.has(e.name.slice(0, -4).toLowerCase())) model.level = true;
+      else if (e.isFile() && hasExt(e.name, exts)) {
+        let s; try { s = statSync(full); } catch { continue; }
+        const model = { path, size: s.size, mtime: Math.round(s.mtimeMs) };
+        const stem = e.name.slice(0, -extname(e.name).length).toLowerCase();
+        if (named.has(path) || data.has(stem)) model.level = true;
         out.push(model);
       }
     }
@@ -38,9 +43,10 @@ export function listModels(dir, { skip = [], levels = [], copies = true } = {}) 
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-/** The real path of model `rel` under `dir`, or null: a relative path to an existing .glb file inside the folder. */
-export function resolveModel(dir, rel) {
-  if (!dir || typeof rel !== 'string' || !rel || rel.length > 500 || rel.includes('\0') || isAbsolute(rel) || !isGlb(rel)) return null;
+/** The real path of model `rel` under `dir`, or null: a relative path to an existing model file inside the folder. */
+export function resolveModel(dir, rel, { extensions = ['.glb'] } = {}) {
+  const exts = extensions.map((x) => x.toLowerCase());
+  if (!dir || typeof rel !== 'string' || !rel || rel.length > 500 || rel.includes('\0') || isAbsolute(rel) || !hasExt(rel, exts)) return null;
   try {
     const root = realpathSync(dir), file = realpathSync(resolve(root, rel));
     if (!file.startsWith(root + sep) || !statSync(file).isFile()) return null;
@@ -67,7 +73,7 @@ const head = (file) => { const b = Buffer.alloc(12), fd = openSync(file, 'r'); t
 
 /** The .refs folder of the model at real path `file`, or null: a real folder (not a link) beside the model. */
 function refsFolder(file) {
-  const dir = file.replace(/\.glb$/i, '.refs');
+  const dir = `${file.slice(0, -extname(file).length)}.refs`;
   try { return lstatSync(dir).isDirectory() && realpathSync(dir) === join(realpathSync(dirname(file)), basename(dir)) ? dir : null; } catch { return null; }
 }
 /** One reference in `dir`, or null: a real file (not a link) that stays in the folder, of a size we serve, whose bytes are the image its name says. */
@@ -85,7 +91,7 @@ const refRank = (name) => { const i = REF_ORDER.indexOf(refLabel(name).toLowerCa
 
 /** The references of model `rel` under `dir`: [{ name, size, mtime, file, type }], the concept first, then the views in their order, then the rest by name. None: []. */
 export function modelRefs(dir, rel) {
-  const model = resolveModel(dir, rel), folder = model && refsFolder(model);
+  const model = resolveModel(dir, rel, { extensions: VIEWER_EXTENSIONS }), folder = model && refsFolder(model);
   if (!folder) return [];
   let names; try { names = readdirSync(folder); } catch { return []; }
   return names.filter(refName).sort((a, b) => refRank(a) - refRank(b) || a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b))
@@ -96,7 +102,7 @@ export const listRefs = (dir, rel) => modelRefs(dir, rel).map(({ name, size, mti
 
 /** One reference of model `rel`, to serve: { name, file, type, size, mtime }, or null. The name must be a file the folder really holds, spelled as it is there. */
 export function resolveRef(dir, rel, name) {
-  const model = resolveModel(dir, rel), folder = model && refsFolder(model);
+  const model = resolveModel(dir, rel, { extensions: VIEWER_EXTENSIONS }), folder = model && refsFolder(model);
   if (!folder || !refName(name)) return null;
   try { if (!readdirSync(folder).includes(name)) return null; } catch { return null; }
   return refEntry(folder, name);

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadProject } from '../src/project.mjs';
 import { createEditor } from '../src/server.mjs';
-import { sampleCopy, makeGlb, dataBytes, JPEG_SIG, PNG_1PX } from './helpers.mjs';
+import { sampleCopy, makeGlb, makeFbx, dataBytes, JPEG_SIG, PNG_1PX } from './helpers.mjs';
 
 describe('the model viewer over HTTP', () => {
   const port = 19393 + (process.pid % 500), origin = `http://127.0.0.1:${port}`;
@@ -19,6 +19,7 @@ describe('the model viewer over HTTP', () => {
     copy = sampleCopy();
     mkdirSync(join(copy.root, 'models'), { recursive: true });
     writeFileSync(join(copy.root, 'models', 'cruiser.glb'), makeGlb()); writeFileSync(join(copy.root, 'models', 'bare.glb'), makeGlb());
+    writeFileSync(join(copy.root, 'models', 'hero.fbx'), makeFbx());
     for (const f of ['art/town/town.glb', 'dist/town.glb', 'top.glb']) { mkdirSync(join(copy.root, f, '..'), { recursive: true }); writeFileSync(join(copy.root, f), makeGlb()); }
     writeFileSync(join(copy.root, 'art', 'town', 'town.json'), '{}');
     mkdirSync(join(copy.root, 'models', 'cruiser.refs'));
@@ -61,12 +62,18 @@ describe('the model viewer over HTTP', () => {
   it('lists and streams models, nothing else', async () => {
     // every model of the project, by its path from the project's folder; a build's copy is not listed; a model with its .json is a level
     const { models } = await (await ask('/api/models')).json();
-    assert.deepEqual(models.map((m) => [m.path, !!m.level]), [['art/town/town.glb', true], ['models/bare.glb', false], ['models/cruiser.glb', false], ['top.glb', false]]);
-    for (const path of ['models/cruiser.glb', 'art/town/town.glb', 'top.glb', 'dist/town.glb']) assert.equal((await ask(`/api/model?path=${path}`)).status, 200, path);
+    assert.deepEqual(models.map((m) => [m.path, !!m.level]), [['art/town/town.glb', true], ['models/bare.glb', false], ['models/cruiser.glb', false], ['models/hero.fbx', false], ['top.glb', false]]);
+    for (const path of ['models/cruiser.glb', 'models/hero.fbx', 'art/town/town.glb', 'top.glb', 'dist/town.glb']) assert.equal((await ask(`/api/model?path=${path}`)).status, 200, path);
     assert.equal((await ask('/api/model?path=art/town/town.json')).status, 404);
     const r = await ask('/api/model?path=cruiser.glb');   // a path from before this, counted from the models folder
     assert.equal(r.status, 200); assert.equal(r.headers.get('content-type'), 'model/gltf-binary');
     assert.equal(Buffer.from(await r.arrayBuffer()).length, makeGlb().length);
+    const fbx = await ask('/api/model?path=models/hero.fbx');
+    assert.equal(fbx.status, 200); assert.equal(fbx.headers.get('content-type'), 'application/octet-stream');
+    assert.equal(Buffer.from(await fbx.arrayBuffer()).length, makeFbx().length);
+    const matchFbx = await (await ask('/api/model/match?path=models/hero.fbx')).json();
+    assert.equal(matchFbx.state, 'unsupported');
+    assert.equal((await post('/api/model/match', { path: 'models/hero.fbx' })).status, 400);
     for (const bad of ['../maps/plaza/layout.json', '..%2Fmaps%2Fplaza%2Flayout.json', 'nope.glb', '']) assert.equal((await ask(`/api/model?path=${bad}`)).status, 404, bad);
   });
   it('lists a model\'s reference images in order, and none for a model without them', async () => {

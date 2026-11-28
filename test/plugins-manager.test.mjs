@@ -105,6 +105,9 @@ export function activate(api) {
     assert.equal(mgr.asset('nfgames.hello', 'web/app.js'), join(dirs.builtinDir, 'hello', 'web', 'app.js'));
     for (const bad of ['../broken/server.mjs', '.secret', 'web/missing.js', '']) assert.equal(mgr.asset('nfgames.hello', bad), null, bad);
     assert.equal(mgr.asset('nfgames.future', 'plugin.json'), null);
+    const out = join(top, 'asset-outside.txt'); writeFileSync(out, 'nope');
+    symlinkSync(out, join(dirs.builtinDir, 'hello', 'web', 'escape.txt'));
+    assert.equal(mgr.asset('nfgames.hello', 'web/escape.txt'), null);
   });
   it('a private storage folder per plugin', async () => {
     await mgr.activate('nfgames.hello');

@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadProject, BUILT_IN_SCHEMAS } from '../src/project.mjs';
+import { check as checkSchema } from '../src/schema.mjs';
 import { SAMPLE, samplePlan, samplePlants, sampleCopy, makeGlb } from './helpers.mjs';
 
 const sample = () => loadProject({ root: SAMPLE });
@@ -49,6 +50,11 @@ describe('a map\'s plan and its schema', () => {
     const text = (await p.plantsErrors(bad)).join('\n');
     for (const want of [/points\[0\]\.kind/, /points\[1\]\.at/, /exclude\[0\]: missing "r"/]) assert.match(text, want);
     assert.deepEqual(await p.plantsErrors({ ...samplePlants(), beds: [{ any: 'thing' }] }), []); // open to a project's own sections
+  });
+  it('schema checks every matching patternProperties entry', () => {
+    const s = { type: 'object', patternProperties: { '^a': { type: 'number', minimum: 1 }, 'b$': { type: 'number', maximum: 5 } } };
+    assert.deepEqual(checkSchema({ ab: 3 }, s, BUILT_IN_SCHEMAS.layout), []);
+    assert.match(checkSchema({ ab: 10 }, s, BUILT_IN_SCHEMAS.layout).join('\n'), /above 5/);
   });
 });
 

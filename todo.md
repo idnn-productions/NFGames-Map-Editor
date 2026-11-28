@@ -36,10 +36,8 @@ reference images: `docs/superpowers/specs/2026-11-23-model-references-design.md`
 
 ## New model
 
-- [ ] **Generate the model** from a draft's `concept.png` and `views/` (step ③ of New model, a disabled button today).
-      Choose the image-to-3D service (a `services` plugin like `codex-image`), where the `.glb` lands in the models
-      folder, and how a draft is marked done. It should also copy the draft's `concept.png` and `views/*.png` into
-      `<name>.refs/` beside the new `.glb`, so the viewer shows them as the model's references.
+- [x] **Generate the model** from a draft's `concept.png` and `views/` (step ③ of New model, through `plugins/comfy-model/`):
+      saves `models/<slug>/<slug>.glb` and copies `concept.png` + `views/*.png` into `<slug>.refs/`.
 - [ ] Measure the views check on real drafts: run **Check the views against each other** on every draft with approved
       views and on one deliberately wrong set, write the outline numbers into the README, and say what sound pairs scored
       against the 0.90 default.
